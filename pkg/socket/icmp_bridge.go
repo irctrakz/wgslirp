@@ -3,7 +3,6 @@ package socket
 import (
     "fmt"
     "net"
-    "os"
     "sync/atomic"
     "syscall"
 
