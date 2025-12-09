@@ -75,7 +75,7 @@ func (b *icmpBridge) HandleOutbound(pkt []byte) error {
 
     // For echo requests, proxy them
     if echo, ok := msg.Body.(*icmp.Echo); ok {
-        go b.proxyEchoRequest(dst, echo.ID, echo.Seq, pkt[12:16]) // src IP for reply
+        go b.proxyEchoRequest(dst, echo.ID, echo.Seq, pkt[12:16], echo.Data) // src IP and original data for reply
         return nil
     }
 
@@ -84,7 +84,7 @@ func (b *icmpBridge) HandleOutbound(pkt []byte) error {
 }
 
 // proxyEchoRequest sends a real ICMP echo request and proxies the reply back to the client
-func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP []byte) {
+func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP, clientData []byte) {
     // Use the ping command to test connectivity, since SOCK_DGRAM may not work reliably
     // This is simpler and more reliable than dealing with SOCK_DGRAM permissions
     cmd := exec.Command("ping", "-c", "1", "-W", "1", dst.String())
@@ -98,7 +98,7 @@ func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP
 
     // If ping succeeded, send a synthetic echo reply to the client
     if success {
-        if err := b.sendEchoReplyToClient(clientID, clientSeq, srcIP, dst); err != nil {
+        if err := b.sendEchoReplyToClient(clientID, clientSeq, srcIP, dst, clientData); err != nil {
             logging.Debugf("icmp: failed to send reply to client: %v", err)
         }
     } else {
@@ -107,16 +107,21 @@ func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP
 }
 
 // sendEchoReplyToClient constructs and sends an ICMP echo reply to the client
-func (b *icmpBridge) sendEchoReplyToClient(clientID, clientSeq int, srcIP, dstIP []byte) error {
+func (b *icmpBridge) sendEchoReplyToClient(clientID, clientSeq int, srcIP, dstIP, clientData []byte) error {
     if b.parent == nil || b.parent.processor == nil {
         return fmt.Errorf("no processor available")
+    }
+
+    // Use the original data from the client's request
+    icmpData := clientData
+    if len(icmpData) == 0 {
+        icmpData = []byte{0x00, 0x01, 0x02, 0x03} // Fallback if no data
     }
 
     // Construct IP + ICMP echo reply packet
     ipHeader := make([]byte, 20)
     ipHeader[0] = 0x45 // Version 4, header length 5
     ipHeader[1] = 0x00 // DSCP & ECN
-    icmpData := []byte{0x00, 0x01, 0x02, 0x03} // Same data as request
     totalLen := 20 + 8 + len(icmpData) // IP + ICMP header + data
     ipHeader[2] = byte(totalLen >> 8)
     ipHeader[3] = byte(totalLen & 0xFF)
@@ -163,7 +168,7 @@ func (b *icmpBridge) sendEchoReplyToClient(clientID, clientSeq int, srcIP, dstIP
         return fmt.Errorf("failed to process reply packet: %w", err)
     }
 
-    logging.Debugf("icmp: sent echo reply to client (id=%d, seq=%d)", clientID, clientSeq)
+    logging.Debugf("icmp: sent echo reply to client (id=%d, seq=%d, data_len=%d)", clientID, clientSeq, len(icmpData))
     return nil
 }
 
