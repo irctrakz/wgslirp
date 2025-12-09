@@ -4,6 +4,7 @@ import (
     "fmt"
     "net"
     "os"
+    "sync/atomic"
     "syscall"
 
     "github.com/irctrakz/wgslirp/pkg/core"
@@ -15,11 +16,12 @@ import (
 // icmpBridge is a thin adapter that sends guest ICMP messages over the host
 // via the SocketInterface's raw ICMP socket, or proxies them using ping_group_range.
 type icmpBridge struct {
-	parent *SocketInterface
+	parent    *SocketInterface
+	idCounter int32 // Counter for generating unique ICMP IDs (atomic)
 }
 
 func newICMPBridge(parent *SocketInterface) *icmpBridge {
-	return &icmpBridge{parent: parent}
+	return &icmpBridge{parent: parent, idCounter: 1000} // Start at 1000 to avoid common IDs
 }
 func (b *icmpBridge) Name() string                     { return "icmp" }
 func (b *icmpBridge) stop()                            {}
@@ -100,16 +102,20 @@ func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP
         return
     }
 
+    // Connect to destination (required for SOCK_DGRAM ICMP)
+    dstAddr := syscall.SockaddrInet4{}
+    copy(dstAddr.Addr[:], dst.To4())
+    if err := syscall.Connect(fd, &dstAddr); err != nil {
+        logging.Debugf("icmp: failed to connect proxy socket: %v", err)
+        return
+    }
+
     // Generate a unique ID for our real ICMP request (different from client's)
-    // Use process ID + some randomness to avoid conflicts
-    ourID := (os.Getpid() + clientID + clientSeq) & 0xFFFF
+    // Use atomic counter to ensure uniqueness
+    ourID := int(atomic.AddInt32(&b.idCounter, 1)) & 0xFFFF
     if ourID == 0 {
         ourID = 1 // Avoid ID 0
     }
-
-    // Prepare destination address
-    dstAddr := syscall.SockaddrInet4{}
-    copy(dstAddr.Addr[:], dst.To4())
 
     // Create our echo request
     echo := &icmp.Echo{
@@ -129,8 +135,8 @@ func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP
         return
     }
 
-    // Send the echo request
-    if err := syscall.Sendto(fd, data, 0, &dstAddr); err != nil {
+    // Send the echo request (no address needed since connected)
+    if err := syscall.Sendto(fd, data, 0, nil); err != nil {
         logging.Debugf("icmp: failed to send proxy request: %v", err)
         return
     }
@@ -146,9 +152,21 @@ func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP
 
     // Wait for the reply
     buf := make([]byte, 1024)
-    n, _, err := syscall.Recvfrom(fd, buf, 0)
+    n, fromAddr, err := syscall.Recvfrom(fd, buf, 0)
     if err != nil {
         logging.Debugf("icmp: no proxy reply received: %v", err)
+        return
+    }
+
+    // Check that reply comes from expected destination
+    if fromSockaddr, ok := fromAddr.(*syscall.SockaddrInet4); ok {
+        fromIP := net.IPv4(fromSockaddr.Addr[0], fromSockaddr.Addr[1], fromSockaddr.Addr[2], fromSockaddr.Addr[3])
+        if !fromIP.Equal(dst) {
+            logging.Debugf("icmp: reply from unexpected source: %s, expected %s", fromIP, dst)
+            return
+        }
+    } else {
+        logging.Debugf("icmp: unexpected sockaddr type: %T", fromAddr)
         return
     }
 
@@ -170,8 +188,16 @@ func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP
         return
     }
 
+    logging.Debugf("icmp: received reply with id=%d seq=%d, expected id=%d seq=%d",
+        replyEcho.ID, replyEcho.Seq, ourID, clientSeq)
+
     if replyEcho.ID != ourID {
         logging.Debugf("icmp: reply ID mismatch: got %d, expected %d", replyEcho.ID, ourID)
+        return
+    }
+
+    if replyEcho.Seq != clientSeq {
+        logging.Debugf("icmp: reply seq mismatch: got %d, expected %d", replyEcho.Seq, clientSeq)
         return
     }
 
