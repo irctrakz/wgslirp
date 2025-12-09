@@ -81,25 +81,17 @@ func (b *icmpBridge) HandleOutbound(pkt []byte) error {
 // sendEchoViaDatagram sends an ICMP echo request using SOCK_DGRAM (works with ping_group_range)
 // This allows ICMP echo without CAP_NET_RAW
 func (b *icmpBridge) sendEchoViaDatagram(dst string, id, seq int) error {
-    var fd int
-    var shouldClose bool
-
-    // Use parent's datagram socket if available, otherwise create our own
-    if b.parent != nil && b.parent.dgramFd >= 0 {
-        fd = b.parent.dgramFd
-        shouldClose = false
-    } else {
-        // Create a SOCK_DGRAM ICMP socket (works with ping_group_range)
-        var err error
-        fd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
-        if err != nil {
-            return fmt.Errorf("failed to create ICMP socket: %w", err)
-        }
-        shouldClose = true
+    // Create a SOCK_DGRAM ICMP socket (works with ping_group_range)
+    fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+    if err != nil {
+        return fmt.Errorf("failed to create ICMP socket: %w", err)
     }
+    defer syscall.Close(fd)
 
-    if shouldClose {
-        defer syscall.Close(fd)
+    // Bind to wildcard address
+    bindAddr := syscall.SockaddrInet4{}
+    if err := syscall.Bind(fd, &bindAddr); err != nil {
+        return fmt.Errorf("failed to bind ICMP socket: %w", err)
     }
 
     // Parse destination address
@@ -114,7 +106,7 @@ func (b *icmpBridge) sendEchoViaDatagram(dst string, id, seq int) error {
     echo := &icmp.Echo{
         ID:   id,
         Seq:  seq,
-        Data: []byte{}, // Empty data for now
+        Data: []byte{0x00, 0x01, 0x02, 0x03}, // Some test data
     }
     msg := &icmp.Message{
         Type: ipv4.ICMPTypeEcho,
@@ -128,11 +120,13 @@ func (b *icmpBridge) sendEchoViaDatagram(dst string, id, seq int) error {
         return fmt.Errorf("failed to marshal ICMP message: %w", err)
     }
 
+    logging.Debugf("icmp: sending %d bytes to %s (id=%d, seq=%d)", len(data), dst, id, seq)
+
     // Send the echo request
     if err := syscall.Sendto(fd, data, 0, &addr); err != nil {
         return fmt.Errorf("failed to send ICMP echo: %w", err)
     }
 
-    logging.Debugf("icmp: sent echo request to %s (id=%d, seq=%d)", dst, id, seq)
+    logging.Debugf("icmp: sent echo request to %s", dst)
     return nil
 }
