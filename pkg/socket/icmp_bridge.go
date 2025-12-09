@@ -1,11 +1,14 @@
 package socket
 
 import (
+    "fmt"
     "net"
     "os/exec"
 
     "github.com/irctrakz/wgslirp/pkg/core"
     "github.com/irctrakz/wgslirp/pkg/logging"
+    "golang.org/x/net/icmp"
+    "golang.org/x/net/ipv4"
 )
 
 // icmpBridge is a thin adapter that sends guest ICMP messages over the host
