@@ -104,15 +104,15 @@ func (s *SocketInterface) Start() error {
 		// First try raw socket (requires CAP_NET_RAW)
 		s.conn, err = icmp.ListenPacket(protocol, "0.0.0.0") // Bind to all interfaces
 		if err != nil {
-			logging.Warnf("Failed to create raw ICMP socket (CAP_NET_RAW not available): %v", err)
+			logging.Debugf("Failed to create raw ICMP socket (CAP_NET_RAW not available): %v", err)
 
 			// Try alternative raw socket with protocol number
 			s.conn, err = icmp.ListenPacket("ip4:1", "0.0.0.0")
 			if err != nil {
-				logging.Warnf("Failed to create raw ICMP socket with ip4:1: %v", err)
+				logging.Debugf("Failed to create raw ICMP socket with ip4:1: %v", err)
 
 				// Try SOCK_DGRAM for ping_group_range support
-				logging.Infof("Attempting to create datagram ICMP socket for ping_group_range support")
+				logging.Debugf("Attempting to create datagram ICMP socket for ping_group_range support")
 				s.dgramFd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
 				if err != nil {
 					logging.Errorf("Failed to create datagram ICMP socket: %v", err)
@@ -120,7 +120,7 @@ func (s *SocketInterface) Start() error {
 					s.dgramFd = -1
 					return fmt.Errorf("no ICMP socket available: %v", err)
 				} else {
-					logging.Infof("Created datagram ICMP socket fd=%d for ping_group_range compatibility", s.dgramFd)
+					logging.Debugf("Created datagram ICMP socket fd=%d for ping_group_range compatibility", s.dgramFd)
 					// Bind to all interfaces
 					addr := syscall.SockaddrInet4{}
 					if err := syscall.Bind(s.dgramFd, &addr); err != nil {
@@ -129,14 +129,14 @@ func (s *SocketInterface) Start() error {
 						s.dgramFd = -1
 						return fmt.Errorf("failed to bind datagram socket: %v", err)
 					} else {
-						logging.Infof("Successfully bound datagram ICMP socket")
+						logging.Debugf("Successfully bound datagram ICMP socket, dgramFd=%d", s.dgramFd)
 					}
 				}
 			} else {
-				logging.Infof("Successfully created raw ICMP socket with ip4:1")
+				logging.Debugf("Successfully created raw ICMP socket with ip4:1")
 			}
 		} else {
-			logging.Infof("Successfully created raw ICMP socket with %s", protocol)
+			logging.Debugf("Successfully created raw ICMP socket with %s", protocol)
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
 		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
