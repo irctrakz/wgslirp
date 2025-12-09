@@ -1,26 +1,21 @@
 package socket
 
 import (
-    "fmt"
     "net"
-    "sync/atomic"
-    "syscall"
+    "os/exec"
 
     "github.com/irctrakz/wgslirp/pkg/core"
     "github.com/irctrakz/wgslirp/pkg/logging"
-    "golang.org/x/net/icmp"
-    "golang.org/x/net/ipv4"
 )
 
 // icmpBridge is a thin adapter that sends guest ICMP messages over the host
 // via the SocketInterface's raw ICMP socket, or proxies them using ping_group_range.
 type icmpBridge struct {
-	parent    *SocketInterface
-	idCounter int32 // Counter for generating unique ICMP IDs (atomic)
+	parent *SocketInterface
 }
 
 func newICMPBridge(parent *SocketInterface) *icmpBridge {
-	return &icmpBridge{parent: parent, idCounter: 1000} // Start at 1000 to avoid common IDs
+	return &icmpBridge{parent: parent}
 }
 func (b *icmpBridge) Name() string                     { return "icmp" }
 func (b *icmpBridge) stop()                            {}
@@ -87,124 +82,24 @@ func (b *icmpBridge) HandleOutbound(pkt []byte) error {
 
 // proxyEchoRequest sends a real ICMP echo request and proxies the reply back to the client
 func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP []byte) {
-    // Create a SOCK_DGRAM ICMP socket for this request
-    fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
-    if err != nil {
-        logging.Debugf("icmp: failed to create proxy socket: %v", err)
-        return
-    }
-    defer syscall.Close(fd)
+    // Use the ping command to test connectivity, since SOCK_DGRAM may not work reliably
+    // This is simpler and more reliable than dealing with SOCK_DGRAM permissions
+    cmd := exec.Command("ping", "-c", "1", "-W", "1", dst.String())
+    logging.Debugf("icmp: executing ping to test %s", dst)
 
-    // Bind to wildcard
-    if err := syscall.Bind(fd, &syscall.SockaddrInet4{}); err != nil {
-        logging.Debugf("icmp: failed to bind proxy socket: %v", err)
-        return
-    }
+    // Run ping and check if it succeeds
+    err := cmd.Run()
+    success := err == nil
 
-    // Connect to destination (required for SOCK_DGRAM ICMP)
-    dstAddr := syscall.SockaddrInet4{}
-    copy(dstAddr.Addr[:], dst.To4())
-    if err := syscall.Connect(fd, &dstAddr); err != nil {
-        logging.Debugf("icmp: failed to connect proxy socket: %v", err)
-        return
-    }
+    logging.Debugf("icmp: ping to %s %s", dst, map[bool]string{true: "succeeded", false: "failed"}[success])
 
-    // Generate a unique ID for our real ICMP request (different from client's)
-    // Use atomic counter to ensure uniqueness
-    ourID := int(atomic.AddInt32(&b.idCounter, 1)) & 0xFFFF
-    if ourID == 0 {
-        ourID = 1 // Avoid ID 0
-    }
-
-    // Create our echo request
-    echo := &icmp.Echo{
-        ID:   ourID,
-        Seq:  clientSeq, // Keep client's sequence number
-        Data: []byte{0x00, 0x01, 0x02, 0x03}, // Some data
-    }
-    msg := &icmp.Message{
-        Type: ipv4.ICMPTypeEcho,
-        Code: 0,
-        Body: echo,
-    }
-
-    data, err := msg.Marshal(nil)
-    if err != nil {
-        logging.Debugf("icmp: failed to marshal proxy request: %v", err)
-        return
-    }
-
-    // Send the echo request (no address needed since connected)
-    if err := syscall.Sendto(fd, data, 0, nil); err != nil {
-        logging.Debugf("icmp: failed to send proxy request: %v", err)
-        return
-    }
-
-    logging.Debugf("icmp: sent proxy echo request to %s (our_id=%d, client_id=%d, seq=%d)", dst, ourID, clientID, clientSeq)
-
-    // Set a timeout for receiving the reply
-    timeout := syscall.Timeval{Sec: 1, Usec: 0} // 1 second timeout
-    if err := syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &timeout); err != nil {
-        logging.Debugf("icmp: failed to set proxy timeout: %v", err)
-        return
-    }
-
-    // Wait for the reply
-    buf := make([]byte, 1024)
-    n, fromAddr, err := syscall.Recvfrom(fd, buf, 0)
-    if err != nil {
-        logging.Debugf("icmp: no proxy reply received: %v", err)
-        return
-    }
-
-    // Check that reply comes from expected destination
-    if fromSockaddr, ok := fromAddr.(*syscall.SockaddrInet4); ok {
-        fromIP := net.IPv4(fromSockaddr.Addr[0], fromSockaddr.Addr[1], fromSockaddr.Addr[2], fromSockaddr.Addr[3])
-        if !fromIP.Equal(dst) {
-            logging.Debugf("icmp: reply from unexpected source: %s, expected %s", fromIP, dst)
-            return
+    // If ping succeeded, send a synthetic echo reply to the client
+    if success {
+        if err := b.sendEchoReplyToClient(clientID, clientSeq, srcIP, dst); err != nil {
+            logging.Debugf("icmp: failed to send reply to client: %v", err)
         }
     } else {
-        logging.Debugf("icmp: unexpected sockaddr type: %T", fromAddr)
-        return
-    }
-
-    // Parse the reply
-    replyMsg, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), buf[:n])
-    if err != nil {
-        logging.Debugf("icmp: failed to parse proxy reply: %v", err)
-        return
-    }
-
-    if replyMsg.Type != ipv4.ICMPTypeEchoReply {
-        logging.Debugf("icmp: received non-reply type: %v", replyMsg.Type)
-        return
-    }
-
-    replyEcho, ok := replyMsg.Body.(*icmp.Echo)
-    if !ok {
-        logging.Debugf("icmp: unexpected reply body type: %T", replyMsg.Body)
-        return
-    }
-
-    logging.Debugf("icmp: received reply with id=%d seq=%d, expected id=%d seq=%d",
-        replyEcho.ID, replyEcho.Seq, ourID, clientSeq)
-
-    if replyEcho.ID != ourID {
-        logging.Debugf("icmp: reply ID mismatch: got %d, expected %d", replyEcho.ID, ourID)
-        return
-    }
-
-    if replyEcho.Seq != clientSeq {
-        logging.Debugf("icmp: reply seq mismatch: got %d, expected %d", replyEcho.Seq, clientSeq)
-        return
-    }
-
-    logging.Debugf("icmp: received proxy reply from %s (id=%d, seq=%d)", dst, replyEcho.ID, replyEcho.Seq)
-
-    // Now construct a synthetic ICMP echo reply for the client
-    if err := b.sendEchoReplyToClient(clientID, clientSeq, srcIP, dst); err != nil {
-        logging.Debugf("icmp: failed to send reply to client: %v", err)
+        logging.Debugf("icmp: ping failed, not sending reply to client")
     }
 }
 
