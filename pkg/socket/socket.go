@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"strconv"
@@ -31,6 +32,9 @@ type SocketInterface struct {
 
 	// Raw socket connection
 	conn net.PacketConn
+
+	// Datagram socket FD for ICMP when raw socket unavailable (ping_group_range)
+	dgramFd int
 
 	// Control
 	mu      sync.Mutex
@@ -94,10 +98,28 @@ func (s *SocketInterface) Start() error {
 
 	// Create the appropriate socket based on the protocol
 	if strings.Contains(protocol, "icmp") {
-		// For ICMP, use the icmp package. This works in privileged mode ("ip4:icmp").
+		// For ICMP, try to use the icmp package. This works in privileged mode ("ip4:icmp").
+		// If it fails (e.g., no CAP_NET_RAW), try SOCK_DGRAM for ping_group_range support.
 		s.conn, err = icmp.ListenPacket(protocol, "0.0.0.0") // Bind to all interfaces
 		if err != nil {
-			return fmt.Errorf("failed to create raw socket with protocol %s: %v", protocol, err)
+			logging.Warnf("Failed to create raw ICMP socket (CAP_NET_RAW not available): %v", err)
+			logging.Infof("Attempting to create datagram ICMP socket for ping_group_range support")
+			// Try to create SOCK_DGRAM ICMP socket for ping_group_range
+			s.dgramFd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+			if err != nil {
+				logging.Warnf("Failed to create datagram ICMP socket: %v", err)
+				logging.Warnf("ICMP functionality will be limited without CAP_NET_RAW or ping_group_range")
+				s.dgramFd = -1
+			} else {
+				logging.Infof("Using datagram ICMP socket for ping_group_range compatibility")
+				// Bind to all interfaces
+				addr := syscall.SockaddrInet4{}
+				if err := syscall.Bind(s.dgramFd, &addr); err != nil {
+					logging.Warnf("Failed to bind datagram ICMP socket: %v", err)
+					syscall.Close(s.dgramFd)
+					s.dgramFd = -1
+				}
+			}
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
 		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
@@ -164,6 +186,11 @@ func (s *SocketInterface) Stop() error {
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil
+	}
+
+	if s.dgramFd >= 0 {
+		syscall.Close(s.dgramFd)
+		s.dgramFd = -1
 	}
 
 	if s.udp != nil {
