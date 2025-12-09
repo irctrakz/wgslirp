@@ -98,7 +98,7 @@ func (b *icmpBridge) proxyEchoRequest(dst net.IP, clientID, clientSeq int, srcIP
 
     // If ping succeeded, send a synthetic echo reply to the client
     if success {
-        if err := b.sendEchoReplyToClient(clientID, clientSeq, srcIP, dst, clientData); err != nil {
+        if err := b.sendEchoReplyToClient(clientID, clientSeq, srcIP, dst.To4(), clientData); err != nil {
             logging.Debugf("icmp: failed to send reply to client: %v", err)
         }
     } else {
