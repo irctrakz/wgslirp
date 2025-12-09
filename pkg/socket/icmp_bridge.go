@@ -81,17 +81,34 @@ func (b *icmpBridge) HandleOutbound(pkt []byte) error {
 // sendEchoViaDatagram sends an ICMP echo request using SOCK_DGRAM (works with ping_group_range)
 // This allows ICMP echo without CAP_NET_RAW
 func (b *icmpBridge) sendEchoViaDatagram(dst string, id, seq int) error {
-    // Create a SOCK_DGRAM ICMP socket (works with ping_group_range)
-    fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
-    if err != nil {
-        return fmt.Errorf("failed to create ICMP socket: %w", err)
-    }
-    defer syscall.Close(fd)
+    var fd int
+    var shouldClose bool
 
-    // Bind to wildcard address
-    bindAddr := syscall.SockaddrInet4{}
-    if err := syscall.Bind(fd, &bindAddr); err != nil {
-        return fmt.Errorf("failed to bind ICMP socket: %w", err)
+    // Use parent's datagram socket if available
+    if b.parent != nil && b.parent.dgramFd >= 0 {
+        fd = b.parent.dgramFd
+        shouldClose = false
+        logging.Debugf("Using parent's datagram socket fd=%d for sending", fd)
+    } else {
+        // Create a SOCK_DGRAM ICMP socket
+        var err error
+        fd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+        if err != nil {
+            return fmt.Errorf("failed to create ICMP socket: %w", err)
+        }
+        shouldClose = true
+
+        // Bind to wildcard address
+        bindAddr := syscall.SockaddrInet4{}
+        if err := syscall.Bind(fd, &bindAddr); err != nil {
+            syscall.Close(fd)
+            return fmt.Errorf("failed to bind ICMP socket: %w", err)
+        }
+        logging.Debugf("Created and bound new datagram socket fd=%d for sending", fd)
+    }
+
+    if shouldClose {
+        defer syscall.Close(fd)
     }
 
     // Parse destination address

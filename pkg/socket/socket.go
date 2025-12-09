@@ -99,30 +99,44 @@ func (s *SocketInterface) Start() error {
 
 	// Create the appropriate socket based on the protocol
 	if strings.Contains(protocol, "icmp") {
-		// For ICMP, try to use the icmp package. This works in privileged mode ("ip4:icmp").
-		// If it fails (e.g., no CAP_NET_RAW), try SOCK_DGRAM for ping_group_range support.
+		// For ICMP, try multiple approaches in order of preference
+
+		// First try raw socket (requires CAP_NET_RAW)
 		s.conn, err = icmp.ListenPacket(protocol, "0.0.0.0") // Bind to all interfaces
 		if err != nil {
 			logging.Warnf("Failed to create raw ICMP socket (CAP_NET_RAW not available): %v", err)
-			logging.Infof("Attempting to create datagram ICMP socket for ping_group_range support")
-			// Try to create SOCK_DGRAM ICMP socket for ping_group_range
-			s.dgramFd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+
+			// Try alternative raw socket with protocol number
+			s.conn, err = icmp.ListenPacket("ip4:1", "0.0.0.0")
 			if err != nil {
-				logging.Warnf("Failed to create datagram ICMP socket: %v", err)
-				logging.Warnf("ICMP functionality will be limited without CAP_NET_RAW or ping_group_range")
-				s.dgramFd = -1
-			} else {
-				logging.Infof("Created datagram ICMP socket fd=%d for ping_group_range compatibility", s.dgramFd)
-				// Bind to all interfaces
-				addr := syscall.SockaddrInet4{}
-				if err := syscall.Bind(s.dgramFd, &addr); err != nil {
-					logging.Warnf("Failed to bind datagram ICMP socket: %v", err)
-					syscall.Close(s.dgramFd)
+				logging.Warnf("Failed to create raw ICMP socket with ip4:1: %v", err)
+
+				// Try SOCK_DGRAM for ping_group_range support
+				logging.Infof("Attempting to create datagram ICMP socket for ping_group_range support")
+				s.dgramFd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+				if err != nil {
+					logging.Errorf("Failed to create datagram ICMP socket: %v", err)
+					logging.Errorf("ICMP functionality will be unavailable - need CAP_NET_RAW or working ping_group_range")
 					s.dgramFd = -1
+					return fmt.Errorf("no ICMP socket available: %v", err)
 				} else {
-					logging.Infof("Successfully bound datagram ICMP socket")
+					logging.Infof("Created datagram ICMP socket fd=%d for ping_group_range compatibility", s.dgramFd)
+					// Bind to all interfaces
+					addr := syscall.SockaddrInet4{}
+					if err := syscall.Bind(s.dgramFd, &addr); err != nil {
+						logging.Errorf("Failed to bind datagram ICMP socket: %v", err)
+						syscall.Close(s.dgramFd)
+						s.dgramFd = -1
+						return fmt.Errorf("failed to bind datagram socket: %v", err)
+					} else {
+						logging.Infof("Successfully bound datagram ICMP socket")
+					}
 				}
+			} else {
+				logging.Infof("Successfully created raw ICMP socket with ip4:1")
 			}
+		} else {
+			logging.Infof("Successfully created raw ICMP socket with %s", protocol)
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
 		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
