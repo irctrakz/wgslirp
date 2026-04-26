@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"strconv"
@@ -31,6 +32,9 @@ type SocketInterface struct {
 
 	// Raw socket connection
 	conn net.PacketConn
+
+	// Datagram socket FD for ICMP when raw socket unavailable (ping_group_range)
+	dgramFd int
 
 	// Control
 	mu      sync.Mutex
@@ -62,9 +66,10 @@ var _ SocketWriter = (*SocketInterface)(nil)
 // NewSocketInterface creates a new socket interface
 func NewSocketInterface(config Config) *SocketInterface {
 	return &SocketInterface{
-		config:  config,
-		metrics: core.SocketMetrics{},
-		stopCh:  make(chan struct{}),
+		config:   config,
+		metrics:  core.SocketMetrics{},
+		stopCh:   make(chan struct{}),
+		dgramFd: -1, // Initialize to invalid
 	}
 }
 
@@ -94,10 +99,44 @@ func (s *SocketInterface) Start() error {
 
 	// Create the appropriate socket based on the protocol
 	if strings.Contains(protocol, "icmp") {
-		// For ICMP, use the icmp package. This works in privileged mode ("ip4:icmp").
+		// For ICMP, try multiple approaches in order of preference
+
+		// First try raw socket (requires CAP_NET_RAW)
 		s.conn, err = icmp.ListenPacket(protocol, "0.0.0.0") // Bind to all interfaces
 		if err != nil {
-			return fmt.Errorf("failed to create raw socket with protocol %s: %v", protocol, err)
+			logging.Debugf("Failed to create raw ICMP socket (CAP_NET_RAW not available): %v", err)
+
+			// Try alternative raw socket with protocol number
+			s.conn, err = icmp.ListenPacket("ip4:1", "0.0.0.0")
+			if err != nil {
+				logging.Debugf("Failed to create raw ICMP socket with ip4:1: %v", err)
+
+				// Try SOCK_DGRAM for ping_group_range support
+				logging.Debugf("Attempting to create datagram ICMP socket for ping_group_range support")
+				s.dgramFd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+				if err != nil {
+					logging.Errorf("Failed to create datagram ICMP socket: %v", err)
+					logging.Errorf("ICMP functionality will be unavailable - need CAP_NET_RAW or working ping_group_range")
+					s.dgramFd = -1
+					return fmt.Errorf("no ICMP socket available: %v", err)
+				} else {
+					logging.Debugf("Created datagram ICMP socket fd=%d for ping_group_range compatibility", s.dgramFd)
+					// Bind to all interfaces
+					addr := syscall.SockaddrInet4{}
+					if err := syscall.Bind(s.dgramFd, &addr); err != nil {
+						logging.Errorf("Failed to bind datagram ICMP socket: %v", err)
+						syscall.Close(s.dgramFd)
+						s.dgramFd = -1
+						return fmt.Errorf("failed to bind datagram socket: %v", err)
+					} else {
+						logging.Debugf("Successfully bound datagram ICMP socket, dgramFd=%d", s.dgramFd)
+					}
+				}
+			} else {
+				logging.Debugf("Successfully created raw ICMP socket with ip4:1")
+			}
+		} else {
+			logging.Debugf("Successfully created raw ICMP socket with %s", protocol)
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
 		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
@@ -122,6 +161,10 @@ func (s *SocketInterface) Start() error {
 	if s.conn != nil {
 		s.wg.Add(1)
 		go s.listenLoop()
+	} else if s.dgramFd >= 0 {
+		// If we have datagram socket but no raw socket, start datagram listener
+		s.wg.Add(1)
+		go s.dgramListenLoop()
 	}
 
     // SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
@@ -164,6 +207,11 @@ func (s *SocketInterface) Stop() error {
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil
+	}
+
+	if s.dgramFd >= 0 {
+		syscall.Close(s.dgramFd)
+		s.dgramFd = -1
 	}
 
 	if s.udp != nil {
@@ -483,6 +531,130 @@ func (s *SocketInterface) ResetRTOTCPFlows() int {
 	}
 
 	return len(rtoKeys)
+}
+
+// dgramListenLoop listens for ICMP packets using SOCK_DGRAM (for ping_group_range compatibility)
+func (s *SocketInterface) dgramListenLoop() {
+	defer s.wg.Done()
+
+	// Set receive timeout
+	tv := syscall.Timeval{Sec: 5, Usec: 0} // 5 second timeout
+	if err := syscall.SetsockoptTimeval(s.dgramFd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv); err != nil {
+		logging.Errorf("Failed to set datagram socket timeout: %v", err)
+		return
+	}
+
+	// Create a buffer for receiving packets
+	buf := make([]byte, 65536)
+
+	// Keep track of our own IP address to filter out loopback packets
+	myIP := net.ParseIP(s.config.IPAddress)
+	if myIP == nil {
+		logging.Errorf("Failed to parse socket IP address: %s", s.config.IPAddress)
+		return
+	}
+
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		default:
+			// Read a packet using SOCK_DGRAM
+			n, fromAddr, err := syscall.Recvfrom(s.dgramFd, buf, 0)
+			if err != nil {
+				if errno, ok := err.(syscall.Errno); ok && (errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK) {
+					// Timeout, continue
+					continue
+				}
+				logging.Errorf("Failed to read from datagram socket: %v", err)
+				atomic.AddUint64(&s.metrics.Errors, 1)
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			// Extract peer IP address
+			fromSockaddr, ok := fromAddr.(*syscall.SockaddrInet4)
+			if !ok {
+				logging.Warnf("Unexpected sockaddr type: %T", fromAddr)
+				continue
+			}
+			peerIP := net.IPv4(fromSockaddr.Addr[0], fromSockaddr.Addr[1], fromSockaddr.Addr[2], fromSockaddr.Addr[3])
+			if peerIP.Equal(myIP) {
+				// Skip our own packets
+				continue
+			}
+
+			// Parse the ICMP message (datagram sockets receive ICMP payload without IP header)
+			msg, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), buf[:n])
+			if err != nil {
+				logging.Errorf("Failed to parse ICMP message from datagram socket: %v", err)
+				atomic.AddUint64(&s.metrics.Errors, 1)
+				continue
+			}
+
+			// Log the ICMP message details
+			logging.Debugf("SOCKET INCOMING (datagram): from=%v, type=%v, code=%v", peerIP, msg.Type, msg.Code)
+
+			// For echo replies, extract more details
+			if msg.Type == ipv4.ICMPTypeEchoReply {
+				if echo, ok := msg.Body.(*icmp.Echo); ok {
+					logging.Debugf("SOCKET INCOMING ICMP (datagram): type=0, code=0, id=%d, seq=%d",
+						echo.ID, echo.Seq)
+				}
+			}
+
+			// Construct a full IP packet with the ICMP message
+			ipHeader := make([]byte, 20)
+			ipHeader[0] = 0x45 // Version 4, header length 5 (20 bytes)
+			ipHeader[1] = 0x00 // DSCP & ECN
+			total := 20 + n
+			ipHeader[2] = byte(total >> 8)   // Total length (high byte)
+			ipHeader[3] = byte(total & 0xff) // Total length (low byte)
+			// Identification
+			{
+				id := nextIPID()
+				ipHeader[4] = byte(id >> 8)
+				ipHeader[5] = byte(id)
+			}
+			ipHeader[6] = 0x00        // Flags & Fragment offset
+			ipHeader[7] = 0x00        // Fragment offset
+			ipHeader[8] = 64          // TTL
+			ipHeader[9] = 1           // Protocol (ICMP)
+			ipHeader[10] = 0x00       // Header checksum (will be calculated later)
+			ipHeader[11] = 0x00       // Header checksum
+			copy(ipHeader[12:16], peerIP.To4()) // Source IP (the peer)
+			copy(ipHeader[16:20], myIP.To4())   // Destination IP (our IP)
+
+			// Calculate IP header checksum
+			checksum := calculateChecksum(ipHeader)
+			ipHeader[10] = byte(checksum >> 8)
+			ipHeader[11] = byte(checksum & 0xff)
+
+			// Combine IP header and ICMP message
+			fullPacket := append(ipHeader, buf[:n]...)
+
+			// Update metrics
+			atomic.AddUint64(&s.metrics.PacketsReceived, 1)
+			atomic.AddUint64(&s.metrics.BytesReceived, uint64(len(fullPacket)))
+
+			// Create a packet from the data
+			packet := core.NewPacket(fullPacket)
+
+			// Process the packet
+			if s.processor != nil {
+				if err := s.processor.ProcessPacket(packet); err != nil {
+					logging.Errorf("Failed to process packet from datagram socket: %v", err)
+					atomic.AddUint64(&s.metrics.Errors, 1)
+					continue
+				}
+				logging.Debugf("Packet processed by processor from datagram socket: length=%d", len(fullPacket))
+			} else {
+				logging.Warnf("No packet processor set, packet not processed from datagram socket: length=%d", len(fullPacket))
+			}
+
+			logging.Debugf("Received packet of length %d from host network via datagram socket", len(fullPacket))
+		}
+	}
 }
 
 // listenLoop listens for packets from the host network
