@@ -36,6 +36,11 @@ type SocketInterface struct {
 	// Datagram socket FD for ICMP when raw socket unavailable (ping_group_range)
 	dgramFd int
 
+	// ICMP datagram sockets use a kernel-selected echo ID. Keep enough state
+	// to restore the guest-facing request identity when the reply arrives.
+	dgramEchoMu      sync.Mutex
+	dgramEchoPending map[string][]pendingDgramEcho
+
 	// Control
 	mu      sync.Mutex
 	running bool
@@ -47,17 +52,17 @@ type SocketInterface struct {
 	tcp  *tcpBridge
 	icmp *icmpBridge
 
-    // (FlowManager and egress limiter removed)
+	// (FlowManager and egress limiter removed)
 
 	// Effective MTU override for synthesized packets (TCP seg/UDP frags).
 	// If <=0, falls back to config.MTU. Allows runtime fallback under trouble.
 	mtuOverride int32
 
-    // (historical fields removed)
+	// (historical fields removed)
 
-    // IP header synthesis options
-    tosCopy     bool // if true, preserve DSCP/ECN from origin; else set to 0
-    ttlOverride int  // if >0, use this TTL; else use default 64
+	// IP header synthesis options
+	tosCopy     bool // if true, preserve DSCP/ECN from origin; else set to 0
+	ttlOverride int  // if >0, use this TTL; else use default 64
 }
 
 // Ensure SocketInterface implements SocketWriter
@@ -66,10 +71,11 @@ var _ SocketWriter = (*SocketInterface)(nil)
 // NewSocketInterface creates a new socket interface
 func NewSocketInterface(config Config) *SocketInterface {
 	return &SocketInterface{
-		config:   config,
-		metrics:  core.SocketMetrics{},
-		stopCh:   make(chan struct{}),
-		dgramFd: -1, // Initialize to invalid
+		config:           config,
+		metrics:          core.SocketMetrics{},
+		stopCh:           make(chan struct{}),
+		dgramFd:          -1, // Initialize to invalid
+		dgramEchoPending: make(map[string][]pendingDgramEcho),
 	}
 }
 
@@ -167,8 +173,8 @@ func (s *SocketInterface) Start() error {
 		go s.dgramListenLoop()
 	}
 
-    // SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
-    logging.Infof("Simple mode active: bypassing FlowManager and egress limiter; inline delivery to processor")
+	// SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
+	logging.Infof("Simple mode active: bypassing FlowManager and egress limiter; inline delivery to processor")
 
 	// Initialize UDP/TCP slirp bridges
 	// Header synthesis policy from env
@@ -186,7 +192,7 @@ func (s *SocketInterface) Start() error {
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
 
-    // No egress limiter configuration
+	// No egress limiter configuration
 
 	logging.Debugf("Socket interface started with IP: %s", s.config.IPAddress)
 	return nil
@@ -223,7 +229,7 @@ func (s *SocketInterface) Stop() error {
 		s.tcp = nil
 	}
 
-    // No FlowManager
+	// No FlowManager
 
 	s.running = false
 
@@ -356,24 +362,24 @@ func (s *SocketInterface) Metrics() core.SocketMetrics {
 
 // SetTCPMSSClamp updates the TCP bridge MSS clamp at runtime.
 func (s *SocketInterface) SetTCPMSSClamp(n int) {
-    s.mu.Lock()
-    tb := s.tcp
-    s.mu.Unlock()
-    if tb == nil {
-        return
-    }
-    tb.SetMSSClamp(n)
+	s.mu.Lock()
+	tb := s.tcp
+	s.mu.Unlock()
+	if tb == nil {
+		return
+	}
+	tb.SetMSSClamp(n)
 }
 
 // SetTCPPaceUS updates the TCP bridge per-segment pacing interval at runtime.
 func (s *SocketInterface) SetTCPPaceUS(us int) {
-    s.mu.Lock()
-    tb := s.tcp
-    s.mu.Unlock()
-    if tb == nil {
-        return
-    }
-    tb.SetPaceUS(us)
+	s.mu.Lock()
+	tb := s.tcp
+	s.mu.Unlock()
+	if tb == nil {
+		return
+	}
+	tb.SetPaceUS(us)
 }
 
 // effTosTTL computes the TOS/TTL to use for host->guest synthesized packets
@@ -459,17 +465,17 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 			"ack_window_update": atomic.LoadUint64(&s.tcp.ackWndOnly),
 			"ack_idle_flows":    ackIdle,
 			// Async dial and pending-buffer instrumentation
-			"dial_start":        atomic.LoadUint64(&s.tcp.dialStart),
-			"dial_ok":           atomic.LoadUint64(&s.tcp.dialOk),
-			"dial_fail":         atomic.LoadUint64(&s.tcp.dialFail),
-			"dial_inflight":     uint64(atomic.LoadInt64(&s.tcp.dialInflight)),
-			"pend_enq":          atomic.LoadUint64(&s.tcp.pendEnq),
-			"pend_flush":        atomic.LoadUint64(&s.tcp.pendFlush),
-			"pend_drop":         atomic.LoadUint64(&s.tcp.pendDrop),
+			"dial_start":    atomic.LoadUint64(&s.tcp.dialStart),
+			"dial_ok":       atomic.LoadUint64(&s.tcp.dialOk),
+			"dial_fail":     atomic.LoadUint64(&s.tcp.dialFail),
+			"dial_inflight": uint64(atomic.LoadInt64(&s.tcp.dialInflight)),
+			"pend_enq":      atomic.LoadUint64(&s.tcp.pendEnq),
+			"pend_flush":    atomic.LoadUint64(&s.tcp.pendFlush),
+			"pend_drop":     atomic.LoadUint64(&s.tcp.pendDrop),
 		}
 	}
-    // FlowManager and egress limiter removed
-    // Fallback removed
+	// FlowManager and egress limiter removed
+	// Fallback removed
 	// Include processor metrics if available
 	if s.processor != nil {
 		if m, ok := s.processor.(interface{ Metrics() map[string]uint64 }); ok {
@@ -533,6 +539,53 @@ func (s *SocketInterface) ResetRTOTCPFlows() int {
 	return len(rtoKeys)
 }
 
+func (s *SocketInterface) addPendingDgramEcho(key string, pending pendingDgramEcho) {
+	s.dgramEchoMu.Lock()
+	defer s.dgramEchoMu.Unlock()
+
+	if s.dgramEchoPending == nil {
+		s.dgramEchoPending = make(map[string][]pendingDgramEcho)
+	}
+
+	now := time.Now()
+	for k, queued := range s.dgramEchoPending {
+		keep := queued[:0]
+		for _, echo := range queued {
+			if echo.expiry.After(now) {
+				keep = append(keep, echo)
+			}
+		}
+		if len(keep) == 0 {
+			delete(s.dgramEchoPending, k)
+			continue
+		}
+		s.dgramEchoPending[k] = keep
+	}
+
+	s.dgramEchoPending[key] = append(s.dgramEchoPending[key], pending)
+}
+
+func (s *SocketInterface) takePendingDgramEcho(key string) (pendingDgramEcho, bool) {
+	s.dgramEchoMu.Lock()
+	defer s.dgramEchoMu.Unlock()
+
+	queued := s.dgramEchoPending[key]
+	for len(queued) > 0 {
+		pending := queued[0]
+		queued = queued[1:]
+		if len(queued) == 0 {
+			delete(s.dgramEchoPending, key)
+		} else {
+			s.dgramEchoPending[key] = queued
+		}
+		if pending.expiry.After(time.Now()) {
+			return pending, true
+		}
+	}
+
+	return pendingDgramEcho{}, false
+}
+
 // dgramListenLoop listens for ICMP packets using SOCK_DGRAM (for ping_group_range compatibility)
 func (s *SocketInterface) dgramListenLoop() {
 	defer s.wg.Done()
@@ -562,9 +615,14 @@ func (s *SocketInterface) dgramListenLoop() {
 			// Read a packet using SOCK_DGRAM
 			n, fromAddr, err := syscall.Recvfrom(s.dgramFd, buf, 0)
 			if err != nil {
-				if errno, ok := err.(syscall.Errno); ok && (errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK) {
-					// Timeout, continue
-					continue
+				if errno, ok := err.(syscall.Errno); ok {
+					if errno == syscall.EINTR {
+						continue
+					}
+					if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
+						// Timeout, continue
+						continue
+					}
 				}
 				logging.Errorf("Failed to read from datagram socket: %v", err)
 				atomic.AddUint64(&s.metrics.Errors, 1)
@@ -603,35 +661,27 @@ func (s *SocketInterface) dgramListenLoop() {
 				}
 			}
 
-			// Construct a full IP packet with the ICMP message
-			ipHeader := make([]byte, 20)
-			ipHeader[0] = 0x45 // Version 4, header length 5 (20 bytes)
-			ipHeader[1] = 0x00 // DSCP & ECN
-			total := 20 + n
-			ipHeader[2] = byte(total >> 8)   // Total length (high byte)
-			ipHeader[3] = byte(total & 0xff) // Total length (low byte)
-			// Identification
-			{
-				id := nextIPID()
-				ipHeader[4] = byte(id >> 8)
-				ipHeader[5] = byte(id)
+			var fullPacket []byte
+			if msg.Type == ipv4.ICMPTypeEchoReply {
+				echo, ok := msg.Body.(*icmp.Echo)
+				if !ok {
+					logging.Warnf("Unexpected ICMP datagram echo body: %T", msg.Body)
+					continue
+				}
+				pending, ok := s.takePendingDgramEcho(dgramEchoKey(peerIP, echo.Seq, echo.Data))
+				if !ok {
+					logging.Debugf("dropping unmatched datagram ICMP echo reply from %s (seq=%d)", peerIP, echo.Seq)
+					continue
+				}
+				fullPacket, err = rewriteDgramEchoReply(msg, peerIP, pending)
+				if err != nil {
+					logging.Errorf("Failed to rewrite datagram ICMP echo reply: %v", err)
+					atomic.AddUint64(&s.metrics.Errors, 1)
+					continue
+				}
+			} else {
+				fullPacket = buildIPv4ICMP(peerIP.To4(), myIP.To4(), buf[:n])
 			}
-			ipHeader[6] = 0x00        // Flags & Fragment offset
-			ipHeader[7] = 0x00        // Fragment offset
-			ipHeader[8] = 64          // TTL
-			ipHeader[9] = 1           // Protocol (ICMP)
-			ipHeader[10] = 0x00       // Header checksum (will be calculated later)
-			ipHeader[11] = 0x00       // Header checksum
-			copy(ipHeader[12:16], peerIP.To4()) // Source IP (the peer)
-			copy(ipHeader[16:20], myIP.To4())   // Destination IP (our IP)
-
-			// Calculate IP header checksum
-			checksum := calculateChecksum(ipHeader)
-			ipHeader[10] = byte(checksum >> 8)
-			ipHeader[11] = byte(checksum & 0xff)
-
-			// Combine IP header and ICMP message
-			fullPacket := append(ipHeader, buf[:n]...)
 
 			// Update metrics
 			atomic.AddUint64(&s.metrics.PacketsReceived, 1)

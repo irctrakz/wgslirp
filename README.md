@@ -24,7 +24,7 @@ A high-performance, user-space WireGuard router that forwards decrypted IPv4 tra
 
 ## Overview
 
-This router combines WireGuard VPN with a userspace networking implementation to provide efficient, secure, container-friendly routing. It uses a slirp-style approach to handle TCP, UDP, and ICMP (when running with CAP_NET_RAW) traffic between WireGuard tunnels and the host network.
+This router combines WireGuard VPN with a userspace networking implementation to provide efficient, secure, container-friendly routing. It uses a slirp-style approach to handle TCP, UDP, and ICMP traffic between WireGuard tunnels and the host network. ICMP echo uses raw sockets when available, or Linux ICMP datagram sockets when allowed by `net.ipv4.ping_group_range`; broader ICMP behavior still requires raw socket privileges.
 
 ### Key Features
 
@@ -188,7 +188,9 @@ Get up and running quickly with these steps:
    ping 10.0.0.1
    ```
 
-  Note: If you're not running with CAP_NET_RAW you can't ping, try a tcp connection
+  Note: ICMP echo needs either `CAP_NET_RAW` or a Linux ICMP datagram socket
+  allowed by `net.ipv4.ping_group_range`. Other ICMP traffic needs raw socket
+  privileges.
 
 ## Configuration
 
@@ -342,7 +344,15 @@ These values have proven effective for high‑throughput, low‑latency operatio
 
 ### ICMP Privileges
 
-ICMP echo and other raw ICMP operations require raw socket privileges (e.g., `CAP_NET_RAW`). In typical container environments without this capability, the router will silently drop ICMP packets from guests (logged at debug level) to avoid disrupting TCP/UDP traffic. If ICMP is required, grant the container appropriate capabilities or run outside a restricted environment.
+Raw ICMP operations require raw socket privileges (e.g., `CAP_NET_RAW`). On Linux, ICMP echo can fall back to an ICMP datagram socket when the router's group is allowed by `net.ipv4.ping_group_range`; this fallback supports echo request/reply traffic only. Without either path, guest ICMP is dropped at debug level so TCP/UDP forwarding can continue. Grant raw socket privileges when broader ICMP behavior is required.
+
+The Linux ICMP datagram path has a live integration test container. It drops
+`CAP_NET_RAW` and allows only the test user's group through
+`net.ipv4.ping_group_range`:
+
+```bash
+./scripts/test-linux-icmp-dgram.sh
+```
 
 **Note**: To disable metrics completely, ensure both `METRICS_LOG` and `METRICS_INTERVAL` are unset or empty. Setting either of these variables to any non-empty value will enable metrics reporting.
 
