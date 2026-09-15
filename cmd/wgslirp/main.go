@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/irctrakz/wgslirp/pkg/core"
@@ -15,11 +18,24 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	defer wg.ClosePCAP()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	// Debug logging toggle via DEBUG env (truthy parser)
 	dval := strings.ToLower(strings.TrimSpace(os.Getenv("DEBUG")))
 	debugOn := dval == "1" || dval == "true" || dval == "yes" || dval == "on"
 	// Detect metrics enabled via env
 	metricsEnabled := strings.TrimSpace(os.Getenv("METRICS_LOG")) != "" || strings.TrimSpace(os.Getenv("METRICS_INTERVAL")) != ""
+	interval, err := metricsInterval(os.Getenv("METRICS_INTERVAL"))
+	if metricsEnabled && err != nil {
+		return err
+	}
 	if debugOn {
 		logging.SetLevel(logging.DebugLevel)
 		core.SetDebugMode(true)
@@ -37,7 +53,7 @@ func main() {
 	// Load WG config from env
 	var dcfg wg.DeviceConfig
 	if err := dcfg.LoadFromEnv(); err != nil {
-		log.Fatalf("config: %v", err)
+		return fmt.Errorf("config: %w", err)
 	}
 
 	// Build socket interface (slirp bridges). Align slirp MTU with WG plaintext MTU
@@ -52,39 +68,46 @@ func main() {
 
 	// Create WG TUN bound to the socket writer
 	wgtun := wg.NewWGTun("wgmux0", dcfg.MTU, si)
+	defer wgtun.Close()
 
 	// Packet processor: WG + optional health sink
 	wgProc := wg.NewWGPacketProcessor(wgtun)
 	proc := wgProc
+	var hc *healthSink
 	// Optional: tee a health-check sink to observe slirp replies
 	if strings.TrimSpace(os.Getenv("HEALTHCHECK")) != "" {
-		hc := newHealthSink()
+		hc = newHealthSink()
 		proc = newTeeProcessor(wgProc, hc)
-		// Kick off a best-effort DNS slirp health probe
-		go runSlirpDNSHealth(si, hc)
-		// Also run an OS-level HTTP/DNS check to detect container egress issues
-		go runDirectEgressHealth()
 	}
 	si.SetPacketProcessor(proc)
 	if err := si.Start(); err != nil {
-		log.Fatalf("socket start: %v", err)
+		return fmt.Errorf("socket start: %w", err)
 	}
 	defer si.Stop()
+	if hc != nil {
+		go runSlirpDNSHealth(si, hc)
+		go runDirectEgressHealth()
+	}
 
 	// Start the WireGuard device (wg is the default implementation)
 	dev, err := wg.StartDevice(dcfg, wgtun)
 	if err != nil {
-		log.Fatalf("wireguard start: %v", err)
+		return fmt.Errorf("wireguard start: %w", err)
 	}
 	defer dev.Close()
 
 	// Optional periodic metrics reporter
 	if metricsEnabled {
-		go runMetricsReporter(si, wgtun, dev)
+		var reporter sync.WaitGroup
+		reporter.Add(1)
+		go func() { defer reporter.Done(); runMetricsReporter(ctx, interval, si, wgtun, dev) }()
+		defer func() { cancel(); reporter.Wait() }()
 	}
 
 	// Wait for termination
 	sigc := make(chan os.Signal, 2)
 	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigc)
 	<-sigc
+	return nil
 }

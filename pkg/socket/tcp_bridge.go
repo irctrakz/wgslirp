@@ -1,10 +1,9 @@
 package socket
 
 import (
+	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"io"
 	"math/rand"
 	"net"
 	"os"
@@ -42,11 +41,16 @@ import (
 // retransmission rather than protocol-specific tweaks.
 
 type tcpBridge struct {
-	parent   *SocketInterface
-	mu       sync.RWMutex
-	flows    map[string]*tcpFlow
-	stopCh   chan struct{}
-	lifetime time.Duration
+	lifecycleMu sync.Mutex
+	workers     sync.WaitGroup
+	stopOnce    sync.Once
+	ctx         context.Context
+	cancel      context.CancelFunc
+	parent      *SocketInterface
+	mu          sync.RWMutex
+	flows       map[string]*tcpFlow
+	stopCh      chan struct{}
+	lifetime    time.Duration
 
 	metrics  core.SocketMetrics
 	maxFlows int
@@ -62,16 +66,16 @@ type tcpBridge struct {
 	// it (policy-controlled) to avoid indefinite stalls. 0 disables.
 	ackIdleFail time.Duration
 
-    // debug removed (was verbose per-flow tracing)
+	// debug removed (was verbose per-flow tracing)
 
 	// Optional MSS clamp (bytes). When >0, we clamp advertised MSS in
 	// SYN-ACK and the effective segmentation MSS to min(client, clamp, MTU-40).
-	mssClamp int
+	mssClamp atomic.Int64
 
 	// Optional lightweight pacing between segments (microseconds). When >0,
 	// we sleep this long between enqueued segments to reduce burst loss on
 	// marginal paths.
-	paceUS int
+	paceUS atomic.Int64
 
 	// RTO retransmissions observed (for diagnostics/metrics)
 	rtoCount uint64
@@ -121,6 +125,11 @@ const (
 )
 
 type tcpFlow struct {
+	// stateMu owns connection attachment, sequence/window state, timers and
+	// flow accounting. Never acquire it while holding the bridge registry lock.
+	// The existing buffer locks may only be nested inside stateMu.
+	stateMu sync.Mutex
+	closed  bool
 	key     string
 	srcIP   [4]byte
 	dstIP   [4]byte
@@ -270,13 +279,13 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	// MSS clamp (bytes)
 	if v := strings.TrimSpace(os.Getenv("TCP_MSS_CLAMP")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			b.mssClamp = n
+			b.mssClamp.Store(int64(n))
 		}
 	}
 	// Segment pacing (microseconds)
 	if v := strings.TrimSpace(os.Getenv("TCP_PACE_US")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			b.paceUS = n
+			b.paceUS.Store(int64(n))
 		}
 	}
 	// Clean mode removed (EMERGENCY_DISABLED no longer used)
@@ -331,9 +340,10 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 		}
 	}
 
-	go b.reaper()
+	b.ctx, b.cancel = context.WithCancel(context.Background())
+	b.launch(b.reaper)
 	// Start connection health monitor
-	go b.monitorConnectionHealth()
+	b.launch(b.monitorConnectionHealth)
 	return b
 }
 
@@ -348,6 +358,10 @@ func (b *tcpBridge) sendToGuest(f *tcpFlow, pkt []byte) bool {
 	// Prefer per-flow scheduler; if enqueue fails (queue full), fall back to inline send.
 	if b.parent != nil && b.parent.processor != nil {
 		if err := b.parent.processor.ProcessPacket(WrapPacket(pkt)); err == nil {
+			atomic.AddUint64(&b.metrics.PacketsReceived, 1)
+			atomic.AddUint64(&b.metrics.BytesReceived, uint64(len(pkt)))
+			atomic.AddUint64(&b.parent.metrics.PacketsReceived, 1)
+			atomic.AddUint64(&b.parent.metrics.BytesReceived, uint64(len(pkt)))
 			return true
 		}
 	}
@@ -370,12 +384,13 @@ func (b *tcpBridge) monitorConnectionHealth() {
 		case <-b.stopCh:
 			return
 		case <-ticker.C:
-			b.mu.RLock()
 			now := time.Now()
 			stalledFlows := make([]string, 0)
 
 			// Identify stalled flows
-			for k, f := range b.flows {
+			for _, f := range b.flowSnapshot() {
+				f.stateMu.Lock()
+				k := f.key
 				// Only check established connections with in-flight data
 				if f.state == tcpEstablished {
 					inFlight := int(f.serverNxt - f.sndUna)
@@ -390,8 +405,8 @@ func (b *tcpBridge) monitorConnectionHealth() {
 							k, idleTime.Round(time.Second), inFlight)
 					}
 				}
+				f.stateMu.Unlock()
 			}
-			b.mu.RUnlock()
 
 			// Reset stalled flows
 			for _, k := range stalledFlows {
@@ -412,7 +427,7 @@ func (b *tcpBridge) SetMSSClamp(n int) {
 	if n < 0 {
 		n = 0
 	}
-	b.mssClamp = n
+	b.mssClamp.Store(int64(n))
 	logging.Infof("TCP MSS clamp set to %d (0=disabled)", n)
 }
 
@@ -421,28 +436,31 @@ func (b *tcpBridge) SetPaceUS(us int) {
 	if us < 0 {
 		us = 0
 	}
-	b.paceUS = us
+	b.paceUS.Store(int64(us))
 	logging.Infof("TCP pacing set to %d us (0=disabled)", us)
 }
 
 func (b *tcpBridge) stop() {
-	close(b.stopCh)
-	// Snapshot keys, then remove flows using removeFlow to ensure all
-	// per-flow goroutines and scheduler state are cleaned up.
-	b.mu.Lock()
-	keys := make([]string, 0, len(b.flows))
-	for k := range b.flows {
-		keys = append(keys, k)
-	}
-	b.mu.Unlock()
-	for _, k := range keys {
-		b.removeFlow(k)
-	}
+	b.stopOnce.Do(func() {
+		b.lifecycleMu.Lock()
+		close(b.stopCh)
+		b.cancel()
+		b.lifecycleMu.Unlock()
+		for _, f := range b.flowSnapshot() {
+			b.removeFlow(f.key)
+		}
+		b.workers.Wait()
+	})
 }
 
 func (b *tcpBridge) Name() string { return "tcp" }
 
 func (b *tcpBridge) HandleOutbound(pkt []byte) error {
+	if !b.beginWork() {
+		return fmt.Errorf("TCP bridge stopped")
+	}
+	defer b.workers.Done()
+
 	if len(pkt) < 40 { // IPv4(20)+TCP(20)
 		return fmt.Errorf("tcp: packet too short")
 	}
@@ -457,7 +475,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 
 	tcpOff := ihl
 	dataOff := int((pkt[tcpOff+12] >> 4) * 4)
-	if len(pkt) < tcpOff+dataOff {
+	if dataOff < 20 || len(pkt) < tcpOff+dataOff {
 		return fmt.Errorf("tcp: header length invalid")
 	}
 	flags := pkt[tcpOff+13]
@@ -515,8 +533,11 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 					fastT = time.Duration(n) * time.Millisecond
 				}
 			}
+			if fastT <= 0 {
+				fastT = time.Millisecond
+			}
 			d := net.Dialer{Timeout: fastT}
-			if c, err := d.Dial("tcp", raddr.String()); err == nil {
+			if c, err := d.DialContext(b.ctx, "tcp", raddr.String()); err == nil {
 				if tc, ok := c.(*net.TCPConn); ok {
 					preConn = tc
 				} else {
@@ -563,6 +584,8 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			tos:        pkt[1],
 			ttl:        pkt[8],
 			ackCh:      make(chan struct{}, 1),
+			rtoStop:    make(chan struct{}),
+			rto:        time.Second,
 			pendCap:    b.defaultPendCap,
 		}
 		// Default MSS from effective MTU (respects runtime override)
@@ -583,8 +606,8 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		}
 		// Apply MSS clamp (if configured) and MTU-derived cap
 		eff := defMSS
-		if b.mssClamp > 0 && b.mssClamp < eff {
-			eff = b.mssClamp
+		if int(b.mssClamp.Load()) > 0 && int(b.mssClamp.Load()) < eff {
+			eff = int(b.mssClamp.Load())
 		}
 		candidate.clientMSS = uint16(eff)
 		candidate.mss = eff
@@ -612,8 +635,8 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 					}
 					if kind == 2 && l == 4 { // MSS
 						m := int(binary.BigEndian.Uint16(opts[i+2 : i+4]))
-						if b.mssClamp > 0 && m > b.mssClamp {
-							m = b.mssClamp
+						if int(b.mssClamp.Load()) > 0 && m > int(b.mssClamp.Load()) {
+							m = int(b.mssClamp.Load())
 						}
 						if m > eff {
 							m = eff
@@ -642,27 +665,56 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			candidate.cc = newCongestionControl(algo, candidate.mss)
 		}
 		// Insert under write lock with double-check
+		candidate.stateMu.Lock()
 		b.mu.Lock()
+		select {
+		case <-b.stopCh:
+			b.mu.Unlock()
+			candidate.stateMu.Unlock()
+			if preConn != nil {
+				preConn.Close()
+			}
+			return fmt.Errorf("TCP bridge stopped")
+		default:
+		}
 		if exist := b.flows[key]; exist != nil {
 			b.mu.Unlock()
+			candidate.stateMu.Unlock()
+			if preConn != nil {
+				preConn.Close()
+			}
 			flow = exist
 		} else {
 			b.flows[key] = candidate
 			b.mu.Unlock()
 			flow = candidate
+			defer flow.stateMu.Unlock()
 			// Kick off async host dial; on success, attach conn, emit SYN-ACK (if not already), start reader, and flush pending
 			if flow.connecting {
-				go func(f *tcpFlow) {
+				f := flow
+				quotedPacket := append([]byte(nil), pkt...)
+				b.launch(func() {
 					atomic.AddUint64(&b.dialStart, 1)
 					atomic.AddInt64(&b.dialInflight, 1)
 					raddr := &net.TCPAddr{IP: net.IP(f.dstIP[:]), Port: int(f.dstPort)}
-					conn, err := net.DialTCP("tcp", nil, raddr)
+					dialer := net.Dialer{Timeout: 5 * time.Second}
+					rawConn, err := dialer.DialContext(b.ctx, "tcp", raddr.String())
+					var conn *net.TCPConn
+					if err == nil {
+						conn = rawConn.(*net.TCPConn)
+					}
 					if err != nil {
+						f.stateMu.Lock()
+						defer f.stateMu.Unlock()
+						if f.closed {
+							atomic.AddInt64(&b.dialInflight, -1)
+							return
+						}
 						// Signal guest per policy
 						if b.parent != nil && b.parent.processor != nil {
 							switch b.errorSignal {
 							case "icmp":
-								if icmp := buildICMPUnreachable(f.dstIP, f.srcIP, 1, pkt); icmp != nil {
+								if icmp := buildICMPUnreachable(f.dstIP, f.srcIP, 1, quotedPacket); icmp != nil {
 									_ = b.parent.processor.ProcessPacket(WrapPacket(icmp))
 								}
 							case "rst":
@@ -677,7 +729,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 						atomic.AddUint64(&b.parent.metrics.Errors, 1)
 						atomic.AddInt64(&b.dialInflight, -1)
 						// Remove the flow on dial failure
-						b.removeFlow(f.key)
+						b.removeFlowLocked(f)
 						return
 					}
 					// Configure socket options
@@ -693,6 +745,13 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 						if n, err := strconv.Atoi(v); err == nil && n > 0 {
 							_ = conn.SetWriteBuffer(n)
 						}
+					}
+					f.stateMu.Lock()
+					defer f.stateMu.Unlock()
+					if f.closed {
+						conn.Close()
+						atomic.AddInt64(&b.dialInflight, -1)
+						return
 					}
 					f.conn = conn
 					f.connecting = false
@@ -715,12 +774,12 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 							if val > 1460 {
 								val = 1460
 							}
-							if b.mssClamp > 0 && val > b.mssClamp {
-								val = b.mssClamp
+							if int(b.mssClamp.Load()) > 0 && val > int(b.mssClamp.Load()) {
+								val = int(b.mssClamp.Load())
 							}
 							mss = uint16(val)
-						} else if b.mssClamp > 0 && int(mss) > b.mssClamp {
-							mss = uint16(b.mssClamp)
+						} else if int(b.mssClamp.Load()) > 0 && int(mss) > int(b.mssClamp.Load()) {
+							mss = uint16(int(b.mssClamp.Load()))
 						}
 						synOpts := make([]byte, 0, 8)
 						synOpts = append(synOpts, 2, 4, byte(mss>>8), byte(mss))
@@ -740,16 +799,16 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 							f.synAckSent = true
 							if b.logHandshake {
 								logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
-									f.key, effMTU, b.mssClamp, int(f.clientMSS), int(mss))
+									f.key, effMTU, int(b.mssClamp.Load()), int(f.clientMSS), int(mss))
 							}
 							_ = b.sendToGuest(f, synAck)
 						}
 					}
 					// Start reader now that conn exists
-					go b.reader(f)
+					b.launch(func() { b.reader(f) })
 					// Flush any pre-connect pending data and contiguous reassembly
 					b.flushPending(f)
-				}(flow)
+				})
 			}
 			// Emit SYN-ACK immediately; if dial later succeeds, the goroutine will avoid duplicate send.
 			if !flow.synAckSent {
@@ -767,12 +826,12 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 					if val > 1460 {
 						val = 1460
 					}
-					if b.mssClamp > 0 && val > b.mssClamp {
-						val = b.mssClamp
+					if int(b.mssClamp.Load()) > 0 && val > int(b.mssClamp.Load()) {
+						val = int(b.mssClamp.Load())
 					}
 					mss = uint16(val)
-				} else if b.mssClamp > 0 && int(mss) > b.mssClamp {
-					mss = uint16(b.mssClamp)
+				} else if int(b.mssClamp.Load()) > 0 && int(mss) > int(b.mssClamp.Load()) {
+					mss = uint16(int(b.mssClamp.Load()))
 				}
 				synOpts := make([]byte, 0, 8)
 				synOpts = append(synOpts, 2, 4, byte(mss>>8), byte(mss))
@@ -790,7 +849,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 				synAck := buildIPv4TCPOpts(dstIP, srcIP, dstPort, srcPort, serverISN, seq+1, fSYN|fACK, nil, synOpts)
 				if b.logHandshake {
 					logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
-						key, effMTU, b.mssClamp, int(flow.clientMSS), int(mss))
+						key, effMTU, int(b.mssClamp.Load()), int(flow.clientMSS), int(mss))
 				}
 				_ = b.sendToGuest(flow, synAck)
 				flow.synAckSent = true
@@ -799,7 +858,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			atomic.AddUint64(&b.parent.metrics.ConnectionsCreated, 1)
 			// If already connected (fast pre-dial), start reader immediately
 			if flow.conn != nil {
-				go b.reader(flow)
+				b.launch(func() { b.reader(flow) })
 			}
 			return nil
 		}
@@ -833,6 +892,11 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		return nil
 	}
 
+	flow.stateMu.Lock()
+	defer flow.stateMu.Unlock()
+	if flow.closed {
+		return fmt.Errorf("TCP flow closed")
+	}
 	flow.touch()
 
 	switch flow.state {
@@ -844,10 +908,11 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			if flow.wsIn > 0 {
 				wnd = wnd << flow.wsIn
 			}
-			if wnd == 0 {
-				wnd = 65535
-			}
 			flow.advWnd = wnd
+			select {
+			case flow.ackCh <- struct{}{}:
+			default:
+			}
 		}
 		return nil
 	case tcpEstablished:
@@ -954,12 +1019,12 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 				if dataOff > 20 {
 					opts := pkt[tcpOff+20 : tcpOff+dataOff]
 					parseSACKBlocks(flow, opts)
-						// trimmed: verbose SACK block debug removed
+					// trimmed: verbose SACK block debug removed
 				}
 			}
 			if len(payload) == 0 {
 				if flow.finSent && ack == flow.serverNxt {
-					b.removeFlow(flow.key)
+					b.removeFlowLocked(flow)
 					return nil
 				}
 				// Pure ACK otherwise falls through
@@ -1085,7 +1150,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 				return nil
 			}
 
-			if n, err := flow.conn.Write(payload); err != nil {
+			if n, err := writeTCP(flow.conn, payload); err != nil {
 				atomic.AddUint64(&b.parent.metrics.Errors, 1)
 				logging.Errorf("TCP bridge write error: %v", err)
 				return fmt.Errorf("tcp: write: %w", err)
@@ -1104,7 +1169,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 				if s.seq != flow.clientNxt {
 					break
 				}
-				if n, err := flow.conn.Write(s.data); err != nil {
+				if n, err := writeTCP(flow.conn, s.data); err != nil {
 					flow.mu.Unlock()
 					atomic.AddUint64(&b.parent.metrics.Errors, 1)
 					return fmt.Errorf("tcp: write (reassembly): %w", err)
@@ -1141,363 +1206,13 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		// Await final ACK from client; if received, close
 		if (flags&fACK) != 0 && (!flow.finSent || ack == flow.serverNxt) {
 			if flow.finSent && ack == flow.serverNxt {
-				b.removeFlow(flow.key)
+				b.removeFlowLocked(flow)
 			}
 			// else still waiting for host side close
 		}
 		return nil
 	default:
 		return nil
-	}
-}
-
-func (b *tcpBridge) reader(f *tcpFlow) {
-	buf := make([]byte, 32*1024)
-	// Initialize retransmission timer parameters
-	f.txMu.Lock()
-	if f.rto == 0 {
-		f.rto = 1 * time.Second
-	}
-	if f.rtoStop == nil {
-		f.rtoStop = make(chan struct{})
-	}
-	f.txMu.Unlock()
-	// Start simple RTO goroutine
-	go func() {
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-f.rtoStop:
-				return
-			case <-ticker.C:
-				f.txMu.Lock()
-				if len(f.txQueue) == 0 {
-					f.txMu.Unlock()
-					continue
-				}
-				// Find first timed-out unsacked segment (skip SACKed head)
-				idx := -1
-				now := time.Now()
-				for i := 0; i < len(f.txQueue); i++ {
-					s := f.txQueue[i]
-					if s.seq+uint32(len(s.data)) <= f.sndUna {
-						continue
-					}
-					if isSACKed(f, s.seq, s.seq+uint32(len(s.data))) {
-						continue
-					}
-					if s.sentAt.IsZero() || now.Sub(s.sentAt) > f.rto {
-						idx = i
-						break
-					}
-				}
-				if idx >= 0 {
-					seg := f.txQueue[idx]
-					f.txQueue[idx].sentAt = now
-					f.txQueue[idx].retries++
-					f.txQueue[idx].rtx = true
-					// Exponential backoff up to ~2s
-					if f.rto < 2*time.Second {
-						f.rto *= 2
-						if f.rto > 2*time.Second {
-							f.rto = 2 * time.Second
-						}
-					}
-					// trimmed: per-flow RTO debug removed
-					f.txMu.Unlock()
-
-					// Track this flow as being in RTO state
-					b.trackRTOFlow(f.key)
-
-					pkt := buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort,
-						seg.seq, f.clientNxt, 0x18, seg.data, f.tos, f.ttl)
-					if pkt != nil {
-						if !b.sendToGuest(f, pkt) {
-							// fallthrough: nothing to do; metrics/cc updated below
-						}
-						if f.ccEnabled && f.cc != nil {
-							f.cc.OnLoss(true)
-						}
-						atomic.AddUint64(&b.rtoCount, 1)
-					}
-				} else {
-					f.txMu.Unlock()
-				}
-			}
-		}
-	}()
-	for {
-		// Window/cwnd-based backpressure: if there is no room to send
-		// additional bytes to the client (advWnd/cwnd fully consumed by
-		// in-flight), wait for ACK/window updates before reading more from the
-		// server socket. This prevents unbounded read buffering and maps
-		// downstream stalls back to the upstream server.
-		inFlight := int(f.serverNxt - f.sndUna)
-		allowed := int(f.advWnd) - inFlight
-		if f.ccEnabled && f.cc != nil {
-			cw := f.cc.Cwnd()
-			if cw < 1 {
-				cw = f.mss * 2
-			}
-			if (cw - inFlight) < allowed {
-				allowed = cw - inFlight
-			}
-		}
-		// If configured, and no ACK progress for a while with meaningful in-flight
-		// data, avoid reading from server to prevent amplification during
-		// downstream blackholes. Gate only when inFlight exceeds threshold
-		// (defaults to ~1 MSS) to avoid penalizing tiny exchanges.
-		if b.ackIdleGate > 0 && inFlight > 0 {
-			minInflight := b.ackIdleMinInflight
-			if minInflight <= 0 {
-				minInflight = f.mss
-			}
-			if inFlight >= minInflight {
-				idle := time.Since(f.lastAckTime)
-				if idle >= b.ackIdleGate {
-					// Always log ACK idle conditions (not just in debug mode)
-					// but throttle to avoid log spam
-					f.gateMu.Lock()
-					now := time.Now()
-					if f.lastGateLog.IsZero() || now.Sub(f.lastGateLog) >= 10*time.Second {
-						logging.Infof("TCP ACK-idle detected: flow=%s idle=%v inFlight=%d rto=%v",
-							f.key, idle.Round(time.Second), inFlight, f.rto)
-						f.lastGateLog = now
-					}
-					f.gateMu.Unlock()
-
-					select {
-					case <-f.ackCh:
-					case <-time.After(minDur(250*time.Millisecond, f.rto)):
-					}
-					// If a hard fail threshold is configured and exceeded, actively
-					// reset the flow toward the client and tear it down to avoid
-					// indefinite stalls consuming resources.
-					if b.ackIdleFail > 0 && time.Since(f.lastAckTime) >= b.ackIdleFail {
-						if b.errorSignal == "rst" || b.errorSignal == "icmp" {
-							rst := buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil) // RST|ACK
-							if rst != nil {
-								_ = b.sendToGuest(f, rst)
-							}
-						}
-						logging.Warnf("TCP ACK-idle failure: resetting stalled flow %s after %v idle (inFlight=%d, lastAck=%d, serverNxt=%d)",
-							f.key, time.Since(f.lastAckTime).Round(time.Second), inFlight, f.lastAck, f.serverNxt)
-						b.removeFlow(f.key)
-						return
-					}
-					continue
-				}
-			}
-		}
-		if allowed <= 0 {
-			select {
-			case <-f.ackCh:
-			case <-time.After(10 * time.Millisecond):
-			}
-			continue
-		}
-		_ = f.conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-		n, err := f.conn.Read(buf)
-		// Process any data we received, even if there was an error
-		if n > 0 {
-			f.touch()
-			payload := make([]byte, n)
-			copy(payload, buf[:n])
-
-			// Log data being sent back to client with more detail
-			logging.Debugf("TCP bridge received %d bytes from server for flow %s, data: %q",
-				n, f.key, string(payload[:minInt(n, 50)]))
-
-			// No protocol-specific heuristics; rely on flow control and ACKs.
-
-			// Segment payload according to client MSS and advertised window
-			// Compute allowed send window (advWnd - in-flight)
-			inFlight := int(f.serverNxt - f.sndUna)
-			wnd := int(f.advWnd)
-			if wnd <= 0 {
-				wnd = 65535
-			}
-			// Cap segment by MSS and MTU-40 as ultimate safety
-			maxMSS := int(f.clientMSS)
-			if b.mssClamp > 0 && maxMSS > b.mssClamp {
-				maxMSS = b.mssClamp
-			}
-			mtuCap := 1460
-			if b.parent != nil {
-				effMTU := b.parent.EffectiveMTU()
-				if effMTU <= 0 {
-					effMTU = b.parent.config.MTU
-				}
-				mtuCap = effMTU - 40
-				if mtuCap < 536 {
-					mtuCap = 536
-				}
-			}
-			baseSegMax := minInt(maxMSS, mtuCap)
-			if baseSegMax <= 0 {
-				baseSegMax = 1000
-			}
-			offset := 0
-			for offset < n {
-				allowed := wnd - inFlight
-				// Apply congestion window if enabled
-				if f.ccEnabled && f.cc != nil {
-					cw := f.cc.Cwnd()
-					if cw < 1 {
-						cw = f.mss * 2
-					}
-					allowed = minInt(allowed, cw-inFlight)
-				}
-				if allowed <= 0 {
-					// No window; wait for ACK/window update notification or short timeout
-					if f.ackCh != nil {
-						select {
-						case <-f.ackCh:
-						case <-time.After(10 * time.Millisecond):
-						}
-					} else {
-						time.Sleep(2 * time.Millisecond)
-					}
-					// re-evaluate
-					inFlight = int(f.serverNxt - f.sndUna)
-					wnd = int(f.advWnd)
-					if wnd <= 0 {
-						wnd = 65535
-					}
-					allowed = wnd - inFlight
-					if f.ccEnabled && f.cc != nil {
-						cw := f.cc.Cwnd()
-						if cw < 1 {
-							cw = f.mss * 2
-						}
-						allowed = minInt(allowed, cw-inFlight)
-					}
-					if allowed <= 0 {
-						// Always log flow control issues (not just in debug mode)
-						// but with throttling to avoid log spam
-						cause := "peer-wnd"
-						cw := b.cwndBytes(f)
-						if (wnd-inFlight) > 0 && (cw-inFlight) <= 0 {
-							cause = "cwnd"
-						}
-						b.logSendGated(f, cause, wnd, inFlight, cw)
-						continue
-					}
-				}
-				segMax := minInt(baseSegMax, allowed)
-				if segMax <= 0 {
-					segMax = minInt(baseSegMax, n-offset)
-				}
-				segSize := minInt(segMax, n-offset)
-				segPayload := payload[offset : offset+segSize]
-
-				// Always use PSH|ACK for HTTP responses to ensure immediate delivery
-				flags := byte(0x18) // PSH|ACK
-
-				// Create the segment with the appropriate flags and TOS/TTL per policy
-				tosOut, ttlOut := f.tos, f.ttl
-				if b.parent != nil {
-					tosOut, ttlOut = b.parent.effTosTTL(f.tos, f.ttl)
-				}
-				seg := buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort,
-					f.serverNxt+uint32(offset), f.clientNxt, flags, segPayload, tosOut, ttlOut)
-
-				if seg != nil {
-					// trimmed: per-flow send debug removed
-					logging.Debugf("TCP bridge sending segment %d-%d of %d bytes to client for flow %s",
-						offset, offset+segSize, n, f.key)
-
-					// Enqueue to per-flow scheduler if available; otherwise send inline.
-					// When buffer pooling is enabled but pooled packet wrappers are disabled,
-					// take a defensive copy to avoid subtle aliasing across async paths.
-					out := seg
-					if poolingEnabled() && !poolWrapEnabled() {
-						out = append([]byte(nil), seg...)
-					}
-					sent := false
-					if b.paceUS > 0 {
-						time.Sleep(time.Duration(b.paceUS) * time.Microsecond)
-					}
-					if !sent {
-						if b.sendToGuest(f, out) {
-							f.toCliBytes += uint64(segSize)
-							f.toCliPkts += 1
-						} else {
-							logging.Errorf("TCP bridge failed to send packet inline (no scheduler): flow=%s", f.key)
-						}
-					}
-					// Track segment for retransmission
-					f.txMu.Lock()
-					f.txQueue = append(f.txQueue, struct {
-						seq     uint32
-						data    []byte
-						sentAt  time.Time
-						retries int
-						rtx     bool
-					}{
-						seq:     f.serverNxt + uint32(offset),
-						data:    append([]byte(nil), segPayload...),
-						sentAt:  time.Now(),
-						retries: 0,
-						rtx:     false,
-					})
-					// No forced RTO reset; RTO follows RFC 6298 estimates
-					f.txMu.Unlock()
-					if f.ccEnabled && f.cc != nil {
-						f.cc.OnSent(len(segPayload))
-					}
-				} else {
-					logging.Errorf("TCP bridge failed to create segment or processor is nil")
-				}
-
-				// No artificial delay between segments; rely on TCP flow control.
-				// Track in-flight growth
-				inFlight += segSize
-				offset += segSize
-			}
-
-			// Update sequence number by bytes actually sent
-			// 'offset' reflects total bytes segmented and queued
-			f.serverNxt += uint32(offset)
-		}
-
-		// Handle any error after processing data
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				// No data yet, continue listening.
-				continue
-			}
-			// Treat closed/reset connections as terminal and tear down the flow to
-			// avoid a tight loop logging "use of closed network connection".
-			if errors.Is(err, net.ErrClosed) ||
-				strings.Contains(err.Error(), "use of closed network connection") ||
-				strings.Contains(err.Error(), "connection reset by peer") ||
-				strings.Contains(err.Error(), "broken pipe") {
-				b.removeFlow(f.key)
-				return
-			}
-			if errors.Is(err, io.EOF) {
-				// Graceful close from server: send FIN|ACK and allow client to ACK before teardown.
-				fin := buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x01|0x10, nil)
-				f.serverNxt += 1
-				f.finSent = true
-				if fin != nil && b.parent.processor != nil {
-					logging.Debugf("TCP bridge sending FIN to client for flow %s", f.key)
-					p := WrapPacket(fin)
-					_ = b.parent.processor.ProcessPacket(p)
-				}
-				// Small delay to give client time to ACK
-				time.Sleep(50 * time.Millisecond)
-				b.removeFlow(f.key)
-				return
-			}
-			logging.Debugf("TCP bridge reader transient error for flow %s: %v", f.key, err)
-			continue
-		}
-		if n == 0 {
-			continue
-		}
 	}
 }
 
@@ -1520,7 +1235,7 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		if f.conn == nil {
 			break
 		}
-		if n, err := f.conn.Write(p); err == nil {
+		if n, err := writeTCP(f.conn, p); err == nil {
 			atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
 			atomic.AddUint64(&b.metrics.PacketsSent, 1)
 			atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
@@ -1543,7 +1258,7 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		if f.conn == nil {
 			break
 		}
-		if n, err := f.conn.Write(s.data); err != nil {
+		if n, err := writeTCP(f.conn, s.data); err != nil {
 			f.mu.Unlock()
 			atomic.AddUint64(&b.parent.metrics.Errors, 1)
 			return
@@ -1563,22 +1278,40 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 }
 
 func (b *tcpBridge) removeFlow(key string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if f, ok := b.flows[key]; ok {
-		logging.Debugf("TCP flow closed %s; toServer bytes=%d pkts=%d, toClient bytes=%d pkts=%d",
-			f.key, f.toSrvBytes, f.toSrvPkts, f.toCliBytes, f.toCliPkts)
-		if f.conn != nil {
-			_ = f.conn.Close()
-		}
-		if f.rtoStop != nil {
-			close(f.rtoStop)
-		}
-		delete(b.flows, key)
-		// (FlowManager removed)
-		atomic.AddUint64(&b.metrics.ConnectionsClosed, 1)
-		atomic.AddUint64(&b.parent.metrics.ConnectionsClosed, 1)
+	b.mu.RLock()
+	f := b.flows[key]
+	b.mu.RUnlock()
+	if f == nil {
+		return
 	}
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	b.removeFlowLocked(f)
+}
+
+// removeFlowLocked requires stateMu; removal is conditional on identity so an
+// old reader cannot remove a replacement connection with the same tuple.
+func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
+	if f.closed {
+		return
+	}
+	b.mu.Lock()
+	if b.flows[f.key] == f {
+		delete(b.flows, f.key)
+	}
+	b.mu.Unlock()
+	f.closed = true
+	if f.conn != nil {
+		_ = f.conn.Close()
+	}
+	if f.rtoStop != nil {
+		close(f.rtoStop)
+	}
+	b.rtoMu.Lock()
+	delete(b.rtoActiveFlows, f.key)
+	b.rtoMu.Unlock()
+	atomic.AddUint64(&b.metrics.ConnectionsClosed, 1)
+	atomic.AddUint64(&b.parent.metrics.ConnectionsClosed, 1)
 }
 
 func (b *tcpBridge) reaper() {
@@ -1608,22 +1341,33 @@ func (b *tcpBridge) reaper() {
 }
 
 // scheduleAck schedules a delayed ACK for the given flow if one isn't already scheduled.
+// Caller holds stateMu. All timer work is owned by the bridge.
 func (b *tcpBridge) scheduleAck(f *tcpFlow) {
-	f.ackMu.Lock()
-	if f.ackScheduled {
-		f.ackMu.Unlock()
+	if f.ackScheduled || f.closed {
 		return
 	}
 	f.ackScheduled = true
-	f.ackMu.Unlock()
-	go func() {
-		time.Sleep(b.ackDelay)
-		f.ackMu.Lock()
+	if !b.launch(func() {
+		timer := time.NewTimer(b.ackDelay)
+		defer timer.Stop()
+		select {
+		case <-f.rtoStop:
+			return
+		case <-b.stopCh:
+			return
+		case <-timer.C:
+		}
+		f.stateMu.Lock()
+		defer f.stateMu.Unlock()
 		f.ackScheduled = false
-		f.ackMu.Unlock()
+		if f.closed {
+			return
+		}
 		ack := buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x10, nil)
 		_ = b.sendToGuest(f, ack)
-	}()
+	}) {
+		f.ackScheduled = false
+	}
 }
 
 func (f *tcpFlow) touch() {
@@ -1972,8 +1716,15 @@ func (b *tcpBridge) trackRTOFlow(flowKey string) {
 			b.rtoMetricsDumped = true
 			b.rtoMetricsDumpTime = time.Now()
 			needDump = true
-			// Schedule tracking reset to allow future dumps
-			time.AfterFunc(10*time.Second, func() {
+			// Own the reset timer so bridge shutdown joins all diagnostics.
+			b.launch(func() {
+				timer := time.NewTimer(10 * time.Second)
+				defer timer.Stop()
+				select {
+				case <-b.stopCh:
+					return
+				case <-timer.C:
+				}
 				b.rtoMu.Lock()
 				b.rtoMetricsDumped = false
 				b.rtoActiveFlows = make(map[string]bool)
@@ -1990,138 +1741,12 @@ func (b *tcpBridge) trackRTOFlow(flowKey string) {
 // dumpDetailedMetrics logs detailed system metrics when multiple flows are in RTO state
 // This function is designed to be robust against errors and always complete the metrics dump
 func (b *tcpBridge) dumpDetailedMetrics() {
-	// Use a separate goroutine with a timeout to ensure the metrics dump completes
-	done := make(chan struct{})
-
-	go func() {
-		// Always log the end marker, even if there's a panic
-		defer func() {
-			if r := recover(); r != nil {
-				logging.Warnf("Recovered from panic in dumpDetailedMetrics: %v", r)
-			}
-			logging.Warnf("=== END DETAILED METRICS ===")
-			close(done)
-		}()
-
-		// Get a snapshot of active flows
-		b.mu.RLock()
-		activeFlows := make(map[string]*tcpFlow)
-		for k, f := range b.flows {
-			activeFlows[k] = f
-		}
-		b.mu.RUnlock()
-
-		// Log the RTO event
-		b.rtoMu.Lock()
-		rtoFlowKeys := make([]string, 0, len(b.rtoActiveFlows))
-		for k := range b.rtoActiveFlows {
-			rtoFlowKeys = append(rtoFlowKeys, k)
-		}
-		b.rtoMu.Unlock()
-
-		logging.Warnf("MULTIPLE RTO EVENTS DETECTED: %d flows in RTO state: %v",
-			len(rtoFlowKeys), rtoFlowKeys)
-
-		// Log detailed metrics about each flow in RTO state
-		logging.Warnf("=== DETAILED FLOW METRICS FOR RTO EVENT ===")
-
-		// Count how many flows we'll log details for
-		detailedFlowCount := 0
-		b.rtoMu.Lock()
-		for flowKey := range activeFlows {
-			if b.rtoActiveFlows[flowKey] {
-				detailedFlowCount++
-			}
-		}
-		b.rtoMu.Unlock()
-
-		// If no flows to log details for, log a message
-		if detailedFlowCount == 0 {
-			logging.Warnf("No active flows in RTO state found in flow map")
-		}
-
-		// Log individual flow metrics
-		for flowKey, flow := range activeFlows {
-			b.rtoMu.Lock()
-			inRTO := b.rtoActiveFlows[flowKey]
-			b.rtoMu.Unlock()
-
-			if !inRTO {
-				continue
-			}
-
-			// Use a separate try-catch block for each flow to ensure one bad flow doesn't stop the others
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						logging.Warnf("Error logging metrics for flow %s: %v", flowKey, r)
-					}
-				}()
-
-				// Calculate in-flight data
-				inFlight := int(flow.serverNxt - flow.sndUna)
-
-				// Get congestion window
-				cwnd := 0
-				if flow.ccEnabled && flow.cc != nil {
-					cwnd = flow.cc.Cwnd()
-				}
-
-				// Calculate idle time
-				idleTime := time.Since(flow.lastAckTime)
-
-				// Log detailed flow metrics
-				logging.Warnf("RTO Flow %s: inFlight=%d bytes, cwnd=%d, advWnd=%d, idle=%v, rto=%v, retries=%d",
-					flowKey, inFlight, cwnd, flow.advWnd, idleTime.Round(time.Second), flow.rto,
-					b.getMaxRetries(flow))
-			}()
-		}
-
-		// Log global metrics in a separate try-catch block
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logging.Warnf("Error logging global metrics: %v", r)
-				}
-			}()
-
-			if b.parent != nil {
-				dm := b.parent.DetailedMetrics()
-				// Prefer reporting wg_queue_full from processor metrics when present
-				var wgFull uint64
-				if dm.Processor != nil {
-					if v, ok := dm.Processor["wg_queue_full"]; ok {
-						wgFull = v
-					}
-				}
-				logging.Warnf("Global Metrics: activeFlows=%d, rtoCount=%d, wg_queue_full=%d",
-					dm.TCP.ActiveFlows, b.rtoCount, wgFull)
-
-				// Log WireGuard metrics if available
-				if b.parent.processor != nil {
-					if m, ok := b.parent.processor.(interface{ Metrics() map[string]uint64 }); ok {
-						wgMetrics := m.Metrics()
-						if drops, ok := wgMetrics["queue_drops"]; ok {
-							logging.Warnf("WireGuard Metrics: queueDrops=%d", drops)
-						}
-					}
-				}
-
-				// Log current TCP bridge settings
-				logging.Warnf("TCP Bridge Settings: mssClamp=%d, paceUS=%d, ackIdleGate=%v, ackIdleFail=%v",
-					b.mssClamp, b.paceUS, b.ackIdleGate, b.ackIdleFail)
-			}
-		}()
-	}()
-
-	// Wait for the metrics dump to complete or timeout after 5 seconds
-	select {
-	case <-done:
-		// Metrics dump completed normally
-	case <-time.After(5 * time.Second):
-		// Timeout - force log the end marker
-		logging.Warnf("Metrics dump timed out after 5 seconds")
-		logging.Warnf("=== END DETAILED METRICS ===")
+	// Snapshot registry membership first; never lock flow state under b.mu.
+	for _, f := range b.flowSnapshot() {
+		f.stateMu.Lock()
+		logging.Warnf("TCP flow=%s inflight=%d window=%d rto=%v closed=%v",
+			f.key, f.serverNxt-f.sndUna, f.advWnd, f.rto, f.closed)
+		f.stateMu.Unlock()
 	}
 }
 

@@ -43,17 +43,17 @@ type SocketInterface struct {
 	tcp  *tcpBridge
 	icmp *icmpBridge
 
-    // (FlowManager and egress limiter removed)
+	// (FlowManager and egress limiter removed)
 
 	// Effective MTU override for synthesized packets (TCP seg/UDP frags).
 	// If <=0, falls back to config.MTU. Allows runtime fallback under trouble.
 	mtuOverride int32
 
-    // (historical fields removed)
+	// (historical fields removed)
 
-    // IP header synthesis options
-    tosCopy     bool // if true, preserve DSCP/ECN from origin; else set to 0
-    ttlOverride int  // if >0, use this TTL; else use default 64
+	// IP header synthesis options
+	tosCopy     bool // if true, preserve DSCP/ECN from origin; else set to 0
+	ttlOverride int  // if >0, use this TTL; else use default 64
 }
 
 // Ensure SocketInterface implements SocketWriter
@@ -124,8 +124,8 @@ func (s *SocketInterface) Start() error {
 		go s.listenLoop()
 	}
 
-    // SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
-    logging.Infof("Simple mode active: bypassing FlowManager and egress limiter; inline delivery to processor")
+	// SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
+	logging.Infof("Simple mode active: bypassing FlowManager and egress limiter; inline delivery to processor")
 
 	// Initialize UDP/TCP slirp bridges
 	// Header synthesis policy from env
@@ -143,7 +143,7 @@ func (s *SocketInterface) Start() error {
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
 
-    // No egress limiter configuration
+	// No egress limiter configuration
 
 	logging.Debugf("Socket interface started with IP: %s", s.config.IPAddress)
 	return nil
@@ -175,7 +175,7 @@ func (s *SocketInterface) Stop() error {
 		s.tcp = nil
 	}
 
-    // No FlowManager
+	// No FlowManager
 
 	s.running = false
 
@@ -303,29 +303,29 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 
 // Metrics returns the metrics for the socket interface
 func (s *SocketInterface) Metrics() core.SocketMetrics {
-	return s.metrics
+	return loadSocketMetrics(&s.metrics)
 }
 
 // SetTCPMSSClamp updates the TCP bridge MSS clamp at runtime.
 func (s *SocketInterface) SetTCPMSSClamp(n int) {
-    s.mu.Lock()
-    tb := s.tcp
-    s.mu.Unlock()
-    if tb == nil {
-        return
-    }
-    tb.SetMSSClamp(n)
+	s.mu.Lock()
+	tb := s.tcp
+	s.mu.Unlock()
+	if tb == nil {
+		return
+	}
+	tb.SetMSSClamp(n)
 }
 
 // SetTCPPaceUS updates the TCP bridge per-segment pacing interval at runtime.
 func (s *SocketInterface) SetTCPPaceUS(us int) {
-    s.mu.Lock()
-    tb := s.tcp
-    s.mu.Unlock()
-    if tb == nil {
-        return
-    }
-    tb.SetPaceUS(us)
+	s.mu.Lock()
+	tb := s.tcp
+	s.mu.Unlock()
+	if tb == nil {
+		return
+	}
+	tb.SetPaceUS(us)
 }
 
 // effTosTTL computes the TOS/TTL to use for host->guest synthesized packets
@@ -377,12 +377,13 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 		dm.UDPExt = map[string]uint64{"tx_enq": enq, "tx_proc": proc}
 	}
 	if s.tcp != nil {
-		s.tcp.mu.Lock()
-		active := uint64(len(s.tcp.flows))
-		// Compute ACK-idle flows under the same lock to get a consistent snapshot
+		flows := s.tcp.flowSnapshot()
+		active := uint64(len(flows))
+		// Snapshot membership before taking individual flow locks.
 		ackIdle := uint64(0)
 		if s.tcp.ackIdleGate > 0 {
-			for _, f := range s.tcp.flows {
+			for _, f := range flows {
+				f.stateMu.Lock()
 				inFlight := int(f.serverNxt - f.sndUna)
 				minInflight := s.tcp.ackIdleMinInflight
 				if minInflight <= 0 {
@@ -393,9 +394,9 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 						ackIdle++
 					}
 				}
+				f.stateMu.Unlock()
 			}
 		}
-		s.tcp.mu.Unlock()
 		dm.TCP.Counters = loadSocketMetrics(&s.tcp.metrics)
 		dm.TCP.ActiveFlows = active
 		// TCP extra debug counters
@@ -411,17 +412,17 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 			"ack_window_update": atomic.LoadUint64(&s.tcp.ackWndOnly),
 			"ack_idle_flows":    ackIdle,
 			// Async dial and pending-buffer instrumentation
-			"dial_start":        atomic.LoadUint64(&s.tcp.dialStart),
-			"dial_ok":           atomic.LoadUint64(&s.tcp.dialOk),
-			"dial_fail":         atomic.LoadUint64(&s.tcp.dialFail),
-			"dial_inflight":     uint64(atomic.LoadInt64(&s.tcp.dialInflight)),
-			"pend_enq":          atomic.LoadUint64(&s.tcp.pendEnq),
-			"pend_flush":        atomic.LoadUint64(&s.tcp.pendFlush),
-			"pend_drop":         atomic.LoadUint64(&s.tcp.pendDrop),
+			"dial_start":    atomic.LoadUint64(&s.tcp.dialStart),
+			"dial_ok":       atomic.LoadUint64(&s.tcp.dialOk),
+			"dial_fail":     atomic.LoadUint64(&s.tcp.dialFail),
+			"dial_inflight": uint64(atomic.LoadInt64(&s.tcp.dialInflight)),
+			"pend_enq":      atomic.LoadUint64(&s.tcp.pendEnq),
+			"pend_flush":    atomic.LoadUint64(&s.tcp.pendFlush),
+			"pend_drop":     atomic.LoadUint64(&s.tcp.pendDrop),
 		}
 	}
-    // FlowManager and egress limiter removed
-    // Fallback removed
+	// FlowManager and egress limiter removed
+	// Fallback removed
 	// Include processor metrics if available
 	if s.processor != nil {
 		if m, ok := s.processor.(interface{ Metrics() map[string]uint64 }); ok {

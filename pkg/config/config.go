@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -267,18 +268,29 @@ func (c *Config) SaveToFile(path string) error {
 		return fmt.Errorf("unsupported config file format: %s", path)
 	}
 
-	// Create directory if it doesn't exist
-	dir := "."
-	if lastSlash := strings.LastIndex(path, "/"); lastSlash != -1 {
-		dir = path[:lastSlash]
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
-		}
+	// Write a private temporary file beside the destination, then replace it.
+	// Existing files are replaced rather than retaining permissive old modes.
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create configuration directory: %w", err)
 	}
-
-	// Write to file
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+	f, err := os.CreateTemp(dir, ".wgslirp-config-*")
+	if err != nil {
+		return fmt.Errorf("create configuration file: %w", err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("write configuration: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync configuration: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close configuration: %w", err)
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return fmt.Errorf("replace configuration: %w", err)
 	}
 
 	return nil

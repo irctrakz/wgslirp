@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/irctrakz/wgslirp/pkg/logging"
@@ -16,12 +17,23 @@ import (
 	wgdev "golang.zx2c4.com/wireguard/device"
 )
 
-type wgHandle struct{ dev *wgdev.Device }
+type wgHandle struct {
+	dev       *wgdev.Device
+	done      chan struct{}
+	closeOnce sync.Once
+	monitor   sync.WaitGroup
+}
 
 func (h *wgHandle) Close() error {
-	if h.dev != nil {
-		h.dev.Close()
-	}
+	h.closeOnce.Do(func() {
+		if h.done != nil {
+			close(h.done)
+		}
+		h.monitor.Wait()
+		if h.dev != nil {
+			h.dev.Close()
+		}
+	})
 	return nil
 }
 
@@ -53,6 +65,7 @@ func monitorWireGuardHandshakes(h *wgHandle) {
 	if h == nil || h.dev == nil {
 		return
 	}
+	defer h.monitor.Done()
 
 	// Log handshake status every 30 seconds
 	ticker := time.NewTicker(30 * time.Second)
@@ -62,6 +75,8 @@ func monitorWireGuardHandshakes(h *wgHandle) {
 
 	for {
 		select {
+		case <-h.done:
+			return
 		case <-ticker.C:
 			// Get current device state
 			state, err := h.IpcGet()
@@ -163,6 +178,9 @@ func logPeerStatus(publicKey string, handshakeTime int64, endpoint string, rx, t
 // StartDevice starts wireguard-go device bound to cfg.ListenPort using the
 // provided WGTun for plaintext exchange. It applies configuration via IpcSet.
 func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	if tun == nil {
 		return nil, fmt.Errorf("nil tun")
 	}
@@ -229,11 +247,9 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 	keyHex := hex.EncodeToString(rawPriv)
 	confHex := fmt.Sprintf("private_key=%s\nlisten_port=%d\nreplace_peers=true\n%s", keyHex, cfg.ListenPort, peersHex.String())
 
-	// Debug: dump the exact UAPI config we are about to apply (mask private key)
-	// Only visible when DEBUG level is enabled in cmd/wgrouter.
+	// Never log UAPI configuration: it contains private key material.
 	if debugOn {
-		hexMasked := strings.Repeat("*", len(keyHex)-6) + keyHex[len(keyHex)-6:]
-		logging.Debugf("WG UAPI IpcSet (hex) applying:\n%s", strings.ReplaceAll(confHex, keyHex, hexMasked))
+		logging.Debugf("Applying WireGuard configuration: listen_port=%d peers=%d", cfg.ListenPort, len(cfg.Peers))
 	}
 	if err := dev.IpcSet(confHex); err != nil {
 		dev.Close()
@@ -288,16 +304,12 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 	}
 	log.Printf("wireguard device up on UDP :%d", cfg.ListenPort)
 
-	// Debug: dump device state after Up to confirm effective peers/AllowedIPs
-	if state, err := dev.IpcGet(); err == nil {
-		logging.Debugf("WG UAPI device state after Up:\n%s", state)
-	} else {
-		logging.Debugf("WG UAPI device state dump failed: %v", err)
-	}
+	logging.Debugf("WireGuard device started: listen_port=%d peers=%d", cfg.ListenPort, len(cfg.Peers))
 
 	// Start handshake monitoring if WG_DEBUG is enabled
-	handle := &wgHandle{dev: dev}
+	handle := &wgHandle{dev: dev, done: make(chan struct{})}
 	if wgDebugOn {
+		handle.monitor.Add(1)
 		go monitorWireGuardHandshakes(handle)
 	}
 
