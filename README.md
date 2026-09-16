@@ -238,18 +238,25 @@ Logging and diagnostics
 - `DEBUG`: enable verbose logging and disable packet copy-elision in wrappers.
 - `WG_DEBUG`: verbose wireguard-go logging (chatty).
 - `WG_PCAP`: file path to write plaintext IPv4 frames (DLT_RAW) captured by the userspace TUN.
+- `WG_PCAP_MAX_BYTES`: capture file size limit, including headers; defaults to 67108864 (64 MiB). Must be an integer of at least 24. Capture stops before a complete record would exceed the limit and stays stopped until process restart. Invalid values disable capture without touching the file. Forwarding continues when capture stops. Capture files use private permissions (0600).
 
 Metrics and health
 
 - `METRICS_LOG`: any non-empty value enables periodic metrics logging.
 - `METRICS_INTERVAL`: duration like `15s` (default `30s`).
 - `METRICS_FORMAT`: `text` (default) or `json`.
-- `HEALTHCHECK`: any non-empty value enables auxiliary health probes.
-- `HEALTH_HTTP_URL`: optional HTTP URL to fetch periodically.
-- `HEALTH_DNS_NAME`: optional DNS name to resolve (A-record).
-- `HEALTH_DNS_IP`: optional dotted-quad to check reachability.
+- `HEALTHCHECK`: any non-empty value enables one-time startup probes. These log results; they are not continuous readiness monitoring. Probes have five-second operation timeouts and are canceled and joined during shutdown.
+- `HEALTH_HTTP_URL`: URL for the host-stack HTTP probe (default `https://httpbin.org/ip`). The final response must have a 2xx status.
+- `HEALTH_DNS_NAME`: name for the host resolver probe (default `example.com`).
+- `HEALTH_DNS_IP`: IPv4 DNS server for the slirp probe (default `1.1.1.1`). Success requires a complete response from the expected server to the probe's address/port, matching transaction ID and question, successful DNS status, and an A answer for `example.com` (including CNAME chains).
+
+Socket lifecycle
+
+Socket interfaces are single-use: configure the packet processor before `Start`, then call `Stop` to close connections and join accepted work. Repeated or concurrent `Stop` calls are safe; restart and writes after shutdown return errors. Processor replacement after startup is ignored with a warning. Create a new interface to change the processor or restart. Delivery callbacks must return promptly; shutdown waits for in-flight callbacks to complete.
 
 Packet processing and TUN (userspace)
+
+Guest IPv4 datagrams are validated before forwarding: header and total lengths must be consistent, TCP header offsets must fit, and UDP length must match the IP payload. Bytes beyond the declared IP length are ignored as padding. Incoming fragments are rejected because guest-fragment reassembly is not implemented; configure guest MTU accordingly. This does not disable fragmentation of synthesized host-to-guest UDP replies. Malformed packets return `socket.ErrMalformedPacket`; unsupported incoming fragments return `socket.ErrUnsupportedFragment`, available through `errors.Is`.
 
 - `PROCESSOR_WORKERS`: number of workers in the socket processor (default 4).
 - `PROCESSOR_QUEUE_CAP`: processor channel capacity (default 1000).

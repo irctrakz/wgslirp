@@ -461,12 +461,9 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 	}
 	defer b.workers.Done()
 
-	if len(pkt) < 40 { // IPv4(20)+TCP(20)
-		return fmt.Errorf("tcp: packet too short")
-	}
-	ihl := int(pkt[0]&0x0f) * 4
-	if ihl < 20 || len(pkt) < ihl+20 {
-		return fmt.Errorf("tcp: invalid IHL/length")
+	pkt, ihl, err := parseTransport(pkt, 6)
+	if err != nil {
+		return err
 	}
 
 	var srcIP, dstIP [4]byte

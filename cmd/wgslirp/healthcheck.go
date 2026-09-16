@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
 	"encoding/binary"
+	"fmt"
+	"golang.org/x/net/dns/dnsmessage"
 	"net"
 	"net/http"
 	"os"
@@ -55,16 +59,14 @@ func (h *healthSink) ProcessPacket(p core.Packet) error {
 }
 
 // runDirectEgressHealth performs DNS and HTTP using the host stack (not slirp) to detect container egress problems.
-func runDirectEgressHealth() {
+func runDirectEgressHealth(ctx context.Context) {
 	target := os.Getenv("HEALTH_HTTP_URL")
 	if target == "" {
 		target = "https://httpbin.org/ip"
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	if resp, err := client.Get(target); err != nil {
+	if err := checkHTTPHealth(ctx, target); err != nil {
 		logging.Warnf("Health: direct HTTP GET failed: %v", err)
 	} else {
-		_ = resp.Body.Close()
 		logging.Infof("Health: direct HTTP GET ok: %s", target)
 	}
 	// DNS resolve
@@ -72,7 +74,9 @@ func runDirectEgressHealth() {
 	if host == "" {
 		host = "example.com"
 	}
-	if _, err := net.LookupHost(host); err != nil {
+	dnsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := net.DefaultResolver.LookupHost(dnsCtx, host); err != nil {
 		logging.Warnf("Health: direct DNS lookup failed: %v", err)
 	} else {
 		logging.Infof("Health: direct DNS lookup ok: %s", host)
@@ -80,7 +84,7 @@ func runDirectEgressHealth() {
 }
 
 // runSlirpDNSHealth crafts a DNS query as a raw IPv4+UDP packet through slirp and waits for any reply.
-func runSlirpDNSHealth(si *socket.SocketInterface, sink *healthSink) {
+func runSlirpDNSHealth(ctx context.Context, si *socket.SocketInterface, sink *healthSink) {
 	dnsIP := os.Getenv("HEALTH_DNS_IP")
 	if dnsIP == "" {
 		dnsIP = "1.1.1.1"
@@ -91,7 +95,12 @@ func runSlirpDNSHealth(si *socket.SocketInterface, sink *healthSink) {
 		return
 	}
 	// Build a simple A query for example.com
-	txid := uint16(0xBEEF)
+	var id [2]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		logging.Warnf("Health: DNS ID generation failed: %v", err)
+		return
+	}
+	txid := binary.BigEndian.Uint16(id[:])
 	payload := buildDNSQuery(txid, "example.com")
 	srcIP := [4]byte{10, 0, 0, 2}
 	dstIP := [4]byte{dst[0], dst[1], dst[2], dst[3]}
@@ -100,27 +109,89 @@ func runSlirpDNSHealth(si *socket.SocketInterface, sink *healthSink) {
 		logging.Warnf("Health: slirp DNS send failed: %v", err)
 		return
 	}
-	// Await any UDP reply from dnsIP:53
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
 		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			logging.Warnf("Health: slirp DNS no valid reply from %s within timeout", dnsIP)
+			return
 		case p := <-sink.ch:
-			if len(p) >= 28 && p[0]>>4 == 4 && p[9] == 17 {
-				ihl := int(p[0]&0x0f) * 4
-				if ihl >= 20 && len(p) >= ihl+8 {
-					sp := binary.BigEndian.Uint16(p[ihl:])
-					dp := binary.BigEndian.Uint16(p[ihl+2:])
-					sip := net.IPv4(p[12], p[13], p[14], p[15]).String()
-					if sp == 53 && dp == 40053 && sip == dnsIP {
-						logging.Infof("Health: slirp DNS reply ok from %s", dnsIP)
-						return
-					}
-				}
+			if validDNSHealthReply(p, dstIP, srcIP, txid) {
+				logging.Infof("Health: slirp DNS reply ok from %s", dnsIP)
+				return
 			}
-		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	logging.Warnf("Health: slirp DNS no reply from %s within timeout", dnsIP)
+}
+
+func checkHTTPHealth(ctx context.Context, target string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP returned %s", resp.Status)
+	}
+	return nil
+}
+
+// A probe succeeds only for a complete, matching response with an A answer.
+// Unrelated traffic, error responses, truncation and malformed packets cannot
+// make an unhealthy DNS path appear healthy.
+func validDNSHealthReply(p []byte, server, client [4]byte, id uint16) bool {
+	if len(p) < 28 || p[0]>>4 != 4 || p[9] != 17 {
+		return false
+	}
+	ihl := int(p[0]&15) * 4
+	total := int(binary.BigEndian.Uint16(p[2:4]))
+	if ihl < 20 || total < ihl+8 || total > len(p) || binary.BigEndian.Uint16(p[6:8])&0x3fff != 0 {
+		return false
+	}
+	if string(p[12:16]) != string(server[:]) || string(p[16:20]) != string(client[:]) {
+		return false
+	}
+	u := p[ihl:total]
+	if binary.BigEndian.Uint16(u[:2]) != 53 || binary.BigEndian.Uint16(u[2:4]) != 40053 || int(binary.BigEndian.Uint16(u[4:6])) != len(u) {
+		return false
+	}
+	var msg dnsmessage.Message
+	if msg.Unpack(u[8:]) != nil || msg.ID != id || !msg.Response || msg.OpCode != 0 || msg.Truncated || msg.RCode != dnsmessage.RCodeSuccess || len(msg.Questions) != 1 {
+		return false
+	}
+	q := msg.Questions[0]
+	if !strings.EqualFold(q.Name.String(), "example.com.") || q.Type != dnsmessage.TypeA || q.Class != dnsmessage.ClassINET {
+		return false
+	}
+	name := q.Name.String()
+	// Follow only a bounded chain of aliases belonging to this question.
+	for i := 0; i <= len(msg.Answers); i++ {
+		next := ""
+		for _, a := range msg.Answers {
+			if a.Header.Class != dnsmessage.ClassINET || !strings.EqualFold(a.Header.Name.String(), name) {
+				continue
+			}
+			switch body := a.Body.(type) {
+			case *dnsmessage.AResource:
+				return body.A != [4]byte{}
+			case *dnsmessage.CNAMEResource:
+				next = body.CNAME.String()
+			}
+		}
+		if next == "" {
+			return false
+		}
+		name = next
+	}
+	return false
 }
 
 // Helpers (copied minimal from tests)

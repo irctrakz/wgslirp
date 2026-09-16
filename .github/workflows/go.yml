@@ -37,3 +37,6 @@ jobs:
 
       - name: Run integration tests
         run: go test -race -tags=integration -timeout 120s -count=1 ./...
+
+      - name: Fuzz packet boundaries
+        run: go test -run '^$' -fuzz '^FuzzTransportBoundaries$' -fuzztime 10s -parallel 2 ./pkg/socket

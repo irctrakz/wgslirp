@@ -39,7 +39,7 @@ Implemented locally (not yet committed, published, or independently reviewed):
 
 First-batch Linux verification: build, vet, ordinary tests, and tagged integration tests passed; production TCP races remained. These reproduced races are addressed in the next checkpoint. No claim is made that Phase 0/1 or all principles are complete.
 
-Remaining Phase 1 work includes socket/UDP lifecycle synchronization, health response validation, and capture size policy. Repository branch protection, independent approvals, workflow execution, container release checks, and dependency-tidy verification are not yet verified remotely in GitHub.
+The subsequent lifecycle/health/capture checkpoint addresses the remaining socket/UDP synchronization, health response validation, and capture size policy. Repository branch protection, independent approvals, workflow execution, container release checks, and dependency-tidy verification are not yet verified remotely in GitHub.
 
 ### Implementation checkpoint — TCP ownership and shutdown
 
@@ -52,6 +52,29 @@ Implemented locally (not yet committed, published, or independently reviewed). L
 - CI runs tagged integration tests with race detection. The expanded check exposed a mock TUN metrics race; its snapshot now uses atomic reads.
 
 Scope limits: this is not a complete TCP protocol redesign. The existing short FIN grace period remains; full FIN recovery, socket/UDP lifecycle synchronization, effective resource controls, and dependency separation remain work items. Packet delivery callbacks must return promptly and must not synchronously re-enter the same TCP flow while its state lock is held. Process controls and independent review still require external verification.
+
+### Implementation checkpoint — socket/UDP lifecycle, health, and capture
+
+The preceding verified batches are committed locally as `e7805ba`; nothing has been pushed. This checkpoint is new, uncommitted work. Linux Go 1.23.12 verification passed: build, vet, unit tests, race tests, and tagged integration tests both with and without race detection.
+
+- Socket shutdown stops admissions, closes descriptors before waiting, joins packet handlers and bridge workers, and lets concurrent Stop callers await the same completion. Bridge references remain stable for metrics. Restart is explicitly rejected; processor configuration is restricted to before startup.
+- UDP shutdown joins readers and the reaper, rejects late flow insertion, and shares identity-checked removal/accounting across read failure, expiry and shutdown.
+- Startup health probes are canceled and joined. HTTP requires 2xx status; DNS validates packet boundaries, tuple, ID, response flags, question and answer. Documentation describes startup-only behavior.
+- PCAP defaults to a 64 MiB file cap, accepts an explicit finite byte limit, and stops before exceeding it. Invalid limits preserve existing files; records respect the declared snap length. Capture failure or exhaustion leaves forwarding active.
+- New tests cover concurrent traffic/metrics/Stop, rejected restart, UDP replacement isolation, malformed/error DNS responses, HTTP status and cancellation, and concurrent capture limits.
+
+Remaining work includes enforcing configured resource budgets, auditing other mock lifecycles, protocol recovery and metrics semantics, and verifying external review/release controls. No principle is marked Strong solely because these changes exist.
+
+### Implementation checkpoint — packet boundaries
+
+New uncommitted work. Linux Go 1.23.12 verification passed: build, vet, unit tests, race tests, and tagged integration tests with and without race detection. The 10-second parser fuzz campaign passed 263,566 executions without a failure.
+
+- Shared IPv4 validation bounds parsing by declared datagram length, ignores trailing padding, and rejects malformed lengths, reserved flags, and unsupported incoming fragments before forwarding.
+- TCP, UDP and ICMP bridge entry points validate protocol and transport bounds. UDP lengths must match the declared IP payload; TCP data offsets must fit the datagram.
+- Exported malformed-packet and unsupported-fragment errors remain discoverable through socket error wrapping using `errors.Is`.
+- Regression coverage checks malformed packets at public and direct bridge boundaries and confirms UDP padding is not forwarded. A bounded parser fuzz campaign is included in CI.
+
+This completes another Phase 1 boundary-hardening slice; checksum validation, full IP-option semantics and incoming fragment reassembly are not implemented by this change. The next major priority remains Phase 2: make configuration effective and enforce atomic, bounded resource admission.
 
 ### Rules for subsequent batches
 

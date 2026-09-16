@@ -85,8 +85,11 @@ func run() error {
 	}
 	defer si.Stop()
 	if hc != nil {
-		go runSlirpDNSHealth(si, hc)
-		go runDirectEgressHealth()
+		var healthWorkers sync.WaitGroup
+		healthWorkers.Add(2)
+		defer func() { cancel(); healthWorkers.Wait() }()
+		go func() { defer healthWorkers.Done(); runSlirpDNSHealth(ctx, si, hc) }()
+		go func() { defer healthWorkers.Done(); runDirectEgressHealth(ctx) }()
 	}
 
 	// Start the WireGuard device (wg is the default implementation)

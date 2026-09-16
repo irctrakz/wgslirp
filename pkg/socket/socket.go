@@ -33,10 +33,12 @@ type SocketInterface struct {
 	conn net.PacketConn
 
 	// Control
-	mu      sync.Mutex
-	running bool
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	running  bool
+	stopped  bool
+	stopDone chan struct{}
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
 
 	// Slirp bridges
 	udp  *udpBridge
@@ -73,6 +75,9 @@ func (s *SocketInterface) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.stopped {
+		return fmt.Errorf("socket interface stopped; create a new instance")
+	}
 	if s.running {
 		return fmt.Errorf("socket interface already running")
 	}
@@ -114,6 +119,8 @@ func (s *SocketInterface) Start() error {
 		// Set a reasonable read deadline to prevent blocking indefinitely
 		err = s.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		if err != nil {
+			s.conn.Close()
+			s.conn = nil
 			return fmt.Errorf("failed to set read deadline: %v", err)
 		}
 	}
@@ -142,6 +149,7 @@ func (s *SocketInterface) Start() error {
 	}
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
+	s.icmp = newICMPBridge(s)
 
 	// No egress limiter configuration
 
@@ -152,39 +160,45 @@ func (s *SocketInterface) Start() error {
 // Stop stops the socket interface
 func (s *SocketInterface) Stop() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.running {
+	if s.stopped {
+		done := s.stopDone
+		s.mu.Unlock()
+		<-done
 		return nil
 	}
-
-	close(s.stopCh)
-	s.wg.Wait()
-
-	if s.conn != nil {
-		s.conn.Close()
-		s.conn = nil
-	}
-
-	if s.udp != nil {
-		s.udp.stop()
-		s.udp = nil
-	}
-	if s.tcp != nil {
-		s.tcp.stop()
-		s.tcp = nil
-	}
-
-	// No FlowManager
-
+	s.stopped = true
 	s.running = false
-
-	logging.Debugf("Socket interface stopped")
+	s.stopDone = make(chan struct{})
+	if s.stopCh != nil {
+		close(s.stopCh)
+	}
+	conn, udp, tcp := s.conn, s.udp, s.tcp
+	s.mu.Unlock()
+	// Close descriptors before joining blocked readers. Bridge pointers remain
+	// stable after startup so concurrent snapshots never observe torn teardown.
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if udp != nil {
+		udp.stop()
+	}
+	if tcp != nil {
+		tcp.stop()
+	}
+	s.wg.Wait()
+	close(s.stopDone)
 	return nil
 }
 
-// SetPacketProcessor sets the packet processor for handling packets from the socket
+// SetPacketProcessor configures delivery before Start. Runtime replacement is
+// rejected because callbacks may own packet buffers and in-flight work.
 func (s *SocketInterface) SetPacketProcessor(processor core.PacketProcessor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running || s.stopped {
+		logging.Warnf("Socket packet processor can only be configured before startup")
+		return
+	}
 	s.processor = processor
 }
 
@@ -192,28 +206,25 @@ func (s *SocketInterface) SetPacketProcessor(processor core.PacketProcessor) {
 func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	s.mu.Lock()
 	running := s.running
+	if running {
+		s.wg.Add(1)
+	}
 	s.mu.Unlock()
 
 	if !running {
 		return fmt.Errorf("socket interface not running")
 	}
 
-	// Get the packet data
-	data := packet.Data()
-
-	// Basic validation
-	if len(data) < 20 {
-		atomic.AddUint64(&s.metrics.Errors, 1)
-		return fmt.Errorf("packet too short")
+	defer s.wg.Done()
+	if packet == nil {
+		return fmt.Errorf("nil packet")
 	}
 
-	// Check IP version
-	ver := data[0] >> 4
-	if ver != 4 {
+	data, _, err := parseIPv4(packet.Data())
+	if err != nil {
 		atomic.AddUint64(&s.metrics.Errors, 1)
-		return fmt.Errorf("unsupported IP version: %d", ver)
+		return err
 	}
-
 	// Check packet size against MTU
 	if len(data) > s.config.MTU {
 		logging.Warnf("Packet size %d exceeds MTU %d, packet will be fragmented", len(data), s.config.MTU)
@@ -250,12 +261,10 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	switch protocol {
 	case 1: // ICMP protocol
 		// Route ICMP through a thin bridge so implementation is modular.
-		if s.icmp == nil {
-			s.icmp = newICMPBridge(s)
-		}
+
 		if err := s.icmp.HandleOutbound(data); err != nil {
 			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("ICMP slirp error: %v", err)
+			return fmt.Errorf("ICMP slirp error: %w", err)
 		}
 	case 6: // TCP protocol
 		if s.tcp == nil {
@@ -264,7 +273,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		}
 		if err := s.tcp.HandleOutbound(data); err != nil {
 			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("TCP slirp error: %v", err)
+			return fmt.Errorf("TCP slirp error: %w", err)
 		}
 		break
 	case 17: // UDP protocol
@@ -275,7 +284,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		}
 		if err := s.udp.HandleOutbound(data); err != nil {
 			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("UDP slirp error: %v", err)
+			return fmt.Errorf("UDP slirp error: %w", err)
 		}
 		// Metrics count the original packet bytes
 		break
@@ -363,69 +372,72 @@ func (s *SocketInterface) SetEgressMTU(mtu int) {
 
 // DetailedMetrics returns total and per-bridge metrics, including active flows.
 func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
+	s.mu.Lock()
+	udp, tcp, processor := s.udp, s.tcp, s.processor
+	s.mu.Unlock()
 	dm := SocketDetailedMetrics{
 		Total: loadSocketMetrics(&s.metrics),
 	}
-	if s.udp != nil {
-		s.udp.flowsMu.Lock()
-		active := uint64(len(s.udp.flows))
-		s.udp.flowsMu.Unlock()
-		dm.UDP.Counters = loadSocketMetrics(&s.udp.metrics)
+	if udp != nil {
+		udp.flowsMu.Lock()
+		active := uint64(len(udp.flows))
+		udp.flowsMu.Unlock()
+		dm.UDP.Counters = loadSocketMetrics(&udp.metrics)
 		dm.UDP.ActiveFlows = active
 		// Add UDP debug counters
 		enq, proc := getUDPTxDebug()
 		dm.UDPExt = map[string]uint64{"tx_enq": enq, "tx_proc": proc}
 	}
-	if s.tcp != nil {
-		flows := s.tcp.flowSnapshot()
+	if tcp != nil {
+		flows := tcp.flowSnapshot()
 		active := uint64(len(flows))
 		// Snapshot membership before taking individual flow locks.
 		ackIdle := uint64(0)
-		if s.tcp.ackIdleGate > 0 {
+		if tcp.ackIdleGate > 0 {
 			for _, f := range flows {
 				f.stateMu.Lock()
 				inFlight := int(f.serverNxt - f.sndUna)
-				minInflight := s.tcp.ackIdleMinInflight
+				minInflight := tcp.ackIdleMinInflight
 				if minInflight <= 0 {
 					minInflight = f.mss
 				}
 				if inFlight >= minInflight {
-					if time.Since(f.lastAckTime) >= s.tcp.ackIdleGate {
+					if time.Since(f.lastAckTime) >= tcp.ackIdleGate {
 						ackIdle++
 					}
 				}
 				f.stateMu.Unlock()
 			}
 		}
-		dm.TCP.Counters = loadSocketMetrics(&s.tcp.metrics)
+		dm.TCP.Counters = loadSocketMetrics(&tcp.metrics)
 		dm.TCP.ActiveFlows = active
 		// TCP extra debug counters
-		s.tcp.rtoMu.Lock()
-		activeRTOFlows := uint64(len(s.tcp.rtoActiveFlows))
-		s.tcp.rtoMu.Unlock()
+		tcp.rtoMu.Lock()
+		activeRTOFlows := uint64(len(tcp.rtoActiveFlows))
+		tcp.rtoMu.Unlock()
 		// Compose TCPExt with RTO and ACK classification counters
 		dm.TCPExt = map[string]uint64{
-			"rto":               atomic.LoadUint64(&s.tcp.rtoCount),
+			"rto":               atomic.LoadUint64(&tcp.rtoCount),
 			"active_rto_flows":  activeRTOFlows,
-			"ack_advanced":      atomic.LoadUint64(&s.tcp.ackAdv),
-			"ack_duplicate":     atomic.LoadUint64(&s.tcp.ackDup),
-			"ack_window_update": atomic.LoadUint64(&s.tcp.ackWndOnly),
+			"ack_advanced":      atomic.LoadUint64(&tcp.ackAdv),
+			"ack_duplicate":     atomic.LoadUint64(&tcp.ackDup),
+			"ack_window_update": atomic.LoadUint64(&tcp.ackWndOnly),
 			"ack_idle_flows":    ackIdle,
 			// Async dial and pending-buffer instrumentation
-			"dial_start":    atomic.LoadUint64(&s.tcp.dialStart),
-			"dial_ok":       atomic.LoadUint64(&s.tcp.dialOk),
-			"dial_fail":     atomic.LoadUint64(&s.tcp.dialFail),
-			"dial_inflight": uint64(atomic.LoadInt64(&s.tcp.dialInflight)),
-			"pend_enq":      atomic.LoadUint64(&s.tcp.pendEnq),
-			"pend_flush":    atomic.LoadUint64(&s.tcp.pendFlush),
-			"pend_drop":     atomic.LoadUint64(&s.tcp.pendDrop),
+			"dial_start":    atomic.LoadUint64(&tcp.dialStart),
+			"dial_ok":       atomic.LoadUint64(&tcp.dialOk),
+			"dial_fail":     atomic.LoadUint64(&tcp.dialFail),
+			"dial_inflight": uint64(atomic.LoadInt64(&tcp.dialInflight)),
+			"pend_enq":      atomic.LoadUint64(&tcp.pendEnq),
+			"pend_flush":    atomic.LoadUint64(&tcp.pendFlush),
+			"pend_drop":     atomic.LoadUint64(&tcp.pendDrop),
 		}
 	}
 	// FlowManager and egress limiter removed
 	// Fallback removed
 	// Include processor metrics if available
-	if s.processor != nil {
-		if m, ok := s.processor.(interface{ Metrics() map[string]uint64 }); ok {
+	if processor != nil {
+		if m, ok := processor.(interface{ Metrics() map[string]uint64 }); ok {
 			dm.Processor = m.Metrics()
 		}
 	}
