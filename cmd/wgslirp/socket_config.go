@@ -24,6 +24,10 @@ func socketConfig(mtu int, lookup func(string) (string, bool)) (socket.Config, e
 		{"TCP_REASSEMBLY_CAP_BYTES", &cfg.TCPReassemblyCapBytes},
 		{"MAX_TCP_FLOWS", &cfg.MaxTCPFlows},
 		{"MAX_UDP_FLOWS", &cfg.MaxUDPFlows},
+		{"MAX_PENDING_TCP_DIALS", &cfg.MaxPendingTCPDials},
+		{"SOCKET_BUFFER_CAP_BYTES", &cfg.SocketBufferCapBytes},
+		{"TCP_PEND_CAP_BYTES", &cfg.TCPPendingCapBytes},
+		{"TCP_RETRANSMIT_CAP_BYTES", &cfg.TCPRetransmitCapBytes},
 	} {
 		if value, present := lookup(setting.name); present {
 			number, err := strconv.Atoi(strings.TrimSpace(value))

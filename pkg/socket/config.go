@@ -23,6 +23,10 @@ func (c Config) Validate() error {
 		{"TCPReassemblyCapBytes", c.TCPReassemblyCapBytes, 1},
 		{"MaxTCPFlows", c.MaxTCPFlows, 1},
 		{"MaxUDPFlows", c.MaxUDPFlows, 1},
+		{"MaxPendingTCPDials", c.MaxPendingTCPDials, 1},
+		{"SocketBufferCapBytes", c.SocketBufferCapBytes, 1},
+		{"TCPPendingCapBytes", c.TCPPendingCapBytes, 1},
+		{"TCPRetransmitCapBytes", c.TCPRetransmitCapBytes, 1},
 	} {
 		if setting.value < 0 || uint64(setting.value) > uint64(math.MaxInt64/int64(setting.unit)) {
 			return fmt.Errorf("%s must be nonnegative and fit its runtime representation", setting.name)
@@ -63,6 +67,12 @@ type Config struct {
 
 	// MaxUDPFlows limits active UDP flows (0 = unlimited).
 	MaxUDPFlows int
+
+	// New safety budgets use finite defaults when zero (never unlimited).
+	MaxPendingTCPDials    int
+	SocketBufferCapBytes  int
+	TCPPendingCapBytes    int
+	TCPRetransmitCapBytes int
 }
 
 // DefaultConfig returns the default configuration for the socket interface
@@ -78,5 +88,9 @@ func DefaultConfig() Config {
 		TCPReassemblyCapBytes: 128 * 1024,
 		MaxTCPFlows:           0,
 		MaxUDPFlows:           0,
+		MaxPendingTCPDials:    DefaultPendingTCPDials,
+		SocketBufferCapBytes:  DefaultSocketBufferCap,
+		TCPPendingCapBytes:    DefaultTCPPendingCap,
+		TCPRetransmitCapBytes: DefaultTCPRetransmitCap,
 	}
 }

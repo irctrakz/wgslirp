@@ -75,6 +75,7 @@ func (b *tcpBridge) sendAllowanceLocked(f *tcpFlow) int {
 	}
 	inFlight := int(f.serverNxt - f.sndUna)
 	allowed := int(f.advWnd) - inFlight
+	allowed = minInt(allowed, b.retransmitCap-f.txBytes)
 	if f.ccEnabled && f.cc != nil {
 		allowed = minInt(allowed, f.cc.Cwnd()-inFlight)
 	}
@@ -103,7 +104,6 @@ func (b *tcpBridge) reader(f *tcpFlow) {
 		return
 	}
 	b.launch(func() { b.retransmitLoop(f) })
-	buf := make([]byte, 32*1024)
 	for {
 		f.stateMu.Lock()
 		allowed := b.sendAllowanceLocked(f)
@@ -118,14 +118,25 @@ func (b *tcpBridge) reader(f *tcpFlow) {
 			}
 			continue
 		}
+		readSize := minInt(32*1024, allowed)
+		readSize = minInt(readSize, maxInt(1, b.buffers.limit/2-bufferEntryAllowance))
+		if !b.buffers.acquire(readSize) {
+			if !b.waitForACK(f, 10*time.Millisecond) {
+				return
+			}
+			continue
+		}
+		buf := make([]byte, readSize)
 		_ = conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-		n, err := conn.Read(buf[:minInt(len(buf), allowed)])
+		n, err := conn.Read(buf)
 		if n > 0 {
 			f.touch()
 			if !b.sendPayload(f, buf[:n]) {
+				b.buffers.release(readSize)
 				return
 			}
 		}
+		b.buffers.release(readSize)
 		if err == nil {
 			continue
 		}
@@ -192,7 +203,14 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 			return false
 		}
 		size := minInt(minInt(maxSegment, allowed), len(payload)-offset)
-		data := append([]byte(nil), payload[offset:offset+size]...)
+		if !b.buffers.acquire(bufferCharge(size)) {
+			b.abortBufferedFlowLocked(f)
+			f.stateMu.Unlock()
+			return false
+		}
+		data := make([]byte, size)
+		copy(data, payload[offset:offset+size])
+		f.txBytes += size
 		seq := f.serverNxt
 		// Publish the transmitted sequence range before another goroutine can
 		// process its ACK. Each segment advances state exactly once.

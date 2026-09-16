@@ -21,7 +21,9 @@ import (
 // It implements the core.SocketInterface interface and the SocketWriter interface
 type SocketInterface struct {
 	// Configuration
-	config Config
+	config       Config
+	budgetOnce   sync.Once
+	bufferBudget *resourceBudget
 
 	// Packet processor for handling packets from the socket
 	processor core.PacketProcessor
@@ -419,13 +421,24 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 		activeRTOFlows := uint64(len(tcp.rtoActiveFlows))
 		tcp.rtoMu.Unlock()
 		// Compose TCPExt with RTO and ACK classification counters
+		dialUsed, dialPeak, dialLimit, dialRejected := tcp.dialSlots.snapshot()
+		bufferUsed, bufferPeak, bufferLimit, bufferRejected := tcp.buffers.snapshot()
 		dm.TCPExt = map[string]uint64{
-			"rto":               atomic.LoadUint64(&tcp.rtoCount),
-			"active_rto_flows":  activeRTOFlows,
-			"ack_advanced":      atomic.LoadUint64(&tcp.ackAdv),
-			"ack_duplicate":     atomic.LoadUint64(&tcp.ackDup),
-			"ack_window_update": atomic.LoadUint64(&tcp.ackWndOnly),
-			"ack_idle_flows":    ackIdle,
+			"dial_reserved":         dialUsed,
+			"dial_peak":             dialPeak,
+			"dial_limit":            dialLimit,
+			"dial_refused":          dialRejected,
+			"socket_buffer_bytes":   bufferUsed,
+			"socket_buffer_peak":    bufferPeak,
+			"socket_buffer_limit":   bufferLimit,
+			"socket_buffer_refused": bufferRejected,
+			"buffer_dropped":        tcp.bufferDrops.Load(),
+			"rto":                   atomic.LoadUint64(&tcp.rtoCount),
+			"active_rto_flows":      activeRTOFlows,
+			"ack_advanced":          atomic.LoadUint64(&tcp.ackAdv),
+			"ack_duplicate":         atomic.LoadUint64(&tcp.ackDup),
+			"ack_window_update":     atomic.LoadUint64(&tcp.ackWndOnly),
+			"ack_idle_flows":        ackIdle,
 			// Async dial and pending-buffer instrumentation
 			"dial_start":    atomic.LoadUint64(&tcp.dialStart),
 			"dial_ok":       atomic.LoadUint64(&tcp.dialOk),

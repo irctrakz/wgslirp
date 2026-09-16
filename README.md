@@ -274,8 +274,22 @@ Resource controls are parsed once before socket startup. Invalid, empty, negativ
 | `TCP_REASSEMBLY_CAP_BYTES` | 131072 | Out-of-order storage threshold per TCP flow; zero uses the default. |
 | `MAX_TCP_FLOWS` | 0 | Maximum registered TCP flows; zero is unlimited. |
 | `MAX_UDP_FLOWS` | 0 | Maximum registered UDP flows; zero is unlimited. |
+| `MAX_PENDING_TCP_DIALS` | 64 | Concurrent fast/async TCP dial attempts; one reservation spans fallback. |
+| `SOCKET_BUFFER_CAP_BYTES` | 67108864 | Shared TCP/UDP accounted buffer budget (64 MiB). |
+| `TCP_PEND_CAP_BYTES` | 65536 | Per-flow TCP data accepted before host connection completes. |
+| `TCP_RETRANSMIT_CAP_BYTES` | 1048576 | Per-flow unacknowledged TCP payload storage (1 MiB). |
 
-`TCP_ACK_DELAY_MS` defaults to 10; zero requests immediate ACK scheduling. Go callers should use `socket.DefaultConfig()` for defaults and set fields explicitly. The TCP bridge now honors these typed fields; it no longer reads `TCP_ACK_DELAY_MS` directly from the environment. Flow admission errors are available through `errors.Is(err, socket.ErrFlowLimit)`. Active-flow caps do not yet bound concurrent preliminary TCP dials or total buffering; those limits are separate follow-up work. Expiry is checked periodically, so removal can occur after the configured idle lifetime.
+`TCP_ACK_DELAY_MS` defaults to 10; zero requests immediate ACK scheduling. Go callers should use `socket.DefaultConfig()` for defaults and set fields explicitly. The TCP bridge honors these typed fields; it no longer reads `TCP_ACK_DELAY_MS` or `TCP_PEND_CAP_BYTES` directly from the environment. Expiry is checked periodically, so removal can occur after the configured idle lifetime.
+
+The four new dial/buffer controls use their finite defaults when zero; zero never disables these limits. In particular, `TCP_PEND_CAP_BYTES=0` now means 64 KiB rather than unlimited buffering. Defaults are provisional safety limits; representative workload sizing remains tracked in the architecture plan.
+
+The shared buffer budget reserves capacity before allocating TCP pending, reassembly and retransmission payloads, asynchronous-dial ICMP quotes, TCP read buffers and UDP read buffers. Retained queue entries also incur a 128-byte accounting allowance; reassembly merges reserve replacement storage while old data remains live. Each UDP flow requires a 65,535-byte read-buffer reservation. Reservations release on ACK, flush, rejection, expiry or worker/flow teardown as appropriate.
+
+This is a budget for explicitly owned buffers, not a process RSS ceiling: kernel socket buffers, Go allocator/GC overhead, transient synthesized packet copies and downstream WireGuard/processor queues are outside it. Extending downstream byte accounting and measuring total-memory behavior remain explicit F02/F03 follow-ups.
+
+When dial admission is exhausted, new attempts receive RST and `socket.ErrDialLimit`. A new UDP flow without buffer capacity returns `socket.ErrBufferLimit` before sending its payload. TCP pending/reassembly rejection does not acknowledge unaccepted data, allowing retransmission. The per-flow retransmission cap pauses host reads until ACK progress; aggregate exhaustion while queuing a server reply resets only that flow. Active-flow admission remains `socket.ErrFlowLimit`. Errors can be checked with `errors.Is`.
+
+Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`, `dial_limit`, `dial_refused`, `socket_buffer_bytes`, `socket_buffer_peak`, `socket_buffer_limit`, `socket_buffer_refused`, and `buffer_dropped`. Socket-buffer values cover both TCP and UDP. Refusal counters count reservation attempts, including retries, rather than unique packets or flows; `buffer_dropped` counts rejected TCP queue operations/aborted buffered flows.
 
 - `TCP_ACK_DELAY_MS`: delayed ACK timer (ms). Lower (e.g., 5) reduces ACK latency.
 - `TCP_ENABLE_SACK`: advertise SACK permitted in SYN-ACK (recommended 1 for modern stacks).

@@ -15,6 +15,7 @@ import (
 // udpBridge implements a simple slirp-style UDP translator.
 // It maps guest UDP 5-tuples to host UDP sockets and relays payloads.
 type udpBridge struct {
+	buffers  *resourceBudget
 	parent   *SocketInterface
 	flowsMu  sync.RWMutex
 	flows    map[string]*udpFlow
@@ -51,6 +52,7 @@ func newUDPBridge(parent *SocketInterface) *udpBridge {
 		flows:    make(map[string]*udpFlow),
 		stopCh:   make(chan struct{}),
 		lifetime: 60 * time.Second,
+		buffers:  parent.buffers(),
 	}
 	if parent != nil {
 		if parent.config.UDPFlowLifetimeSec > 0 {
@@ -177,6 +179,11 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 				}
 				return fmt.Errorf("udp: %w", ErrFlowLimit)
 			}
+			if !b.buffers.acquire(65535) {
+				b.flowsMu.Unlock()
+				conn.Close()
+				return ErrBufferLimit
+			}
 			b.flows[key] = candidate
 			b.workers.Add(1)
 			b.flowsMu.Unlock()
@@ -206,6 +213,7 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 }
 
 func (b *udpBridge) reader(f *udpFlow) {
+	defer b.buffers.release(65535)
 	buf := make([]byte, 65535)
 	for {
 		n, _, err := f.conn.ReadFrom(buf)
