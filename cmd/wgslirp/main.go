@@ -63,7 +63,10 @@ func run() error {
 	if mtu <= 0 {
 		mtu = 1380
 	}
-	scfg := socket.Config{IPAddress: "0.0.0.0", MTU: mtu, Protocol: "ip4:tcp"}
+	scfg, err := socketConfig(mtu, os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("socket config: %w", err)
+	}
 	si := socket.NewSocketInterface(scfg)
 
 	// Create WG TUN bound to the socket writer

@@ -175,7 +175,7 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 						_ = b.parent.processor.ProcessPacket(p)
 					}
 				}
-				return fmt.Errorf("udp: flow cap reached")
+				return fmt.Errorf("udp: %w", ErrFlowLimit)
 			}
 			b.flows[key] = candidate
 			b.workers.Add(1)

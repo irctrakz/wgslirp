@@ -76,6 +76,37 @@ New uncommitted work. Linux Go 1.23.12 verification passed: build, vet, unit tes
 
 This completes another Phase 1 boundary-hardening slice; checksum validation, full IP-option semantics and incoming fragment reassembly are not implemented by this change. The next major priority remains Phase 2: make configuration effective and enforce atomic, bounded resource admission.
 
+### Implementation checkpoint — effective resource configuration and admission
+
+New uncommitted work. Linux Go 1.23.12 verification passed: build, vet, unit tests, race tests, tagged integration tests with and without race detection, and 261,289 parser fuzz executions. The concurrent admission regression admits exactly two of 24 distinct flow attempts at a configured cap of two.
+
+- Application-boundary parsing wires ACK delay, TCP/UDP idle lifetime, TCP reassembly capacity and active-flow caps into typed socket configuration. Invalid numeric values and duration overflow fail before network startup.
+- TCP now applies its previously ignored configuration fields. ACK delay no longer depends on a bridge-constructor environment read; the effective application default remains 10 ms.
+- TCP insertion rechecks the flow cap under the registry lock after dialing. Concurrent candidates cannot exceed the registered-flow limit. TCP and UDP expose a shared admission-limit sentinel error.
+- Regression tests check effective bridge settings, invalid startup configuration, environment parsing and concurrent admission against a two-flow cap.
+
+This is a slice of PR 2.1/2.2, not completion of all resource budgeting. Zero flow caps remain unlimited for compatibility. Pending-dial admission, aggregate buffering, measured finite defaults, remaining runtime environment reads and distinct admission metrics still require implementation.
+
+### Open follow-up register
+
+Every implementation deferral must be recorded here with its destination and completion evidence before closing that batch. Check an item only after its acceptance criteria are verified; record the implementing commit and results. This register tracks deferred work from completed batches; the phase backlog below remains authoritative for the wider plan.
+
+#### Next: resource budgets and configuration (PR 2.1/2.2)
+
+- [ ] **F01 — Bound pending TCP dials.** Reserve capacity atomically **before the preliminary fast dial**, share the budget with asynchronous fallback, and release reservations on success, failure, duplicate-flow races, cancellation and shutdown. Define timeout, queue/rejection behavior and refusal signaling. **Acceptance:** concurrent SYN storms never exceed the configured dial budget, established flows keep working, and reservations return to zero after cancellation/shutdown.
+- [ ] **F02 — Bound total buffering.** Inventory pending client data, out-of-order reassembly, retransmission queues and delivery queues; enforce per-flow and aggregate byte budgets before allocation/enqueue. Define ownership and release on ACK, flush, rejection, expiry and teardown, including retransmission and overlap handling. **Acceptance:** concurrent saturation cannot exceed accounted budgets; teardown releases all reservations; memory trends back toward baseline; one overloaded flow does not stop unrelated traffic.
+- [ ] **F03 — Select measured finite defaults.** Measure representative connection counts, memory use and overload recovery, then choose defaults for flows, pending dials and buffers. Document any unlimited override and migration from today's zero/unlimited flow caps. **Acceptance:** reproducible load evidence supports the defaults and tests verify default and override behavior.
+- [ ] **F04 — Finish typed configuration migration.** Move remaining packet/flow-time environment reads (dial timing, congestion control, socket buffers, window scaling and SACK) and other constructor tuning into validated configuration. Resolve JSON/YAML adapters, precedence and inactive controls as described in PR 2.1. **Acceptance:** each supported setting has effective-value coverage; environment changes after construction cannot alter existing components.
+- [ ] **F05 — Make admission failures observable (also PR 3.1/3.2).** Distinguish active-flow, pending-dial, per-flow-buffer and aggregate-buffer refusals using bounded-cardinality counters and actionable errors. **Acceptance:** saturation fixtures prove exact counts and protocol-appropriate behavior, without counting one rejection multiple times.
+
+#### Remaining deferred correctness and verification work
+
+- [ ] **F06 — Finish lifecycle audits (PR 1.2/5.1).** Audit remaining mocks and callback ownership; address blocking or reentrant delivery callbacks and stale flow-identity removal in maintenance paths. **Acceptance:** targeted concurrent Start/Stop/Close, expiry/replacement and blocked-callback tests pass under race detection with documented shutdown bounds.
+- [ ] **F07 — Complete TCP FIN recovery (PR 5.1/5.2).** Replace reliance on the current short FIN grace period with explicit, bounded close-state and retransmission behavior. **Acceptance:** lost/duplicate FIN and ACK, half-close and shutdown-under-traffic fixtures show no premature data loss or leaked workers.
+- [ ] **F08 — Resolve remaining packet-validation scope (PR 1.4/5.1).** Define and test checksum-validation and IP-option policy. Record an explicit support decision for incoming fragment reassembly; retain tested rejection unless a supported use case justifies bounded reassembly. **Acceptance:** supported and rejected cases are documented and covered by regression/fuzz tests. Fragment reassembly is not implicitly promised by this item.
+- [ ] **F09 — Finish metrics semantics and dependency separation (PR 3.1/3.2/4.1).** Complete the phase backlog for exact counters, reporter-owned state, stable snapshots/contracts and narrow bridge collaborators. **Acceptance:** deterministic metrics fixtures and independent component tests demonstrate the contracts, not merely file movement.
+- [ ] **F10 — Verify external review/release controls (Phase 0/5/6).** Confirm branch protection and independent approvals, execute workflows and container release checks, verify dependency tidy checks, and add production-path/load coverage. **Acceptance:** record actual settings and run evidence; passing local tests alone does not close this item. Respect the current instruction not to push upstream.
+
 ### Rules for subsequent batches
 
 1. Work through the phases in order. Within a phase, use the numbered PR order. Later structural work depends on earlier correctness and test gates.

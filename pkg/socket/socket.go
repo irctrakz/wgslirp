@@ -85,6 +85,9 @@ func (s *SocketInterface) Start() error {
 	if s.processor == nil {
 		return fmt.Errorf("no packet processor set")
 	}
+	if err := s.config.Validate(); err != nil {
+		return fmt.Errorf("socket config: %w", err)
+	}
 
 	// Create a raw socket based on the protocol specified in the config
 	var err error

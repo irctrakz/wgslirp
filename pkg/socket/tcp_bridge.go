@@ -251,11 +251,16 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 		ackIdleFail:    120 * time.Second,
 		rtoActiveFlows: make(map[string]bool),
 	}
-	// Allow tuning of ACK delay via env (milliseconds).
-	if v := strings.TrimSpace(os.Getenv("TCP_ACK_DELAY_MS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			b.ackDelay = time.Duration(n) * time.Millisecond
+	if parent != nil {
+		cfg := parent.config
+		b.ackDelay = time.Duration(cfg.TCPAckDelayMs) * time.Millisecond
+		if cfg.TCPFlowLifetimeSec > 0 {
+			b.lifetime = time.Duration(cfg.TCPFlowLifetimeSec) * time.Second
 		}
+		if cfg.TCPReassemblyCapBytes > 0 {
+			b.reasmCap = cfg.TCPReassemblyCapBytes
+		}
+		b.maxFlows = cfg.MaxTCPFlows
 	}
 	// ACK-idle gate threshold (ms); 0 disables
 	if v := strings.TrimSpace(os.Getenv("TCP_ACK_IDLE_GATE_MS")); v != "" {
@@ -517,7 +522,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 				if rst != nil && b.parent.processor != nil {
 					_ = b.parent.processor.ProcessPacket(WrapPacket(rst))
 				}
-				return fmt.Errorf("tcp: flow cap reached")
+				return fmt.Errorf("tcp: %w", ErrFlowLimit)
 			}
 		}
 		// Fast pre-dial to detect immediate refusal before emitting SYN-ACK; fallback to async otherwise
@@ -682,6 +687,19 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			}
 			flow = exist
 		} else {
+			// Dialing happens outside the registry lock. Recheck admission here
+			// so concurrent candidates cannot exceed the configured active cap.
+			if b.maxFlows > 0 && len(b.flows) >= b.maxFlows {
+				b.mu.Unlock()
+				candidate.stateMu.Unlock()
+				if preConn != nil {
+					preConn.Close()
+				}
+				if b.parent.processor != nil {
+					_ = b.parent.processor.ProcessPacket(WrapPacket(buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil)))
+				}
+				return fmt.Errorf("tcp: %w", ErrFlowLimit)
+			}
 			b.flows[key] = candidate
 			b.mu.Unlock()
 			flow = candidate

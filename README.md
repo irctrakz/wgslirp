@@ -265,6 +265,18 @@ Guest IPv4 datagrams are validated before forwarding: header and total lengths m
 
 TCP slirp (userspace)
 
+Resource controls are parsed once before socket startup. Invalid, empty, negative, or overflowing numeric values fail startup. The following environment settings override application defaults:
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| `TCP_FLOW_LIFETIME_SEC` | 120 | Idle TCP lifetime; zero uses the default. |
+| `UDP_FLOW_LIFETIME_SEC` | 60 | Idle UDP lifetime; zero uses the default. |
+| `TCP_REASSEMBLY_CAP_BYTES` | 131072 | Out-of-order storage threshold per TCP flow; zero uses the default. |
+| `MAX_TCP_FLOWS` | 0 | Maximum registered TCP flows; zero is unlimited. |
+| `MAX_UDP_FLOWS` | 0 | Maximum registered UDP flows; zero is unlimited. |
+
+`TCP_ACK_DELAY_MS` defaults to 10; zero requests immediate ACK scheduling. Go callers should use `socket.DefaultConfig()` for defaults and set fields explicitly. The TCP bridge now honors these typed fields; it no longer reads `TCP_ACK_DELAY_MS` directly from the environment. Flow admission errors are available through `errors.Is(err, socket.ErrFlowLimit)`. Active-flow caps do not yet bound concurrent preliminary TCP dials or total buffering; those limits are separate follow-up work. Expiry is checked periodically, so removal can occur after the configured idle lifetime.
+
 - `TCP_ACK_DELAY_MS`: delayed ACK timer (ms). Lower (e.g., 5) reduces ACK latency.
 - `TCP_ENABLE_SACK`: advertise SACK permitted in SYN-ACK (recommended 1 for modern stacks).
 - `TCP_MSS_CLAMP`: clamp advertised MSS (bytes). Leave unset unless troubleshooting PMTUD.
