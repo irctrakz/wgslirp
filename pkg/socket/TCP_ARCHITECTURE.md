@@ -7,7 +7,7 @@ privileges or runtime configuration.
 ## Extraction sequence
 
 1. Connection establishment and pending-write flushing (`tcp_connect.go`).
-2. Registry, admission, expiry and shutdown.
+2. Registry, admission, expiry and shutdown (`tcp_registry.go`).
 3. Validated incoming segments and receive/reassembly processing.
 4. ACK/window handling and retransmission/recovery.
 5. Diagnostic snapshots and formatting.

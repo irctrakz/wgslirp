@@ -3,6 +3,7 @@ package socket
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"github.com/irctrakz/wgslirp/pkg/logging"
 	"math/rand"
@@ -28,19 +29,14 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	seq := segment.seq
 	key := segment.key
 	var flow *tcpFlow
-	// Early cap check
-	if b.maxFlows > 0 {
-		b.mu.RLock()
-		cur := len(b.flows)
-		b.mu.RUnlock()
-		if cur >= b.maxFlows {
-			b.parent.admission.tcpFlows.Add(1)
-			rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
-			if rst != nil {
-				_ = b.sendToGuest(nil, rst)
-			}
-			return fmt.Errorf("tcp: %w", ErrFlowLimit)
+	// Early advisory check; publication rechecks after dialing.
+	if b.atFlowCapacity() {
+		b.parent.admission.tcpFlows.Add(1)
+		rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
+		if rst != nil {
+			_ = b.sendToGuest(nil, rst)
 		}
+		return fmt.Errorf("tcp: %w", ErrFlowLimit)
 	}
 	// One reservation spans fast dialing and asynchronous fallback.
 	if !b.dialSlots.acquire(1) {
@@ -187,45 +183,26 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 		candidate.ccEnabled = true
 		candidate.cc = newNewReno(candidate.mss, b.tuning.InitialCwndMSS)
 	}
-	// Insert under write lock with double-check
+	// Preserve state-before-registry ordering through candidate publication.
 	candidate.stateMu.Lock()
-	b.mu.Lock()
-	select {
-	case <-b.stopCh:
-		b.mu.Unlock()
+	registered, err := b.registerCandidateLocked(candidate)
+	if err != nil {
 		candidate.stateMu.Unlock()
 		if preConn != nil {
 			preConn.Close()
 		}
-		return fmt.Errorf("TCP bridge stopped")
-	default:
+		if errors.Is(err, ErrFlowLimit) && b.parent.processor != nil {
+			_ = b.sendToGuest(nil, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
+		}
+		return err
 	}
-	if exist := b.flows[key]; exist != nil {
-		b.mu.Unlock()
+	if registered != candidate {
 		candidate.stateMu.Unlock()
 		if preConn != nil {
 			preConn.Close()
 		}
-		flow = exist
+		flow = registered
 	} else {
-		// Dialing happens outside the registry lock. Recheck admission here
-		// so concurrent candidates cannot exceed the configured active cap.
-		if b.maxFlows > 0 && len(b.flows) >= b.maxFlows {
-			b.parent.admission.tcpFlows.Add(1)
-			b.mu.Unlock()
-			candidate.stateMu.Unlock()
-			if preConn != nil {
-				preConn.Close()
-			}
-			if b.parent.processor != nil {
-				_ = b.sendToGuest(nil, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
-			}
-			return fmt.Errorf("tcp: %w", ErrFlowLimit)
-		}
-		b.flows[key] = candidate
-		atomic.AddUint64(&b.metrics.ConnectionsCreated, 1)
-		atomic.AddUint64(&b.parent.metrics.ConnectionsCreated, 1)
-		b.mu.Unlock()
 		flow = candidate
 		defer flow.stateMu.Unlock()
 		// Kick off async host dial; on success, attach conn, emit SYN-ACK (if not already), start reader, and flush pending

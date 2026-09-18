@@ -9,38 +9,6 @@ import (
 	"time"
 )
 
-// beginWork serializes WaitGroup admission with shutdown. No work may be
-// admitted once stopCh is closed, including children of existing workers.
-func (b *tcpBridge) beginWork() bool {
-	b.lifecycleMu.Lock()
-	defer b.lifecycleMu.Unlock()
-	select {
-	case <-b.stopCh:
-		return false
-	default:
-	}
-	b.workers.Add(1)
-	return true
-}
-
-func (b *tcpBridge) launch(work func()) bool {
-	if !b.beginWork() {
-		return false
-	}
-	go func() { defer b.workers.Done(); work() }()
-	return true
-}
-
-func (b *tcpBridge) flowSnapshot() []*tcpFlow {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	flows := make([]*tcpFlow, 0, len(b.flows))
-	for _, f := range b.flows {
-		flows = append(flows, f)
-	}
-	return flows
-}
-
 // Host writes have a deadline because the packet handler holds flow state.
 // This bounds shutdown even when the remote host stops reading.
 func writeTCP(conn *net.TCPConn, data []byte) (int, error) {

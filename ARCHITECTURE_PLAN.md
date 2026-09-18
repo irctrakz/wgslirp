@@ -369,7 +369,7 @@ push. Ownership and benchmark scope are recorded in
 [pkg/socket/TCP_ARCHITECTURE.md](pkg/socket/TCP_ARCHITECTURE.md).
 
 - [x] Connection establishment and pending-write flushing. Tagged integration/race passed; peak 815,554,560 bytes, zero resource-limit events and independently verified cleanup. Existing duplicate-dial, pending FIN, cancellation and admission regressions passed.
-- [ ] Registry/admission, lifecycle and expiry.
+- [x] Registry/admission, lifecycle and expiry. Candidate publication now has an explicit state-lock contract; tagged integration/race passed, peak 801,849,344 bytes, zero resource-limit events and independent cleanup verification.
 - [ ] Incoming segment dispatch and reassembly.
 - [ ] ACK/window handling and recovery.
 - [ ] Diagnostics and snapshot formatting.
