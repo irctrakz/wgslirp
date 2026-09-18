@@ -79,6 +79,32 @@ type Config struct {
 	TCPRetransmitCapBytes int
 }
 
+// Effective returns a detached configuration with documented zero-as-default
+// values resolved. Explicit unlimited flow caps and immediate ACKs stay zero.
+// Invalid negative values are preserved so Validate still rejects them.
+func (c Config) Effective() Config {
+	defaults := DefaultConfig()
+	transport := c.transportConfig()
+	c.Transport = &transport
+	for _, setting := range []struct {
+		value    *int
+		fallback int
+	}{
+		{&c.TCPFlowLifetimeSec, defaults.TCPFlowLifetimeSec},
+		{&c.UDPFlowLifetimeSec, defaults.UDPFlowLifetimeSec},
+		{&c.TCPReassemblyCapBytes, defaults.TCPReassemblyCapBytes},
+		{&c.MaxPendingTCPDials, defaults.MaxPendingTCPDials},
+		{&c.SocketBufferCapBytes, defaults.SocketBufferCapBytes},
+		{&c.TCPPendingCapBytes, defaults.TCPPendingCapBytes},
+		{&c.TCPRetransmitCapBytes, defaults.TCPRetransmitCapBytes},
+	} {
+		if *setting.value == 0 {
+			*setting.value = setting.fallback
+		}
+	}
+	return c
+}
+
 // DefaultConfig returns the default configuration for the socket interface
 func DefaultConfig() Config {
 	transport := DefaultTransportConfig()

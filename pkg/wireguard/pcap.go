@@ -2,11 +2,10 @@ package wireguard
 
 import (
 	"encoding/binary"
+	"fmt"
 	"github.com/irctrakz/wgslirp/pkg/logging"
 	"io"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -15,6 +14,7 @@ import (
 // Enabled when WG_PCAP is set to a writable filepath.
 
 var (
+	pcapConfig  *CaptureConfig
 	pcapMu      sync.Mutex
 	pcapEnabled bool
 	pcapFile    *os.File
@@ -25,26 +25,37 @@ var (
 
 const defaultPCAPLimit int64 = 64 * 1024 * 1024
 
-func initPCAP() {
-	path := strings.TrimSpace(os.Getenv("WG_PCAP"))
-	if path == "" || pcapEnabled || pcapFailed {
-		return
+// ConfigurePCAP freezes the process-wide capture policy and opens the optional
+// capture before packet workers start. Repeating the same configuration is safe;
+// neither environment changes nor calls after ClosePCAP reopen/truncate a file.
+func ConfigurePCAP(c CaptureConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
 	}
-	pcapLimit = defaultPCAPLimit
-	if value := strings.TrimSpace(os.Getenv("WG_PCAP_MAX_BYTES")); value != "" {
-		limit, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || limit < 24 {
-			pcapFailed = true
-			logging.Warnf("PCAP disabled: WG_PCAP_MAX_BYTES must be an integer of at least 24")
-			return
+	pcapMu.Lock()
+	defer pcapMu.Unlock()
+	if pcapConfig != nil {
+		if *pcapConfig != c {
+			return fmt.Errorf("capture configuration is already fixed")
 		}
-		pcapLimit = limit
+		if pcapFailed && pcapFile == nil {
+			return fmt.Errorf("capture is closed or failed")
+		}
+		return nil
 	}
+	if pcapFailed {
+		return fmt.Errorf("capture is closed or failed")
+	}
+	pcapConfig = &c
+	if c.Path == "" {
+		return nil
+	}
+	path := c.Path
+	pcapLimit = c.MaxBytes
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		pcapFailed = true
-		logging.Warnf("PCAP open failed: %v", err)
-		return
+		return fmt.Errorf("PCAP open failed: %w", err)
 	}
 	if err = f.Chmod(0600); err == nil {
 		err = f.Truncate(0)
@@ -52,8 +63,7 @@ func initPCAP() {
 	if err != nil {
 		f.Close()
 		pcapFailed = true
-		logging.Warnf("PCAP initialization failed: %v", err)
-		return
+		return fmt.Errorf("PCAP initialization failed: %w", err)
 	}
 	// PCAP Global Header
 	// magic 0xa1b2c3d4, version 2.4, tz 0, sigfigs 0, snaplen 65535, network LINKTYPE_RAW (101)
@@ -67,12 +77,12 @@ func initPCAP() {
 	if _, err := f.Write(hdr); err != nil {
 		f.Close()
 		pcapFailed = true
-		logging.Warnf("PCAP header write failed: %v", err)
-		return
+		return fmt.Errorf("PCAP header write failed: %w", err)
 	}
 	pcapFile = f
 	pcapEnabled = true
 	pcapBytes = 24
+	return nil
 }
 
 // pcapWriteIPv4 writes one raw IPv4 packet to the PCAP file if enabled.
@@ -82,9 +92,6 @@ func pcapWriteIPv4(b []byte) {
 	}
 	pcapMu.Lock()
 	defer pcapMu.Unlock()
-	if !pcapEnabled {
-		initPCAP()
-	}
 	if !pcapEnabled || pcapFile == nil {
 		return
 	}

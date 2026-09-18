@@ -11,7 +11,12 @@ func TestPCAPRestrictsExistingFileAndCloses(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("WG_PCAP", path)
+	pcapConfig = nil
+	pcapFailed = false
+	if err := ConfigurePCAP(CaptureConfig{Path: path, MaxBytes: defaultPCAPLimit}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ClosePCAP(); pcapConfig = nil; pcapFailed = false })
 	pcapWriteIPv4([]byte{0x45, 0, 0, 0})
 	if err := ClosePCAP(); err != nil {
 		t.Fatal(err)

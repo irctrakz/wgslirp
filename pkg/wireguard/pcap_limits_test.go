@@ -12,10 +12,17 @@ func captureForTest(t *testing.T, limit string) string {
 	t.Helper()
 	_ = ClosePCAP()
 	pcapFailed = false
+	pcapConfig = nil
 	path := filepath.Join(t.TempDir(), "capture.pcap")
 	t.Setenv("WG_PCAP", path)
 	t.Setenv("WG_PCAP_MAX_BYTES", limit)
-	t.Cleanup(func() { _ = ClosePCAP(); pcapFailed = false })
+	cfg, err := CaptureConfigFromEnv(os.LookupEnv)
+	if err == nil {
+		if err := ConfigurePCAP(cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = ClosePCAP(); pcapFailed = false; pcapConfig = nil })
 	return path
 }
 

@@ -10,7 +10,6 @@ import (
 	"net"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -231,11 +230,11 @@ func TestMixedTrafficMemoryRecovery(t *testing.T) {
 		pooled   bool
 	}{{"small", 8, 32, false}, {"capacity", 64, 256, false}, {"capacity_repeat", 64, 256, false}, {"capacity_pooled", 64, 256, true}} {
 		t.Run(profile.name, func(t *testing.T) {
-			originalPool := atomic.LoadUint32(&poolFlag)
-			t.Cleanup(func() { atomic.StoreUint32(&poolFlag, originalPool) })
-			atomic.StoreUint32(&poolFlag, 0)
+			originalPool := poolPolicy.Load()
+			t.Cleanup(func() { poolPolicy.Store(originalPool) })
+			poolPolicy.Store(&PoolConfig{})
 			if profile.pooled {
-				atomic.StoreUint32(&poolFlag, 1)
+				poolPolicy.Store(&PoolConfig{Enabled: true})
 			}
 			tcpPort, udpPort, stopServers := workloadServers(t)
 			cfg := DefaultConfig()

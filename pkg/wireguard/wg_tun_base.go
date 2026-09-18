@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/irctrakz/wgslirp/pkg/logging"
 	"github.com/irctrakz/wgslirp/pkg/socket"
 )
 
@@ -55,24 +55,38 @@ type queuedFrame struct {
 	release func()
 }
 
-// NewWGTun creates a WGTun with the given name, MTU, and outbound writer.
+// NewWGTun reads legacy queue environment settings once.
+// Deprecated: use NewWGTunWithConfig and TunConfigFromEnv at the application boundary.
 func NewWGTun(name string, mtu int, writer socket.SocketWriter) *WGTun {
 	if mtu <= 0 {
 		mtu = 1380
 	}
-	// Allow tuning of out queue capacity via env.
-	qcap := 1024
-	if v := strings.TrimSpace(os.Getenv("WG_TUN_QUEUE_CAP")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			qcap = n
-		}
+	cfg, err := TunConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		logging.Warnf("legacy TUN configuration: %v; using defaults", err)
+		cfg = DefaultTunConfig()
 	}
+	// The old API cannot return an error. Preserve its MTU argument behavior.
+	return newWGTun(name, mtu, writer, cfg)
+}
+
+func NewWGTunWithConfig(name string, mtu int, writer socket.SocketWriter, cfg TunConfig) (*WGTun, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if mtu < 576 || mtu > 65535 {
+		return nil, fmt.Errorf("TUN MTU must be between 576 and 65535")
+	}
+	return newWGTun(name, mtu, writer, cfg), nil
+}
+
+func newWGTun(name string, mtu int, writer socket.SocketWriter, cfg TunConfig) *WGTun {
 	t := &WGTun{
 		name:    name,
 		mtu:     mtu,
 		writer:  writer,
 		buffers: socket.PacketBufferBudgetFor(writer),
-		outCh:   make(chan queuedFrame, qcap),
+		outCh:   make(chan queuedFrame, cfg.QueueCapacity),
 		events:  make(chan Event, 2),
 		closed:  make(chan struct{}),
 	}

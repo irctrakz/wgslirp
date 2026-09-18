@@ -10,7 +10,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/irctrakz/wgslirp/pkg/core"
@@ -21,10 +20,10 @@ type packetConsumer func(core.Packet) error
 func (f packetConsumer) ProcessPacket(p core.Packet) error { return f(p) }
 
 func TestSynthesisReservationAndDeliveryOwnership(t *testing.T) {
-	original := atomic.LoadUint32(&poolFlag)
-	defer atomic.StoreUint32(&poolFlag, original)
+	original := poolPolicy.Load()
+	defer poolPolicy.Store(original)
 	for _, pooling := range []uint32{0, 1} {
-		atomic.StoreUint32(&poolFlag, pooling)
+		poolPolicy.Store(&PoolConfig{Enabled: pooling == 1})
 		capacity := 43
 		if pooling == 1 {
 			capacity = pktSmall

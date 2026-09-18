@@ -89,5 +89,5 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
-	return cfg, nil
+	return cfg.Effective(), nil
 }

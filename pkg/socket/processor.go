@@ -3,8 +3,6 @@ package socket
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -52,29 +50,37 @@ func (q queuedPacket) close() {
 	q.release()
 }
 
-// NewSocketPacketProcessor creates a new socket packet processor
+// NewSocketPacketProcessor reads legacy processor environment settings once.
+// Deprecated: use NewSocketPacketProcessorWithConfig with explicit configuration.
 func NewSocketPacketProcessor(socket SocketWriter, workerCount int) core.PacketProcessor {
-	if workerCount <= 0 {
-		workerCount = 4
+	cfg := DefaultProcessorConfig()
+	if workerCount > 0 {
+		cfg.Workers = workerCount
 	}
-	// Env overrides for workers and queue capacity.
-	if v := strings.TrimSpace(os.Getenv("PROCESSOR_WORKERS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			workerCount = n
-		}
+	next, err := ProcessorConfigFromEnv(cfg, os.LookupEnv)
+	if err != nil {
+		logging.Warnf("legacy processor configuration: %v; using defaults", err)
+		next = DefaultProcessorConfig()
 	}
-	qcap := 1000
-	if v := strings.TrimSpace(os.Getenv("PROCESSOR_QUEUE_CAP")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			qcap = n
-		}
-	}
+	return newSocketPacketProcessor(socket, next)
+}
 
+func NewSocketPacketProcessorWithConfig(socket SocketWriter, cfg ProcessorConfig) (*SocketPacketProcessor, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if socket == nil {
+		return nil, fmt.Errorf("packet processor requires a socket writer")
+	}
+	return newSocketPacketProcessor(socket, cfg), nil
+}
+
+func newSocketPacketProcessor(socket SocketWriter, cfg ProcessorConfig) *SocketPacketProcessor {
 	return &SocketPacketProcessor{
 		socket:      socket,
 		buffers:     PacketBufferBudgetFor(socket),
-		workerCount: workerCount,
-		packetCh:    make(chan queuedPacket, qcap),
+		workerCount: cfg.Workers,
+		packetCh:    make(chan queuedPacket, cfg.QueueCapacity),
 		stopCh:      make(chan struct{}),
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 
@@ -27,15 +26,13 @@ func run() error {
 	defer wg.ClosePCAP()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Debug logging toggle via DEBUG env (truthy parser)
-	dval := strings.ToLower(strings.TrimSpace(os.Getenv("DEBUG")))
-	debugOn := dval == "1" || dval == "true" || dval == "yes" || dval == "on"
-	// Detect metrics enabled via env
-	metricsEnabled := strings.TrimSpace(os.Getenv("METRICS_LOG")) != "" || strings.TrimSpace(os.Getenv("METRICS_INTERVAL")) != ""
-	interval, err := metricsInterval(os.Getenv("METRICS_INTERVAL"))
-	if metricsEnabled && err != nil {
-		return err
+	cfg, err := loadApplicationConfig(snapshotEnvironment(os.Environ()))
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
+	debugOn := cfg.Device.Options.Debug
+	metricsEnabled := cfg.Metrics
+	interval := cfg.MetricsInterval
 	if debugOn {
 		logging.SetLevel(logging.DebugLevel)
 		core.SetDebugMode(true)
@@ -50,27 +47,26 @@ func run() error {
 		}
 	}
 
-	// Load WG config from env
-	var dcfg wg.DeviceConfig
-	if err := dcfg.LoadFromEnv(); err != nil {
-		return fmt.Errorf("config: %w", err)
+	for _, warning := range cfg.Warnings {
+		logging.Warnf("%s", warning)
 	}
-
-	// Build socket interface (slirp bridges). Align slirp MTU with WG plaintext MTU
-	// so that synthesized packets (e.g., TCP segments) never exceed the WG TUN MTU.
-	// This prevents silent truncation/clamping at the tun boundary.
-	mtu := dcfg.MTU
-	if mtu <= 0 {
-		mtu = 1380
+	if cfg.PrintConfig {
+		log.Printf("effective configuration: %s", cfg.effectiveSummary())
 	}
-	scfg, err := socketConfig(mtu, os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("socket config: %w", err)
+	if err := socket.ConfigurePooling(cfg.Pool); err != nil {
+		return err
 	}
-	si := socket.NewSocketInterface(scfg)
+	if err := wg.ConfigurePCAP(cfg.Capture); err != nil {
+		return err
+	}
+	dcfg := cfg.Device
+	si := socket.NewSocketInterface(cfg.Socket)
 
 	// Create WG TUN bound to the socket writer
-	wgtun := wg.NewWGTun("wgmux0", dcfg.MTU, si)
+	wgtun, err := wg.NewWGTunWithConfig("wgmux0", dcfg.MTU, si, cfg.Tun)
+	if err != nil {
+		return err
+	}
 	defer wgtun.Close()
 
 	// Packet processor: WG + optional health sink
@@ -78,7 +74,7 @@ func run() error {
 	proc := wgProc
 	var hc *healthSink
 	// Optional: tee a health-check sink to observe slirp replies
-	if strings.TrimSpace(os.Getenv("HEALTHCHECK")) != "" {
+	if cfg.Health.Enabled {
 		hc = newHealthSink()
 		proc = newTeeProcessor(wgProc, hc)
 	}
@@ -91,8 +87,8 @@ func run() error {
 		var healthWorkers sync.WaitGroup
 		healthWorkers.Add(2)
 		defer func() { cancel(); healthWorkers.Wait() }()
-		go func() { defer healthWorkers.Done(); runSlirpDNSHealth(ctx, si, hc) }()
-		go func() { defer healthWorkers.Done(); runDirectEgressHealth(ctx) }()
+		go func() { defer healthWorkers.Done(); runSlirpDNSHealth(ctx, si, hc, cfg.Health) }()
+		go func() { defer healthWorkers.Done(); runDirectEgressHealth(ctx, cfg.Health) }()
 	}
 
 	// Start the WireGuard device (wg is the default implementation)
@@ -106,7 +102,7 @@ func run() error {
 	if metricsEnabled {
 		var reporter sync.WaitGroup
 		reporter.Add(1)
-		go func() { defer reporter.Done(); runMetricsReporter(ctx, interval, si, wgtun, dev) }()
+		go func() { defer reporter.Done(); runMetricsReporter(ctx, interval, si, wgtun, dev, cfg.MetricsFormat) }()
 		defer func() { cancel(); reporter.Wait() }()
 	}
 

@@ -1,4 +1,9 @@
-// Package config provides configuration handling for the userspace WireGuard router.
+// Package config provides the legacy router JSON/YAML configuration model.
+//
+// Deprecated: this model is retained for library consumers but does not configure
+// cmd/wgslirp. Use socket.ConfigFromEnv and wireguard.DeviceConfigFromEnv for the
+// executable's supported environment contract. See CONFIGURATION.md for migration.
+// LoadFromFile and LoadFromEnv retain their historical merge and validation behavior.
 package config
 
 import (

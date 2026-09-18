@@ -48,13 +48,7 @@ func metricsInterval(iv string) (time.Duration, error) {
 	return d, nil
 }
 
-func runMetricsReporter(ctx context.Context, d time.Duration, si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle) {
-	// format
-	format := strings.ToLower(strings.TrimSpace(os.Getenv("METRICS_FORMAT")))
-	if format == "" {
-		format = "text"
-	}
-
+func runMetricsReporter(ctx context.Context, d time.Duration, si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle, format string) {
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	for {

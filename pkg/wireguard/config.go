@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/irctrakz/wgslirp/internal/envconfig"
 	"net"
 	"os"
 	"strconv"
@@ -20,6 +21,8 @@ type PeerConfig struct {
 
 // DeviceConfig holds the WireGuard device configuration for WG-only mode.
 type DeviceConfig struct {
+	// Options nil uses defaults; startup snapshots all settings.
+	Options    *DeviceOptions
 	ListenPort int
 	PrivateKey string // base64
 	MTU        int    // plaintext MTU for wg tun
@@ -45,32 +48,41 @@ type DeviceConfig struct {
 //	WG_PEER_i_ENDPOINT (host:port)
 //	WG_PEER_i_KEEPALIVE (seconds, optional)
 func (c *DeviceConfig) LoadFromEnv() error {
-	pk := strings.TrimSpace(os.Getenv("WG_PRIVATE_KEY"))
+	next, err := DeviceConfigFromEnv(os.LookupEnv)
+	if err == nil {
+		*c = next
+	}
+	return err
+}
+
+// DeviceConfigFromEnv parses and validates without opening devices or mutating callers.
+func DeviceConfigFromEnv(lookup func(string) (string, bool)) (DeviceConfig, error) {
+	var c DeviceConfig
+	err := c.loadFromLookup(lookup)
+	return c, err
+}
+
+func (c *DeviceConfig) loadFromLookup(lookup func(string) (string, bool)) error {
+	get := func(key string) string { value, _ := lookup(key); return value }
+	options, err := DeviceOptionsFromEnv(lookup)
+	if err != nil {
+		return err
+	}
+	c.Options = &options
+	pk := strings.TrimSpace(get("WG_PRIVATE_KEY"))
 	if pk == "" {
 		return fmt.Errorf("WG_PRIVATE_KEY is required")
 	}
 	c.PrivateKey = pk
-	lp := 51820
-	if v := os.Getenv("WG_LISTEN_PORT"); v != "" {
-		x, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("WG_LISTEN_PORT must be an integer")
-		}
-		lp = x
+	r := envconfig.Reader{Lookup: lookup}
+	c.ListenPort = r.Int("WG_LISTEN_PORT", 51820, 0, 65535)
+	c.MTU = r.Int("WG_MTU", 1380, 576, 65535)
+	if r.Err != nil {
+		return r.Err
 	}
-	c.ListenPort = lp
-	mtu := 1380
-	if v := os.Getenv("WG_MTU"); v != "" {
-		x, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("WG_MTU must be an integer")
-		}
-		mtu = x
-	}
-	c.MTU = mtu
 
 	var peers []PeerConfig
-	idxs := strings.TrimSpace(os.Getenv("WG_PEERS"))
+	idxs := strings.TrimSpace(get("WG_PEERS"))
 	if idxs != "" {
 		for _, s := range strings.Split(idxs, ",") {
 			i := strings.TrimSpace(s)
@@ -78,18 +90,15 @@ func (c *DeviceConfig) LoadFromEnv() error {
 				continue
 			}
 			p := PeerConfig{}
-			p.PublicKey = strings.TrimSpace(os.Getenv("WG_PEER_" + i + "_PUBLIC_KEY"))
-			allowed := strings.TrimSpace(os.Getenv("WG_PEER_" + i + "_ALLOWED_IPS"))
+			p.PublicKey = strings.TrimSpace(get("WG_PEER_" + i + "_PUBLIC_KEY"))
+			allowed := strings.TrimSpace(get("WG_PEER_" + i + "_ALLOWED_IPS"))
 			if allowed != "" {
 				p.AllowedIPs = splitCSV(allowed)
 			}
-			p.Endpoint = strings.TrimSpace(os.Getenv("WG_PEER_" + i + "_ENDPOINT"))
-			if ka := strings.TrimSpace(os.Getenv("WG_PEER_" + i + "_KEEPALIVE")); ka != "" {
-				x, err := strconv.Atoi(ka)
-				if err != nil {
-					return fmt.Errorf("WG_PEER_%s_KEEPALIVE must be an integer", i)
-				}
-				p.PersistentKeepaliveSec = x
+			p.Endpoint = strings.TrimSpace(get("WG_PEER_" + i + "_ENDPOINT"))
+			p.PersistentKeepaliveSec = r.Int("WG_PEER_"+i+"_KEEPALIVE", 0, 0, 65535)
+			if r.Err != nil {
+				return r.Err
 			}
 			if p.PublicKey == "" {
 				return fmt.Errorf("WG_PEER_%s_PUBLIC_KEY is required", i)
@@ -104,6 +113,9 @@ func (c *DeviceConfig) LoadFromEnv() error {
 // Validate checks the complete device configuration before any device is opened.
 // Errors deliberately omit key values.
 func (c DeviceConfig) Validate() error {
+	if err := c.deviceOptions().Validate(); err != nil {
+		return err
+	}
 	key, err := base64.StdEncoding.DecodeString(c.PrivateKey)
 	if err != nil || len(key) != 32 {
 		return fmt.Errorf("WG_PRIVATE_KEY must encode 32 bytes in base64")

@@ -62,8 +62,8 @@ var _ SocketWriter = (*SocketInterface)(nil)
 
 // NewSocketInterface creates a new socket interface
 func NewSocketInterface(config Config) *SocketInterface {
-	transport := config.transportConfig()
-	config.Transport = &transport
+	_ = poolingPolicy()
+	config = config.Effective()
 	return &SocketInterface{
 		config:  config,
 		metrics: core.SocketMetrics{},

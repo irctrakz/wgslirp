@@ -82,8 +82,6 @@ services:
       
       # Sensible defaults - probably 99% of configs would use this
       - "POOLING=1"
-      - "PROCESSOR_WORKERS=8"
-      - "PROCESSOR_QUEUE_CAP=4096"
       - "WG_TUN_QUEUE_CAP=2048"
       - "TCP_ACK_DELAY_MS=5"
       - "TCP_ENABLE_SACK=1"
@@ -147,8 +145,6 @@ Get up and running quickly with these steps:
     docker run --name wgslirp \
       -p 51820:51820/udp \
       -e POOLING=1 \
-      -e PROCESSOR_WORKERS=8 \
-      -e PROCESSOR_QUEUE_CAP=4096 \
       -e WG_TUN_QUEUE_CAP=2048 \
       -e TCP_ACK_DELAY_MS=5 \
       -e TCP_ENABLE_SACK=1 \
@@ -192,7 +188,7 @@ Get up and running quickly with these steps:
 
 ## Configuration
 
-The router is configured primarily through environment variables:
+The router loads and validates one environment snapshot before startup. See the [configuration contract and migration guide](CONFIGURATION.md) for precedence, compatibility adapters and legacy JSON/YAML deprecation. Set `PRINT_CONFIG=true` for a sanitized effective-settings summary.
 
 ### WireGuard Configuration
 
@@ -200,7 +196,7 @@ The router is configured primarily through environment variables:
 |----------------------|-------------|---------|
 | `WG_PRIVATE_KEY` | Base64-encoded WireGuard private key (required) | - |
 | `WG_LISTEN_PORT` | UDP port for WireGuard to listen on | 51820 |
-| `WG_PEERS` | Comma-separated list of peer configurations | - |
+| `WG_PEERS` | Comma-separated list of peer indices (e.g., 0,1) | - |
 | `WG_OVERLAY_ROUTING` | Enable overlay routing mode (1/true/yes/on) | - |
 | `WG_OVERLAY_EXCLUDE_CIDRS` | Comma-separated CIDRs to exclude from overlay routing | - |
 
@@ -231,24 +227,24 @@ Overlay routing (optional)
 
 - `WG_OVERLAY_ROUTING`: enable overlay re-route for packets destined to AllowedIPs.
 - `WG_OVERLAY_EXCLUDE_CIDRS`: CIDRs that should always egress via slirp.
-- `WG_DISABLE_IPV6`: truthy to attempt disabling IPv6 sysctls (best effort).
+- `WG_DISABLE_IPV6`: defaults to true and attempts disabling IPv6 sysctls (best effort); set false to avoid these writes.
 
 Logging and diagnostics
 
 - `DEBUG`: enable verbose logging and disable packet copy-elision in wrappers.
 - `WG_DEBUG`: verbose wireguard-go logging (chatty).
 - `WG_PCAP`: file path to write plaintext IPv4 frames (DLT_RAW) captured by the userspace TUN.
-- `WG_PCAP_MAX_BYTES`: capture file size limit, including headers; defaults to 67108864 (64 MiB). Must be an integer of at least 24. Capture stops before a complete record would exceed the limit and stays stopped until process restart. Invalid values disable capture without touching the file. Forwarding continues when capture stops. Capture files use private permissions (0600).
+- `WG_PCAP_MAX_BYTES`: capture file size limit, including headers; defaults to 67108864 (64 MiB). Must be an integer of at least 24. Capture stops before a complete record would exceed the limit and stays stopped until process restart. Invalid values fail startup without touching the file; capture is opened at startup and cannot follow later environment changes. Forwarding continues when capture stops. Capture files use private permissions (0600).
 
 Metrics and health
 
-- `METRICS_LOG`: any non-empty value enables periodic metrics logging.
+- `METRICS_LOG`: `true` enables periodic metrics logging; `false` disables it even if an interval is set.
 - `METRICS_INTERVAL`: duration like `15s` (default `30s`).
 - `METRICS_FORMAT`: `text` (default) or `json`.
-- `HEALTHCHECK`: any non-empty value enables one-time startup probes. These log results; they are not continuous readiness monitoring. Probes have five-second operation timeouts and are canceled and joined during shutdown.
+- `HEALTHCHECK`: `true` enables one-time startup probes. These log results; they are not continuous readiness monitoring. Probes have five-second operation timeouts and are canceled and joined during shutdown.
 - `HEALTH_HTTP_URL`: URL for the host-stack HTTP probe (default `https://httpbin.org/ip`). The final response must have a 2xx status.
-- `HEALTH_DNS_NAME`: name for the host resolver probe (default `example.com`).
-- `HEALTH_DNS_IP`: IPv4 DNS server for the slirp probe (default `1.1.1.1`). Success requires a complete response from the expected server to the probe's address/port, matching transaction ID and question, successful DNS status, and an A answer for `example.com` (including CNAME chains).
+- `HEALTH_DNS_NAME`: name for both host resolver and slirp DNS probes (default `example.com`).
+- `HEALTH_DNS_IP`: IPv4 DNS server for the slirp probe (default `1.1.1.1`). Success requires a complete response from the expected server to the probe's address/port, matching transaction ID and question, successful DNS status, and an A answer for `HEALTH_DNS_NAME` (including CNAME chains).
 
 Socket lifecycle
 
@@ -258,9 +254,9 @@ Packet processing and TUN (userspace)
 
 Guest IPv4 datagrams are validated before forwarding: header and total lengths must be consistent, TCP header offsets must fit, and UDP length must match the IP payload. Bytes beyond the declared IP length are ignored as padding. Incoming fragments are rejected because guest-fragment reassembly is not implemented; configure guest MTU accordingly. This does not disable fragmentation of synthesized host-to-guest UDP replies. Malformed packets return `socket.ErrMalformedPacket`; unsupported incoming fragments return `socket.ErrUnsupportedFragment`, available through `errors.Is`.
 
-- `PROCESSOR_WORKERS`: number of workers in the socket processor (default 4).
-- `PROCESSOR_QUEUE_CAP`: processor channel capacity (default 1000).
-- `WG_TUN_QUEUE_CAP`: capacity of the WGTun outbound queue to wireguard-go (default 1024).
+- `PROCESSOR_WORKERS`: inactive in the executable; warns at startup. Library processor only: default 4, range 1-256.
+- `PROCESSOR_QUEUE_CAP`: inactive in the executable; warns at startup. Library processor only: default 1000, range 1-65536.
+- `WG_TUN_QUEUE_CAP`: capacity of the WGTun outbound queue to wireguard-go (default 1024, range 1-65536).
 - `POOLING`: enable pooled buffers (1/true/on) for lower GC when throughput is high.
 
 TCP slirp (userspace)
@@ -304,10 +300,10 @@ fallback. Booleans accept true/false, 1/0, yes/no and on/off (case-insensitive).
 | `TCP_INIT_CWND_MSS` | 0 | Positive values reduce the RFC 6928 initial window to at most this many MSS; zero uses the RFC default. |
 | `TCP_SOCK_RCVBUF` | 0 | Requested host receive-buffer bytes; zero uses OS defaults. |
 | `TCP_SOCK_SNDBUF` | 0 | Requested host send-buffer bytes; zero uses OS defaults. |
-| `TCP_WS_OUT` | 7 | Advertised TCP window scale, 0–14. |
+| `TCP_WS_OUT` | 7 | Advertised TCP window scale, 0-14. |
 | `TCP_ENABLE_SACK` | false | Legacy force-SACK option; peer-offered SACK is still honored when false. |
 | `COPY_TOS` | false | Preserve guest DSCP/ECN in supported synthesized reply paths. |
-| `IP_TTL` | 64 | Synthesized reply TTL, 1–255. |
+| `IP_TTL` | 64 | Synthesized reply TTL, 1-255. |
 
 Socket buffers now apply to both fast and asynchronous dials. The OS can clamp
 requested sizes; setter failures are logged and retain the OS behavior. Zero
@@ -320,8 +316,7 @@ changes to the caller's template or environment cannot change the interface.
 Library constructors no longer implicitly read the TCP/header variables above;
 call `socket.ConfigFromEnv(base, os.LookupEnv)` explicitly to opt into environment
 overrides and validate the result. Existing explicit MTU/MSS/pacing runtime APIs
-remain available. WireGuard/capture settings and process-wide pooling policy are
-separate configuration paths; their migration is tracked under F04 in the plan.
+remain available. WireGuard/capture settings and process-wide pooling policy also use validated startup configuration; see [CONFIGURATION.md](CONFIGURATION.md).
 
 Flow-cap migration: previously, unset flow caps were unlimited. The application and `socket.DefaultConfig()` now default to 64 TCP and 256 UDP flows. Set positive caps for larger measured workloads, or explicitly set `MAX_TCP_FLOWS=0` / `MAX_UDP_FLOWS=0` to retain unlimited flow admission. Explicit zero fields in manually constructed Go configs keep their previous meaning. Dial and buffer budgets still apply independently. See [resource-budget measurements](RESOURCE_BUDGETS.md) for the workload, rationale and limits of these defaults.
 
@@ -366,8 +361,8 @@ Notes:
 | Environment Variable | Description | Default |
 |----------------------|-------------|---------|
 | `POOLING` | Enable pooled buffers to reduce alloc/GC (1/true) | off |
-| `PROCESSOR_WORKERS` | Number of packet processor workers | 4 |
-| `PROCESSOR_QUEUE_CAP` | Processor channel capacity | 1000 |
+| `PROCESSOR_WORKERS` | Library-only workers; inactive in executable | 4 |
+| `PROCESSOR_QUEUE_CAP` | Library-only queue; inactive in executable | 1000 |
 | `WG_TUN_QUEUE_CAP` | WGTun out queue capacity toward wireguard-go | 1024 |
 | `TCP_ACK_DELAY_MS` | Delayed ACK timer (milliseconds) | 10 |
 
@@ -379,7 +374,7 @@ The router now always operates in simple mode: inline delivery, no FlowManager, 
 
 ### Metrics Reporter
 
-Enable periodic metrics logs for visibility. Text or JSON formats are supported. Set either env to any non-empty value to enable.
+Enable periodic metrics logs for visibility. Text or JSON formats are supported. Set `METRICS_LOG=true` or a positive `METRICS_INTERVAL` to enable; explicit `METRICS_LOG=false` overrides the interval.
 
 | Environment Variable | Description | Default |
 |----------------------|-------------|---------|
@@ -405,8 +400,6 @@ services:
       - "51820:51820/udp"
     environment:
       - "POOLING=1"
-      - "PROCESSOR_WORKERS=8"
-      - "PROCESSOR_QUEUE_CAP=4096"
       - "WG_TUN_QUEUE_CAP=2048"
       - "TCP_ACK_DELAY_MS=5"
       - "METRICS_INTERVAL=15s"
@@ -415,19 +408,19 @@ services:
       - "WG_PRIVATE_KEY=<base64-private-key>"
       - "WG_LISTEN_PORT=51820"
       - "WG_MTU=1380"
-      - "WG_PEERS=1"
+      - "WG_PEERS=0"
       - "WG_PEER_0_PUBLIC_KEY=<base64-peer-public>"
       - "WG_PEER_0_ALLOWED_IPS=0.0.0.0/0"
     restart: "no"
 ```
 
-These values have proven effective for highâ€‘throughput, lowâ€‘latency operation on multiâ€‘core hosts. Adjust upward/downward based on observed metrics (processor queue drops, Flow max_depth, WG queue_drops) and available memory/CPU.
+Treat these values as examples. Size the active flow and buffer limits from measurements of your workload; monitor WG queue drops and available memory/CPU.
 
 ### ICMP Privileges
 
 ICMP echo and other raw ICMP operations require raw socket privileges (e.g., `CAP_NET_RAW`). In typical container environments without this capability, the router will silently drop ICMP packets from guests (logged at debug level) to avoid disrupting TCP/UDP traffic. If ICMP is required, grant the container appropriate capabilities or run outside a restricted environment.
 
-**Note**: To disable metrics completely, ensure both `METRICS_LOG` and `METRICS_INTERVAL` are unset or empty. Setting either of these variables to any non-empty value will enable metrics reporting.
+**Note**: To disable metrics, set `METRICS_LOG=false` or leave both `METRICS_LOG` and `METRICS_INTERVAL` unset. Empty values are invalid.
 
 ## Usage Examples
 
@@ -437,8 +430,6 @@ ICMP echo and other raw ICMP operations require raw socket privileges (e.g., `CA
 docker run --name wgslirp \
   -p 51820:51820/udp \
   -e POOLING=1 \
-  -e PROCESSOR_WORKERS=8 \
-  -e PROCESSOR_QUEUE_CAP=4096 \
   -e WG_TUN_QUEUE_CAP=2048 \
   -e TCP_ACK_DELAY_MS=5 \
   -e TCP_ENABLE_SACK=1 \
@@ -466,8 +457,6 @@ services:
       - "51820:51820/udp"
     environment:
       - "POOLING=1"
-      - "PROCESSOR_WORKERS=8"
-      - "PROCESSOR_QUEUE_CAP=4096"
       - "WG_TUN_QUEUE_CAP=2048"
       - "TCP_ACK_DELAY_MS=5"
       - "TCP_ENABLE_SACK=1"
