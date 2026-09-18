@@ -1,0 +1,57 @@
+# Resource budget measurements
+
+## Scope and reproduction
+
+`TestMixedTrafficMemoryRecovery` exercises real loopback TCP/UDP echo peers through `SocketInterface.WritePacket`, the production bridges and `SocketPacketProcessor`. A bounded guest sink replaces the guest network stack. The fixture uses no forced GC, scavenging, runtime memory-limit changes or background workload after completion.
+
+Run in a resource-contained Linux environment:
+
+```sh
+go test -tags=integration -run '^TestMixedTrafficMemoryRecovery$' -v -count=1 -timeout=90s ./pkg/socket
+```
+
+The recorded environment uses Go 1.23.12, one CPU, 2 GiB memory with no swap, 128 PIDs, bounded tmpfs caches and a ten-minute outer container deadline. Test-owned listeners, accepted sockets and workers are closed/joined on both success and failure. Every remote stage also verifies removal of its dedicated container, network, `/tmp` workspace and admission lock. Machine-specific drivers and raw manifests are not repository artifacts.
+
+## Workload and acceptance checks
+
+- Small profile: 8 TCP and 32 UDP peers.
+- Capacity profile: 64 TCP and 256 UDP peers, then repeated on a new interface.
+- Pooled profile: the same capacity with buffer pooling enabled.
+- Each peer performs 66 verified 1 KiB echo exchanges: one warmup, four rounds of 16 concurrent exchanges, and one after deliberate budget exhaustion.
+- TCP peers run concurrently; at most 16 UDP requests are in flight against the shared echo socket. This bounds the fixture's burst size while retaining all 256 UDP flows. Initial unpaced testing lost a UDP response at the shared loopback peer; that run is not used as memory/default evidence.
+- Extra TCP/UDP peers must receive `ErrFlowLimit` at the configured flow caps. Deliberate shared-budget exhaustion must refuse synthesis, and every admitted peer must work again after capacity is released.
+- Live/peak reservations must stay within the configured budget. Shutdown must leave zero reservations and no registered flows.
+- Samples cover each traffic round and four post-shutdown observations from zero to three seconds. Heap, RSS, goroutine-stack storage, heap pages and natural GC counts are logged. RSS is observed, not asserted to return to its initial value within three seconds.
+
+The fixture includes allocations and sockets used by the echo peers and guest simulator. Its RSS is not an isolated router RSS measurement. It excludes encrypted WireGuard transport, WAN loss/latency, long-idle expiry and long-duration soak behavior; those remain release/workload coverage under F10. Existing focused tests cover per-flow backpressure, pending-dial admission, queue rejection and ownership release.
+
+## Default selection
+
+The application and `socket.DefaultConfig()` now select **64 TCP / 256 UDP active flows**. These counts match the tested capacity profile rather than extrapolating to unlimited admission. They are conservative starting limits, not a universal performance optimum.
+
+The **64 MiB shared buffer budget** is retained: preliminary unpooled capacity runs peaked around **18.1 MiB** in normal traffic, leaving more than three times that observed storage available for larger bursts, retransmission and queue overlap. UDP reader storage alone consumes roughly 16 MiB at 256 flows. The deliberate overload step fills the shared budget; its peak must be distinguished from normal traffic samples.
+
+The existing **64 pending dials**, **64 KiB pending payload per TCP flow**, **1 MiB retransmission payload per TCP flow**, and **960 KiB global idle pool ceiling** remain unchanged. Focused saturation tests establish their enforcement. This workload supports retaining the aggregate headroom; it does not establish optimal per-flow windows or dial latency under slow remote hosts. Per-flow maxima cannot all be filled simultaneously: the aggregate budget remains the final admission boundary.
+
+Unset flow-cap settings previously admitted unlimited flows. Explicit `MAX_TCP_FLOWS=0` and `MAX_UDP_FLOWS=0` retain that compatibility option; positive values override the measured defaults. Explicit zero fields in hand-built Go configs remain unlimited. Buffer/dial zero values continue selecting finite defaults. Environment parsing tests cover unset, explicit unlimited and explicit finite configurations.
+
+## Natural memory recovery
+
+Final normal-traffic samples on 2026-09-18:
+
+| Profile | Peak accounted bytes before overload | Maximum sampled traffic RSS (KiB) | RSS at 3 seconds idle (KiB) | Natural GC cycles | Reservations after teardown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 8 TCP / 32 UDP | 2,366,336 | 14,452 | 13,396 | 8 | 0 |
+| 64 TCP / 256 UDP | 18,976,656 | 57,316 | 54,284 | 14 | 0 |
+| Capacity repeated | 19,012,016 | 64,448 | 57,988 | 11 | 0 |
+| Capacity with pooling | 19,038,464 | 66,888 | 62,852 | 11 | 0 |
+
+All profiles passed flow-cap rejection, post-exhaustion payload recovery and empty flow-registry checks. The suite's container peak, including compilation and dependency caches, was 430,587,904 bytes (410.64 MiB), with zero memory/PID-limit events. Container/network/workspace/lock cleanup was independently verified. Race-instrumented measurements are checked separately for correctness and are not used for these memory/default figures.
+
+The initial successful unpooled capacity run recorded normal reservation peaks of 18,955,776 bytes; the repeat reached 18,998,184 bytes. Both returned to zero after teardown. During the first capacity run, sampled RSS reached 60,484 KiB and declined to 46,460 KiB after three seconds idle. The repeat reached 62,728 KiB and ended near 62,304 KiB. No forced collection was used; respectively 14 and 11 natural GC cycles occurred during the profiles.
+
+This demonstrates reservation recovery and bounded storage under the measured traffic, but not immediate RSS return to a cold baseline. Go may retain heap pages and stacks after application ownership ends. Operational memory limits must allow for that caching and for kernel socket memory; do not equate `socket_buffer_bytes == 0` with zero process memory.
+
+## Validation
+
+Build, vet, the complete tagged integration suite (including unit/default-migration regressions) and tagged integration-race passed on 2026-09-18. Integration-race completed in 74.79 seconds including compilation; peak cgroup memory was 845,574,144 bytes (806.40 MiB). The 2 GiB/no-swap, one-CPU, 128-PID limits were unchanged. Every stage recorded zero memory/PID-limit events, independent zero-owned-residue checks and restored pause guards. No test process was left running. The workload evidence is for the documented finite profiles, not a production RSS guarantee.

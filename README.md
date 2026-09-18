@@ -272,14 +272,16 @@ Resource controls are parsed once before socket startup. Invalid, empty, negativ
 | `TCP_FLOW_LIFETIME_SEC` | 120 | Idle TCP lifetime; zero uses the default. |
 | `UDP_FLOW_LIFETIME_SEC` | 60 | Idle UDP lifetime; zero uses the default. |
 | `TCP_REASSEMBLY_CAP_BYTES` | 131072 | Out-of-order storage threshold per TCP flow; zero uses the default. |
-| `MAX_TCP_FLOWS` | 0 | Maximum registered TCP flows; zero is unlimited. |
-| `MAX_UDP_FLOWS` | 0 | Maximum registered UDP flows; zero is unlimited. |
+| `MAX_TCP_FLOWS` | 64 | Maximum registered TCP flows; explicit zero is unlimited. |
+| `MAX_UDP_FLOWS` | 256 | Maximum registered UDP flows; explicit zero is unlimited. |
 | `MAX_PENDING_TCP_DIALS` | 64 | Concurrent fast/async TCP dial attempts; one reservation spans fallback. |
 | `SOCKET_BUFFER_CAP_BYTES` | 67108864 | Shared TCP/UDP and downstream queue buffer budget (64 MiB). |
 | `TCP_PEND_CAP_BYTES` | 65536 | Per-flow TCP data accepted before host connection completes. |
 | `TCP_RETRANSMIT_CAP_BYTES` | 1048576 | Per-flow unacknowledged TCP payload storage (1 MiB). |
 
 `TCP_ACK_DELAY_MS` defaults to 10; zero requests immediate ACK scheduling. Go callers should use `socket.DefaultConfig()` for defaults and set fields explicitly. The TCP bridge honors these typed fields; it no longer reads `TCP_ACK_DELAY_MS` or `TCP_PEND_CAP_BYTES` directly from the environment. Expiry is checked periodically, so removal can occur after the configured idle lifetime.
+
+Flow-cap migration: previously, unset flow caps were unlimited. The application and `socket.DefaultConfig()` now default to 64 TCP and 256 UDP flows. Set positive caps for larger measured workloads, or explicitly set `MAX_TCP_FLOWS=0` / `MAX_UDP_FLOWS=0` to retain unlimited flow admission. Explicit zero fields in manually constructed Go configs keep their previous meaning. Dial and buffer budgets still apply independently. See [resource-budget measurements](RESOURCE_BUDGETS.md) for the workload, rationale and limits of these defaults.
 
 The four new dial/buffer controls use their finite defaults when zero; zero never disables these limits. In particular, `TCP_PEND_CAP_BYTES=0` now means 64 KiB rather than unlimited buffering. Defaults are provisional safety limits; representative workload sizing remains tracked in the architecture plan.
 
@@ -291,7 +293,7 @@ Synthesized packets carry their reservation through downstream ownership; accept
 
 With `POOLING=1`, live synthesized buffers are charged at their full pool-class capacity. Idle buffers have a separate fixed process-wide ceiling of 960 KiB (32 buffers each of 2, 4, 8 and 16 KiB); excess returns are discarded and reused buffers are cleared before synthesis. Production synthesis always uses releasable packets, independent of `POOL_WRAP`; that legacy flag still controls the public `WrapPacket` helper. Custom consumers that previously relied on garbage collection must release accepted pooled packets to return their reservations.
 
-Existing constructors remain compatible. Custom writers can implement `socket.PacketBufferReserver` to supply a shared budget; otherwise each adapter receives its own finite 64 MiB budget. Accounted live packet storage is bounded by each shared budget, plus the fixed idle-pool allowance across the process. This is not a process RSS ceiling: kernel buffers, Go allocator/GC overhead, goroutine/flow metadata, caller-owned inputs, custom implementation storage and allocations made by external users of compatibility helpers remain outside it. Controlled saturation/recovery tests supplement reservation checks; representative workload measurements and natural RSS recovery remain F03 work.
+Existing constructors remain compatible. Custom writers can implement `socket.PacketBufferReserver` to supply a shared budget; otherwise each adapter receives its own finite 64 MiB budget. Accounted live packet storage is bounded by each shared budget, plus the fixed idle-pool allowance across the process. This is not a process RSS ceiling: kernel buffers, Go allocator/GC overhead, goroutine/flow metadata, caller-owned inputs, custom implementation storage and allocations made by external users of compatibility helpers remain outside it. Mixed loopback TCP/UDP workload measurements supplement reservation checks: reservations return to zero, while natural heap/RSS recovery varies with allocator caching. These short runs are not a long-duration or encrypted WireGuard throughput benchmark.
 
 When dial admission is exhausted, new attempts receive RST and `socket.ErrDialLimit`. A new UDP flow without buffer capacity returns `socket.ErrBufferLimit` before sending its payload. TCP pending/reassembly rejection does not acknowledge unaccepted data, allowing retransmission. The per-flow retransmission cap pauses host reads until ACK progress; aggregate exhaustion while queuing a server reply resets only that flow. Active-flow admission remains `socket.ErrFlowLimit`. Errors can be checked with `errors.Is`.
 
