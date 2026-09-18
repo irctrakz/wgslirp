@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +38,7 @@ import (
 // retransmission rather than protocol-specific tweaks.
 
 type tcpBridge struct {
+	tuning        TransportConfig
 	dialSlots     *resourceBudget
 	buffers       *resourceBudget
 	retransmitCap int
@@ -269,76 +267,17 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 		}
 		b.maxFlows = cfg.MaxTCPFlows
 	}
-	// ACK-idle gate threshold (ms); 0 disables
-	if v := strings.TrimSpace(os.Getenv("TCP_ACK_IDLE_GATE_MS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			b.ackIdleGate = time.Duration(n) * time.Millisecond
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("TCP_ACK_IDLE_MIN_INFLIGHT")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			b.ackIdleMinInflight = n
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("TCP_ACK_IDLE_FAIL_SEC")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			b.ackIdleFail = time.Duration(n) * time.Second
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("TCP_ACK_TRACE")); v == "1" || strings.ToLower(v) == "true" {
-		b.ackTrace = true
-	}
-	// MSS clamp (bytes)
-	if v := strings.TrimSpace(os.Getenv("TCP_MSS_CLAMP")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			b.mssClamp.Store(int64(n))
-		}
-	}
-	// Segment pacing (microseconds)
-	if v := strings.TrimSpace(os.Getenv("TCP_PACE_US")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			b.paceUS.Store(int64(n))
-		}
-	}
-	// Clean mode removed (EMERGENCY_DISABLED no longer used)
-	// Configure error signaling policy
-	es := strings.ToLower(strings.TrimSpace(os.Getenv("TCP_ERROR_SIGNAL")))
-	switch es {
-	case "", "icmp":
-		b.errorSignal = "icmp"
-	case "rst":
-		b.errorSignal = "rst"
-	case "none":
-		b.errorSignal = "none"
-	default:
-		b.errorSignal = "icmp"
-	}
-
-	// Optional handshake log toggle
-	if v := strings.TrimSpace(os.Getenv("TCP_LOG_HANDSHAKE")); v != "" {
-		vv := strings.ToLower(v)
-		if vv == "1" || vv == "true" || vv == "on" || vv == "yes" {
-			b.logHandshake = true
-		}
-	}
-
-	// Send-gated logging controls
-	// TCP_GATE_LOG values:
-	//   off/0/false -> disable send-gated logs
-	//   debug       -> log at debug level
-	//   info/1/true -> log at info (default)
-	if v := strings.ToLower(strings.TrimSpace(os.Getenv("TCP_GATE_LOG"))); v != "" {
-		switch v {
-		case "off", "0", "false", "no":
-			b.gateLogDisabled = true
-		case "debug":
-			b.gateLogDebug = true
-		case "info", "1", "true", "yes":
-			// default; keep info
-		default:
-			// unknown -> default
-		}
-	}
+	b.tuning = parent.config.transportConfig()
+	b.ackIdleGate = time.Duration(b.tuning.AckIdleGateMs) * time.Millisecond
+	b.ackIdleMinInflight = b.tuning.AckIdleMinInflight
+	b.ackIdleFail = time.Duration(b.tuning.AckIdleFailSec) * time.Second
+	b.ackTrace = b.tuning.AckTrace
+	b.mssClamp.Store(int64(b.tuning.MSSClamp))
+	b.paceUS.Store(int64(b.tuning.PaceUS))
+	b.errorSignal = b.tuning.ErrorSignal
+	b.logHandshake = b.tuning.LogHandshake
+	b.gateLogDisabled = b.tuning.GateLog == "off"
+	b.gateLogDebug = b.tuning.GateLog == "debug"
 
 	// Log the creation of the TCP bridge
 	logging.Infof("Creating TCP bridge: lifetime=%v, ackDelay=%v, reasmCap=%d, errSignal=%s",
@@ -547,17 +486,13 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		var preConn *net.TCPConn
 		{
 			raddr := &net.TCPAddr{IP: net.IP(dstIP[:]), Port: int(dstPort)}
-			fastT := 5 * time.Millisecond
-			if v := strings.TrimSpace(os.Getenv("TCP_FAST_DIAL_MS")); v != "" {
-				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-					fastT = time.Duration(n) * time.Millisecond
-				}
-			}
+			fastT := time.Duration(b.tuning.FastDialMs) * time.Millisecond
 			if fastT <= 0 {
 				fastT = time.Millisecond
 			}
 			if c, err := b.dial(dialCtx, raddr.String(), fastT); err == nil {
 				preConn = c
+				b.configureHostSocket(c)
 				releaseDial()
 			} else {
 				if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
@@ -671,15 +606,9 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		}
 		candidate.touch()
 		candidate.lastAckTime = time.Now()
-		// Congestion control initialization (default enable NewReno; disable with TCP_CC=off)
-		if algo := strings.TrimSpace(os.Getenv("TCP_CC")); strings.ToLower(algo) == "off" {
-			// disabled
-		} else {
-			if algo == "" {
-				algo = "newreno"
-			}
+		if b.tuning.CongestionControl != "off" {
 			candidate.ccEnabled = true
-			candidate.cc = newCongestionControl(algo, candidate.mss)
+			candidate.cc = newNewReno(candidate.mss, b.tuning.InitialCwndMSS)
 		}
 		// Insert under write lock with double-check
 		candidate.stateMu.Lock()
@@ -769,20 +698,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 						b.removeFlowLocked(f)
 						return
 					}
-					// Configure socket options
-					_ = conn.SetNoDelay(true)
-					_ = conn.SetKeepAlive(true)
-					_ = conn.SetKeepAlivePeriod(30 * time.Second)
-					if v := strings.TrimSpace(os.Getenv("TCP_SOCK_RCVBUF")); v != "" {
-						if n, err := strconv.Atoi(v); err == nil && n > 0 {
-							_ = conn.SetReadBuffer(n)
-						}
-					}
-					if v := strings.TrimSpace(os.Getenv("TCP_SOCK_SNDBUF")); v != "" {
-						if n, err := strconv.Atoi(v); err == nil && n > 0 {
-							_ = conn.SetWriteBuffer(n)
-						}
-					}
+					b.configureHostSocket(conn)
 					f.stateMu.Lock()
 					defer f.stateMu.Unlock()
 					if f.closed {
@@ -820,15 +736,10 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 						}
 						synOpts := make([]byte, 0, 8)
 						synOpts = append(synOpts, 2, 4, byte(mss>>8), byte(mss))
-						wsOut := uint8(7)
-						if v := strings.TrimSpace(os.Getenv("TCP_WS_OUT")); v != "" {
-							if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 14 {
-								wsOut = uint8(n)
-							}
-						}
+						wsOut := uint8(b.tuning.WindowScale)
 						f.wsOut = wsOut
 						synOpts = append(synOpts, 3, 3, byte(wsOut))
-						if f.sackPermitted || strings.TrimSpace(os.Getenv("TCP_ENABLE_SACK")) == "1" {
+						if f.sackPermitted || b.tuning.EnableSACK {
 							synOpts = append(synOpts, 4, 2)
 						}
 						if !f.synAckSent {
@@ -878,15 +789,10 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 				}
 				synOpts := make([]byte, 0, 8)
 				synOpts = append(synOpts, 2, 4, byte(mss>>8), byte(mss))
-				wsOut := uint8(7)
-				if v := strings.TrimSpace(os.Getenv("TCP_WS_OUT")); v != "" {
-					if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 14 {
-						wsOut = uint8(n)
-					}
-				}
+				wsOut := uint8(b.tuning.WindowScale)
 				flow.wsOut = wsOut
 				synOpts = append(synOpts, 3, 3, byte(wsOut))
-				if flow.sackPermitted || strings.TrimSpace(os.Getenv("TCP_ENABLE_SACK")) == "1" {
+				if flow.sackPermitted || b.tuning.EnableSACK {
 					synOpts = append(synOpts, 4, 2)
 				}
 				synAck := b.buildIPv4TCPOpts(dstIP, srcIP, dstPort, srcPort, serverISN, seq+1, fSYN|fACK, nil, synOpts)
@@ -1060,7 +966,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 					flow.key, class, ack, flow.sndUna, flow.serverNxt, flow.advWnd, flow.wsIn, len(flow.txQueue))
 			}
 			// Parse SACK blocks if any and SACK permitted
-			if flow.sackPermitted || strings.TrimSpace(os.Getenv("TCP_ENABLE_SACK")) == "1" {
+			if flow.sackPermitted || b.tuning.EnableSACK {
 				if dataOff > 20 {
 					opts := pkt[tcpOff+20 : tcpOff+dataOff]
 					parseSACKBlocks(flow, opts)
@@ -1715,4 +1621,22 @@ func (b *tcpBridge) getMaxRetries(f *tcpFlow) int {
 		}
 	}
 	return maxRetries
+}
+
+// configureHostSocket applies the same policy to fast and asynchronous dials.
+// Kernels may clamp buffer sizes; failures retain OS defaults and are observable.
+func (b *tcpBridge) configureHostSocket(conn *net.TCPConn) {
+	_ = conn.SetNoDelay(true)
+	_ = conn.SetKeepAlive(true)
+	_ = conn.SetKeepAlivePeriod(30 * time.Second)
+	if n := b.tuning.SocketReceiveBuffer; n > 0 {
+		if err := conn.SetReadBuffer(n); err != nil {
+			logging.Warnf("TCP receive buffer: %v", err)
+		}
+	}
+	if n := b.tuning.SocketSendBuffer; n > 0 {
+		if err := conn.SetWriteBuffer(n); err != nil {
+			logging.Warnf("TCP send buffer: %v", err)
+		}
+	}
 }

@@ -281,6 +281,48 @@ Resource controls are parsed once before socket startup. Invalid, empty, negativ
 
 `TCP_ACK_DELAY_MS` defaults to 10; zero requests immediate ACK scheduling. Go callers should use `socket.DefaultConfig()` for defaults and set fields explicitly. The TCP bridge honors these typed fields; it no longer reads `TCP_ACK_DELAY_MS` or `TCP_PEND_CAP_BYTES` directly from the environment. Expiry is checked periodically, so removal can occur after the configured idle lifetime.
 
+#### TCP and packet-header configuration
+
+The executable parses the following controls once before creating network resources.
+Explicit environment values override `socket.DefaultConfig()`; invalid or empty
+values now stop startup with the setting name instead of silently selecting a
+fallback. Booleans accept true/false, 1/0, yes/no and on/off (case-insensitive).
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| `TCP_ACK_IDLE_GATE_MS` | 6000 | Gate host reads after this long without ACK progress; zero disables. |
+| `TCP_ACK_IDLE_MIN_INFLIGHT` | 0 | Minimum bytes in flight for gating; zero uses one MSS. |
+| `TCP_ACK_IDLE_FAIL_SEC` | 120 | Reset an ACK-stalled flow after this interval; zero disables this check. |
+| `TCP_ACK_TRACE` | false | Log ACK classification. |
+| `TCP_MSS_CLAMP` | 0 | Advertised/segmentation MSS ceiling, up to 65535; zero leaves peer/MTU limits. |
+| `TCP_PACE_US` | 0 | Inter-segment pacing in microseconds; zero disables. |
+| `TCP_ERROR_SIGNAL` | icmp | Dial-failure signaling: `icmp`, `rst`, or `none`. |
+| `TCP_LOG_HANDSHAKE` | false | Log SYN-ACK MSS decisions. |
+| `TCP_GATE_LOG` | info | Send-gate log level: `info`, `debug`, `off`; true/false aliases remain accepted. |
+| `TCP_FAST_DIAL_MS` | 5 | Preliminary dial deadline; zero retains the historical 1 ms minimum. Async fallback remains bounded to 5 seconds. |
+| `TCP_CC` | newreno | Congestion control: `newreno` (`reno`/`new-reno` aliases) or `off`. |
+| `TCP_INIT_CWND_MSS` | 0 | Positive values reduce the RFC 6928 initial window to at most this many MSS; zero uses the RFC default. |
+| `TCP_SOCK_RCVBUF` | 0 | Requested host receive-buffer bytes; zero uses OS defaults. |
+| `TCP_SOCK_SNDBUF` | 0 | Requested host send-buffer bytes; zero uses OS defaults. |
+| `TCP_WS_OUT` | 7 | Advertised TCP window scale, 0–14. |
+| `TCP_ENABLE_SACK` | false | Legacy force-SACK option; peer-offered SACK is still honored when false. |
+| `COPY_TOS` | false | Preserve guest DSCP/ECN in supported synthesized reply paths. |
+| `IP_TTL` | 64 | Synthesized reply TTL, 1–255. |
+
+Socket buffers now apply to both fast and asynchronous dials. The OS can clamp
+requested sizes; setter failures are logged and retain the OS behavior. Zero
+ACK-idle failure now explicitly disables that check; the separate connection
+health monitor and flow expiry still apply. Invalid TTLs no longer silently use 64.
+
+Go callers configure `Config.Transport` using `DefaultTransportConfig()` (a nil
+pointer retains defaults). `NewSocketInterface` copies this value, so later
+changes to the caller's template or environment cannot change the interface.
+Library constructors no longer implicitly read the TCP/header variables above;
+call `socket.ConfigFromEnv(base, os.LookupEnv)` explicitly to opt into environment
+overrides and validate the result. Existing explicit MTU/MSS/pacing runtime APIs
+remain available. WireGuard/capture settings and process-wide pooling policy are
+separate configuration paths; their migration is tracked under F04 in the plan.
+
 Flow-cap migration: previously, unset flow caps were unlimited. The application and `socket.DefaultConfig()` now default to 64 TCP and 256 UDP flows. Set positive caps for larger measured workloads, or explicitly set `MAX_TCP_FLOWS=0` / `MAX_UDP_FLOWS=0` to retain unlimited flow admission. Explicit zero fields in manually constructed Go configs keep their previous meaning. Dial and buffer budgets still apply independently. See [resource-budget measurements](RESOURCE_BUDGETS.md) for the workload, rationale and limits of these defaults.
 
 The four new dial/buffer controls use their finite defaults when zero; zero never disables these limits. In particular, `TCP_PEND_CAP_BYTES=0` now means 64 KiB rather than unlimited buffering. Defaults are provisional safety limits; representative workload sizing remains tracked in the architecture plan.

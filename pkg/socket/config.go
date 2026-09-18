@@ -32,11 +32,15 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%s must be nonnegative and fit its runtime representation", setting.name)
 		}
 	}
-	return nil
+	return c.transportConfig().Validate()
 }
 
 // Config contains configuration for the socket interface
 type Config struct {
+	// Transport is optional for source compatibility; nil uses transport defaults.
+	// NewSocketInterface copies the pointed-to value.
+	Transport *TransportConfig
+
 	// IP address for the socket interface
 	IPAddress string
 
@@ -77,7 +81,9 @@ type Config struct {
 
 // DefaultConfig returns the default configuration for the socket interface
 func DefaultConfig() Config {
+	transport := DefaultTransportConfig()
 	return Config{
+		Transport:             &transport,
 		IPAddress:             "0.0.0.0",
 		MTU:                   1500,
 		Debug:                 false,

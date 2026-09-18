@@ -3,13 +3,10 @@ package socket
 import (
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"strconv"
 
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/logging"
@@ -65,6 +62,8 @@ var _ SocketWriter = (*SocketInterface)(nil)
 
 // NewSocketInterface creates a new socket interface
 func NewSocketInterface(config Config) *SocketInterface {
+	transport := config.transportConfig()
+	config.Transport = &transport
 	return &SocketInterface{
 		config:  config,
 		metrics: core.SocketMetrics{},
@@ -149,18 +148,8 @@ func (s *SocketInterface) Start() error {
 	logging.Infof("Simple mode active: bypassing FlowManager and egress limiter; inline delivery to processor")
 
 	// Initialize UDP/TCP slirp bridges
-	// Header synthesis policy from env
-	// COPY_TOS: default 0 (do not copy DSCP/ECN); set to 1 to preserve
-	if v := strings.ToLower(strings.TrimSpace(os.Getenv("COPY_TOS"))); v == "1" || v == "true" || v == "yes" || v == "on" {
-		s.tosCopy = true
-	}
-	// IP_TTL: default 64; set <=0 to use default 64
-	s.ttlOverride = 64
-	if v := strings.TrimSpace(os.Getenv("IP_TTL")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 255 {
-			s.ttlOverride = n
-		}
-	}
+	s.tosCopy = s.config.Transport.CopyTOS
+	s.ttlOverride = s.config.Transport.TTL
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
 	s.icmp = newICMPBridge(s)
