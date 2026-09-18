@@ -363,6 +363,22 @@ Committed locally in `c7686b2`. Linux Go 1.23.12 verification passed before the 
 
 ### PR 4.3 — Decompose TCP by responsibility
 
+**Structural extraction sequence (2026-09-18):** tracked independently from F10
+release/workload gates. Each boundary is a separate local commit; no upstream
+push. Ownership and benchmark scope are recorded in
+[pkg/socket/TCP_ARCHITECTURE.md](pkg/socket/TCP_ARCHITECTURE.md).
+
+- [x] Connection establishment and pending-write flushing. Tagged integration/race passed; peak 815,554,560 bytes, zero resource-limit events and independently verified cleanup. Existing duplicate-dial, pending FIN, cancellation and admission regressions passed.
+- [ ] Registry/admission, lifecycle and expiry.
+- [ ] Incoming segment dispatch and reassembly.
+- [ ] ACK/window handling and recovery.
+- [ ] Diagnostics and snapshot formatting.
+
+Full PR 4.3 performance acceptance remains separate: the bounded ACK benchmark
+is only an initial latency/allocation gate, not forwarding throughput or dial/load
+validation. PR 4.2 shared encoding and PR 4.4 dead-code cleanup remain separate.
+
+
 Extract one boundary per PR, preserving protocol behavior:
 
 1. Host connection establishment and pending-write flushing.

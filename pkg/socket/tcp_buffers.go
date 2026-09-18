@@ -1,21 +1,8 @@
 package socket
 
 import (
-	"context"
-	"net"
 	"sync/atomic"
-	"time"
 )
-
-func dialTCP(ctx context.Context, address string, timeout time.Duration) (*net.TCPConn, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
-	if err != nil {
-		return nil, err
-	}
-	return conn.(*net.TCPConn), nil
-}
 
 // Caller holds stateMu. Exhaustion resets only this flow; no acknowledged
 // bytes are silently discarded and unrelated flows keep their reservations.
