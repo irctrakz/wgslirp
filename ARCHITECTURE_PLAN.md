@@ -370,7 +370,7 @@ push. Ownership and benchmark scope are recorded in
 
 - [x] Connection establishment and pending-write flushing. Tagged integration/race passed; peak 815,554,560 bytes, zero resource-limit events and independently verified cleanup. Existing duplicate-dial, pending FIN, cancellation and admission regressions passed.
 - [x] Registry/admission, lifecycle and expiry. Candidate publication now has an explicit state-lock contract; tagged integration/race passed, peak 801,849,344 bytes, zero resource-limit events and independent cleanup verification.
-- [ ] Incoming segment dispatch and reassembly.
+- [x] Incoming segment dispatch and reassembly. Validated borrowed segment views and locked payload/FIN processing are explicit; existing reassembly stays in `tcp_buffers.go`. Tagged integration/race passed, peak 829,521,920 bytes, zero resource-limit events and independent cleanup verification.
 - [ ] ACK/window handling and recovery.
 - [ ] Diagnostics and snapshot formatting.
 
