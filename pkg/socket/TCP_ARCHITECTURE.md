@@ -10,7 +10,8 @@ privileges or runtime configuration.
 2. Registry, admission, expiry and shutdown (`tcp_registry.go`).
 3. Validated incoming segments (`tcp_segment.go`), state dispatch and payload/FIN
    handling (`tcp_receive.go`), with bounded reassembly in `tcp_buffers.go`.
-4. ACK/window handling and retransmission/recovery.
+4. ACK/window handling and delayed ACK scheduling (`tcp_ack.go`), plus SACK
+   and RTO recovery (`tcp_recovery.go`). Reader/segmentation stay in `tcp_runtime.go`.
 5. Diagnostic snapshots and formatting.
 
 Each boundary is a separate local commit, with the tagged integration/race suite

@@ -371,7 +371,7 @@ push. Ownership and benchmark scope are recorded in
 - [x] Connection establishment and pending-write flushing. Tagged integration/race passed; peak 815,554,560 bytes, zero resource-limit events and independently verified cleanup. Existing duplicate-dial, pending FIN, cancellation and admission regressions passed.
 - [x] Registry/admission, lifecycle and expiry. Candidate publication now has an explicit state-lock contract; tagged integration/race passed, peak 801,849,344 bytes, zero resource-limit events and independent cleanup verification.
 - [x] Incoming segment dispatch and reassembly. Validated borrowed segment views and locked payload/FIN processing are explicit; existing reassembly stays in `tcp_buffers.go`. Tagged integration/race passed, peak 829,521,920 bytes, zero resource-limit events and independent cleanup verification.
-- [ ] ACK/window handling and recovery.
+- [x] ACK/window handling and recovery. Locked ACK processing and delayed ACK scheduling live in `tcp_ack.go`; SACK/hole/RTO recovery lives in `tcp_recovery.go`, preserving state-before-transmit/SACK locking. Tagged integration/race passed, peak 799,698,944 bytes, zero resource-limit events and independent cleanup verification.
 - [ ] Diagnostics and snapshot formatting.
 
 Full PR 4.3 performance acceptance remains separate: the bounded ACK benchmark

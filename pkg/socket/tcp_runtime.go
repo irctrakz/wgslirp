@@ -2,7 +2,6 @@ package socket
 
 import (
 	"errors"
-	"github.com/irctrakz/wgslirp/pkg/core"
 	"io"
 	"net"
 	"sync/atomic"
@@ -205,61 +204,4 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 		}
 	}
 	return true
-}
-
-func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
-	timer := time.NewTicker(50 * time.Millisecond)
-	defer timer.Stop()
-	for {
-		select {
-		case <-b.stopCh:
-			return
-		case <-f.rtoStop:
-			return
-		case <-timer.C:
-		}
-		f.stateMu.Lock()
-		if f.closed {
-			f.stateMu.Unlock()
-			return
-		}
-		now := time.Now()
-		finRetransmit := b.closeTickLocked(f, now)
-		if f.closed {
-			f.stateMu.Unlock()
-			return
-		}
-		f.txMu.Lock()
-		var packet core.Packet
-		for i := range f.txQueue {
-			seg := &f.txQueue[i]
-			if !seqAfter(seg.seq+uint32(len(seg.data)), f.sndUna) || isSACKed(f, seg.seq, seg.seq+uint32(len(seg.data))) {
-				continue
-			}
-			if !seg.sentAt.IsZero() && now.Sub(seg.sentAt) < f.rto {
-				continue
-			}
-			seg.sentAt = now
-			seg.retries++
-			seg.rtx = true
-			f.rto = minDur(2*f.rto, 2*time.Second)
-			tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
-			packet = b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seg.seq, f.clientNxt, 0x18, seg.data, tos, ttl)
-			break
-		}
-		f.txMu.Unlock()
-		if packet != nil {
-			_ = b.sendToGuest(f, packet)
-			if f.ccEnabled && f.cc != nil {
-				f.cc.OnLoss(true)
-			}
-			atomic.AddUint64(&b.rtoCount, 1)
-		}
-		f.stateMu.Unlock()
-		// Diagnostics take snapshots of multiple flows, so run them only
-		// after releasing this flow's state lock.
-		if packet != nil || finRetransmit {
-			b.trackRTOFlow(f)
-		}
-	}
 }
