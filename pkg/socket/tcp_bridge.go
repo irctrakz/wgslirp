@@ -128,6 +128,7 @@ const (
 )
 
 type tcpFlow struct {
+	retransmitBlocked bool // stateMu; counts transitions, not polling iterations
 	// stateMu owns connection attachment, sequence/window state, timers and
 	// flow accounting. Never acquire it while holding the bridge registry lock.
 	// The existing buffer locks may only be nested inside stateMu.
@@ -460,6 +461,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			cur := len(b.flows)
 			b.mu.RUnlock()
 			if cur >= b.maxFlows {
+				b.parent.admission.tcpFlows.Add(1)
 				rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
 				if rst != nil {
 					_ = deliverPacket(b.parent.processor, rst)
@@ -469,6 +471,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		}
 		// One reservation spans fast dialing and asynchronous fallback.
 		if !b.dialSlots.acquire(1) {
+			b.parent.admission.pendingDials.Add(1)
 			if b.parent.processor != nil {
 				_ = deliverPacket(b.parent.processor, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
 			}
@@ -634,6 +637,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			// Dialing happens outside the registry lock. Recheck admission here
 			// so concurrent candidates cannot exceed the configured active cap.
 			if b.maxFlows > 0 && len(b.flows) >= b.maxFlows {
+				b.parent.admission.tcpFlows.Add(1)
 				b.mu.Unlock()
 				candidate.stateMu.Unlock()
 				if preConn != nil {
@@ -1025,7 +1029,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			// If not yet connected, enqueue into bounded pending buffer and ACK
 			if flow.conn == nil {
 				flow.pendMu.Lock()
-				if len(payload) <= flow.pendCap-flow.pendingBytes && b.buffers.acquire(bufferCharge(len(payload))) {
+				if b.reservePending(flow, len(payload)) {
 					cp := make([]byte, len(payload))
 					copy(cp, payload)
 					flow.pending = append(flow.pending, cp)

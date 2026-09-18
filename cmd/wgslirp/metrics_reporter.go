@@ -19,6 +19,7 @@ import (
 )
 
 type metricsSnapshot struct {
+	Admission map[string]uint64 `json:"admission"`
 	Timestamp string            `json:"ts"`
 	Total     map[string]uint64 `json:"total"`
 	TCP       map[string]uint64 `json:"tcp"`
@@ -132,6 +133,7 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 			m["rto_delta"] = rtoDelta
 			return m
 		}(),
+		Admission: dm.Admission,
 		TCPActive: dm.TCP.ActiveFlows,
 		UDPActive: dm.UDP.ActiveFlows,
 		WG: map[string]uint64{
@@ -177,6 +179,7 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 		b, _ := json.Marshal(snap)
 		logging.Infof("metrics: %s", string(b))
 	default:
+		logging.Infof("admission: %s", admissionText(snap.Admission))
 		qfd := uint64(0)
 		if v, ok := snap.Proc["queueFullDrops"]; ok {
 			qfd = v
@@ -462,4 +465,10 @@ func countLines(path string) (uint64, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// Fixed order and names make the text form usable without per-peer cardinality.
+func admissionText(m map[string]uint64) string {
+	return fmt.Sprintf("tcp_flow_limit=%d udp_flow_limit=%d pending_dial_limit=%d tcp_pending_limit=%d tcp_reassembly_limit=%d aggregate_buffer_limit=%d invalid_buffer_request=%d tcp_retransmit_waits=%d",
+		m["tcp_flow_limit"], m["udp_flow_limit"], m["pending_dial_limit"], m["tcp_pending_limit"], m["tcp_reassembly_limit"], m["aggregate_buffer_limit"], m["invalid_buffer_request"], m["tcp_retransmit_waits"])
 }

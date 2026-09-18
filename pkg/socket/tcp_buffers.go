@@ -58,7 +58,14 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 		right++
 	}
 	size := int(end - start)
-	if size > b.reasmCap-(f.futureBytes-oldBytes) || !b.buffers.acquire(bufferCharge(size)) {
+	if size > b.reasmCap-(f.futureBytes-oldBytes) {
+		if b.parent != nil {
+			b.parent.admission.reassemblyBytes.Add(1)
+		}
+		b.bufferDrops.Add(1)
+		return false
+	}
+	if !b.buffers.acquire(bufferCharge(size)) {
 		b.bufferDrops.Add(1)
 		return false
 	}

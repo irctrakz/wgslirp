@@ -382,6 +382,8 @@ Enable periodic metrics logs for visibility. Text or JSON formats are supported.
 | `METRICS_INTERVAL` | Interval for metrics reporting (e.g., `15s`) | 30s |
 | `METRICS_FORMAT` | `text` or `json` | text |
 
+Admission-failure counters are available in the JSON `admission` object and a text `admission:` line. See [counter definitions and troubleshooting](OBSERVABILITY.md) for counting units, protocol behavior and legacy overlap.
+
 Selected counters (subset):
 - Totals per bridge (packets/bytes/errors) and active flows.
 - TCP extras: `rto`, `active_rto_flows`, `rto_delta`.

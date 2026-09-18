@@ -74,6 +74,11 @@ func (b *tcpBridge) sendAllowanceLocked(f *tcpFlow) int {
 	if f.state == tcpSynRcvd || f.closed {
 		return 0
 	}
+	blocked := f.txBytes >= b.retransmitCap
+	if blocked && !f.retransmitBlocked {
+		b.parent.admission.retransmitWaits.Add(1)
+	}
+	f.retransmitBlocked = blocked
 	inFlight := int(f.serverNxt - f.sndUna)
 	allowed := int(f.advWnd) - inFlight
 	allowed = minInt(allowed, b.retransmitCap-f.txBytes)

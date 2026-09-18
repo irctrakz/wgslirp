@@ -115,11 +115,7 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 	// Reject unspecified destination addresses
 	if net.IP(dstIP[:]).IsUnspecified() {
 		if b.parent != nil && b.parent.processor != nil {
-			icmp := buildICMPUnreachable(dstIP, srcIP, 3 /*port unreachable*/, pkt)
-			if icmp != nil {
-				p := WrapPacket(icmp)
-				_ = b.parent.processor.ProcessPacket(p)
-			}
+			_ = deliverPacket(b.parent.processor, b.buffers.buildICMPUnreachable(dstIP, srcIP, 3 /*port unreachable*/, pkt))
 		}
 		return fmt.Errorf("udp: unspecified destination address")
 	}
@@ -135,11 +131,7 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 		if err != nil {
 			// ICMP error mapping: port unreachable back to client
 			if b.parent != nil && b.parent.processor != nil {
-				icmpPkt := buildICMPUnreachable(dstIP, srcIP, 3 /*Port Unreachable*/, pkt)
-				if icmpPkt != nil {
-					p := WrapPacket(icmpPkt)
-					_ = b.parent.processor.ProcessPacket(p)
-				}
+				_ = deliverPacket(b.parent.processor, b.buffers.buildICMPUnreachable(dstIP, srcIP, 3 /*Port Unreachable*/, pkt))
 			}
 			atomic.AddUint64(&b.parent.metrics.Errors, 1)
 			return fmt.Errorf("udp: dial %v: %w", raddr, err)
@@ -168,14 +160,11 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 			flow = exist
 		} else {
 			if b.maxFlows > 0 && len(b.flows) >= b.maxFlows {
+				b.parent.admission.udpFlows.Add(1)
 				b.flowsMu.Unlock()
 				_ = conn.Close()
 				if b.parent != nil && b.parent.processor != nil {
-					icmp := buildICMPUnreachable(dstIP, srcIP, 1, pkt)
-					if icmp != nil {
-						p := WrapPacket(icmp)
-						_ = b.parent.processor.ProcessPacket(p)
-					}
+					_ = deliverPacket(b.parent.processor, b.buffers.buildICMPUnreachable(dstIP, srcIP, 1, pkt))
 				}
 				return fmt.Errorf("udp: %w", ErrFlowLimit)
 			}

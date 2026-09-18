@@ -143,6 +143,10 @@ func (b *udpBridge) deliverReply(packet core.Packet) bool {
 }
 
 func (b *tcpBridge) buildICMPUnreachable(src, dst [4]byte, code byte, original []byte) core.Packet {
+	return b.buffers.buildICMPUnreachable(src, dst, code, original)
+}
+
+func (b *resourceBudget) buildICMPUnreachable(src, dst [4]byte, code byte, original []byte) core.Packet {
 	if len(original) < 20 {
 		return nil
 	}
@@ -151,7 +155,7 @@ func (b *tcpBridge) buildICMPUnreachable(src, dst [4]byte, code byte, original [
 		return nil
 	}
 	size := 28 + minInt(ihl+8, len(original))
-	return b.buffers.buildPacket(size, true, func() []byte {
+	return b.buildPacket(size, true, func() []byte {
 		return buildICMPUnreachable(src, dst, code, original)
 	})
 }

@@ -17,6 +17,7 @@ import (
 // SocketInterface represents a socket interface for connecting to the host network
 // It implements the core.SocketInterface interface and the SocketWriter interface
 type SocketInterface struct {
+	admission admissionCounters
 	// Configuration
 	config       Config
 	budgetOnce   sync.Once
@@ -379,7 +380,8 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 	udp, tcp, processor := s.udp, s.tcp, s.processor
 	s.mu.Unlock()
 	dm := SocketDetailedMetrics{
-		Total: loadSocketMetrics(&s.metrics),
+		Total:     loadSocketMetrics(&s.metrics),
+		Admission: s.admissionSnapshot(),
 	}
 	if udp != nil {
 		udp.flowsMu.Lock()
