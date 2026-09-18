@@ -343,3 +343,33 @@ func TestUDPAndTCPShareBufferBudget(t *testing.T) {
 	udp.stop()
 	assertBudget(t, b.buffers, 0)
 }
+
+func TestPacketReservationsAreSharedFiniteAndReleaseOnce(t *testing.T) {
+	s := NewSocketInterface(Config{SocketBufferCapBytes: 300})
+	budget := PacketBufferBudgetFor(s)
+	first, err := budget.ReservePacketBuffer(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.ReservePacketBuffer(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBudget(t, s.buffers(), 296)
+	for _, bytes := range []int{20, -1, int(^uint(0) >> 1)} {
+		if release, err := budget.ReservePacketBuffer(bytes); !errors.Is(err, ErrBufferLimit) || release != nil {
+			t.Fatalf("invalid/saturated request %d accepted: %v", bytes, err)
+		}
+	}
+	var workers sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		workers.Add(1)
+		go func() { defer workers.Done(); first(); second() }()
+	}
+	workers.Wait()
+	assertBudget(t, s.buffers(), 0)
+	fallback := PacketBufferBudgetFor(nil)
+	if _, err := fallback.ReservePacketBuffer(DefaultSocketBufferCap); !errors.Is(err, ErrBufferLimit) {
+		t.Fatal("fallback was not finite")
+	}
+}

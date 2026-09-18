@@ -21,7 +21,11 @@ func (t *WGTun) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	select {
 	case <-t.closed:
 		return 0, fmt.Errorf("wg tun closed")
-	case pkt := <-t.outCh:
+	case frame := <-t.outCh:
+		// A frame already dequeued during Close remains owned by this Read.
+		// Release on every completion path, including an undersized destination.
+		defer frame.release()
+		pkt := frame.data
 		if len(buffs) == 0 {
 			return 0, nil
 		}

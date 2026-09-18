@@ -275,7 +275,7 @@ Resource controls are parsed once before socket startup. Invalid, empty, negativ
 | `MAX_TCP_FLOWS` | 0 | Maximum registered TCP flows; zero is unlimited. |
 | `MAX_UDP_FLOWS` | 0 | Maximum registered UDP flows; zero is unlimited. |
 | `MAX_PENDING_TCP_DIALS` | 64 | Concurrent fast/async TCP dial attempts; one reservation spans fallback. |
-| `SOCKET_BUFFER_CAP_BYTES` | 67108864 | Shared TCP/UDP accounted buffer budget (64 MiB). |
+| `SOCKET_BUFFER_CAP_BYTES` | 67108864 | Shared TCP/UDP and downstream queue buffer budget (64 MiB). |
 | `TCP_PEND_CAP_BYTES` | 65536 | Per-flow TCP data accepted before host connection completes. |
 | `TCP_RETRANSMIT_CAP_BYTES` | 1048576 | Per-flow unacknowledged TCP payload storage (1 MiB). |
 
@@ -285,11 +285,13 @@ The four new dial/buffer controls use their finite defaults when zero; zero neve
 
 The shared buffer budget reserves capacity before allocating TCP pending, reassembly and retransmission payloads, asynchronous-dial ICMP quotes, TCP read buffers and UDP read buffers. Retained queue entries also incur a 128-byte accounting allowance; reassembly merges reserve replacement storage while old data remains live. Each UDP flow requires a 65,535-byte read-buffer reservation. Reservations release on ACK, flush, rejection, expiry or worker/flow teardown as appropriate.
 
-This is a budget for explicitly owned buffers, not a process RSS ceiling: kernel socket buffers, Go allocator/GC overhead, transient synthesized packet copies and downstream WireGuard/processor queues are outside it. Extending downstream byte accounting and measuring total-memory behavior remain explicit F02/F03 follow-ups.
+WireGuard output and socket processor queues also share this budget when constructed with the socket writer. WireGuard reserves before copying and rejects a full queue before allocation. Processor entries charge the retained slice capacity (including unused capacity), and remain charged while a worker is writing. Reservations release after TUN reads (including undersized-read failures), worker completion, rejection or shutdown drain. An in-flight TUN read retains its reservation until that read returns. Processor admission transfers packet ownership only on success; callers retain rejected packets. The WireGuard processor consumes pooled input after synchronous capture/injection, including failed injection, and makes only the TUN's required queue copy.
+
+Existing constructors remain compatible. Custom writers can implement `socket.PacketBufferReserver` to supply a shared budget; otherwise each adapter receives its own finite 64 MiB budget. Custom packet implementations must expose retained slice storage through `Data` for accounting. This is a budget for explicitly owned buffers, not a process RSS ceiling: kernel socket buffers, Go allocator/GC overhead, free pool storage and remaining transient synthesized/debug packet copies are outside it. Bounding remaining transient storage and measuring total-memory behavior remain explicit F02/F03 follow-ups.
 
 When dial admission is exhausted, new attempts receive RST and `socket.ErrDialLimit`. A new UDP flow without buffer capacity returns `socket.ErrBufferLimit` before sending its payload. TCP pending/reassembly rejection does not acknowledge unaccepted data, allowing retransmission. The per-flow retransmission cap pauses host reads until ACK progress; aggregate exhaustion while queuing a server reply resets only that flow. Active-flow admission remains `socket.ErrFlowLimit`. Errors can be checked with `errors.Is`.
 
-Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`, `dial_limit`, `dial_refused`, `socket_buffer_bytes`, `socket_buffer_peak`, `socket_buffer_limit`, `socket_buffer_refused`, and `buffer_dropped`. Socket-buffer values cover both TCP and UDP. Refusal counters count reservation attempts, including retries, rather than unique packets or flows; `buffer_dropped` counts rejected TCP queue operations/aborted buffered flows.
+Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`, `dial_limit`, `dial_refused`, `socket_buffer_bytes`, `socket_buffer_peak`, `socket_buffer_limit`, `socket_buffer_refused`, and `buffer_dropped`. Socket-buffer values cover TCP, UDP and adapters using that socket's packet buffer budget. Refusal counters count reservation attempts, including retries, rather than unique packets or flows; `buffer_dropped` counts rejected TCP queue operations/aborted buffered flows. Queue budget refusal returns `socket.ErrBufferLimit`; reason-specific queue counters remain a separate observability follow-up.
 
 - `TCP_ACK_DELAY_MS`: delayed ACK timer (ms). Lower (e.g., 5) reduces ACK latency.
 - `TCP_ENABLE_SACK`: advertise SACK permitted in SYN-ACK (recommended 1 for modern stacks).

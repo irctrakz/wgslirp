@@ -30,11 +30,12 @@ type TUNMetrics struct {
 // WGTun is a userspace TUN adapter that bridges plaintext IP frames
 // between wireguard-go and the SocketInterface (slirp bridges).
 type WGTun struct {
-	name   string
-	mtu    int
-	writer socket.SocketWriter
+	name    string
+	mtu     int
+	writer  socket.SocketWriter
+	buffers socket.PacketBufferReserver
 
-	outCh   chan []byte
+	outCh   chan queuedFrame
 	events  chan Event
 	closed  chan struct{}
 	closeMu sync.Mutex
@@ -47,6 +48,11 @@ type WGTun struct {
 
 	// Excluded CIDRs (never re-route to WG even if they match a peer prefix)
 	excludeCIDRs []net.IPNet
+}
+
+type queuedFrame struct {
+	data    []byte
+	release func()
 }
 
 // NewWGTun creates a WGTun with the given name, MTU, and outbound writer.
@@ -62,12 +68,13 @@ func NewWGTun(name string, mtu int, writer socket.SocketWriter) *WGTun {
 		}
 	}
 	t := &WGTun{
-		name:   name,
-		mtu:    mtu,
-		writer: writer,
-		outCh:  make(chan []byte, qcap),
-		events: make(chan Event, 2),
-		closed: make(chan struct{}),
+		name:    name,
+		mtu:     mtu,
+		writer:  writer,
+		buffers: socket.PacketBufferBudgetFor(writer),
+		outCh:   make(chan queuedFrame, qcap),
+		events:  make(chan Event, 2),
+		closed:  make(chan struct{}),
 	}
 	// Buffer the event before consumers start. No sender can race with Close.
 	t.events <- EventUp
@@ -97,7 +104,8 @@ func (t *WGTun) Close() error {
 	close(t.events)
 	for {
 		select {
-		case <-t.outCh:
+		case frame := <-t.outCh:
+			frame.release()
 		default:
 			t.closeMu.Unlock()
 			return nil
@@ -114,15 +122,22 @@ func (t *WGTun) InjectToPeer(b []byte) error {
 		return fmt.Errorf("wg tun closed")
 	default:
 	}
-	cp := append([]byte(nil), b...)
-	select {
-	case t.outCh <- cp:
-		atomic.AddUint64(&t.metrics.PlaintextToWG, uint64(len(cp)))
-		return nil
-	default:
+	// Producers and Close share closeMu; a reader can only free a slot. Avoid
+	// allocating or reserving storage for an already-full queue.
+	if len(t.outCh) == cap(t.outCh) {
 		atomic.AddUint64(&t.metrics.QueueDrops, 1)
 		return fmt.Errorf("wg tun queue full")
 	}
+	release, err := t.buffers.ReservePacketBuffer(len(b))
+	if err != nil {
+		atomic.AddUint64(&t.metrics.QueueDrops, 1)
+		return err
+	}
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	t.outCh <- queuedFrame{data: cp, release: release}
+	atomic.AddUint64(&t.metrics.PlaintextToWG, uint64(len(cp)))
+	return nil
 }
 
 // Metrics returns a snapshot of counters.

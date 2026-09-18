@@ -22,11 +22,12 @@ type SocketWriter interface {
 // SocketPacketProcessor implements core.PacketProcessor
 type SocketPacketProcessor struct {
 	// The socket interface
-	socket SocketWriter
+	socket  SocketWriter
+	buffers PacketBufferReserver
 
 	// Worker pool
 	workerCount int
-	packetCh    chan core.Packet
+	packetCh    chan queuedPacket
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
 	mu          sync.Mutex
@@ -38,6 +39,16 @@ type SocketPacketProcessor struct {
 	packetsProcessed uint64
 	packetsDropped   uint64
 	queueFullDrops   uint64
+}
+
+type queuedPacket struct {
+	packet  core.Packet
+	release func()
+}
+
+func (q queuedPacket) close() {
+	core.ReleasePacket(q.packet)
+	q.release()
 }
 
 // NewSocketPacketProcessor creates a new socket packet processor
@@ -60,8 +71,9 @@ func NewSocketPacketProcessor(socket SocketWriter, workerCount int) core.PacketP
 
 	return &SocketPacketProcessor{
 		socket:      socket,
+		buffers:     PacketBufferBudgetFor(socket),
 		workerCount: workerCount,
-		packetCh:    make(chan core.Packet, qcap),
+		packetCh:    make(chan queuedPacket, qcap),
 		stopCh:      make(chan struct{}),
 	}
 }
@@ -103,7 +115,7 @@ func (p *SocketPacketProcessor) Stop() error {
 		for {
 			select {
 			case packet := <-p.packetCh:
-				core.ReleasePacket(packet)
+				packet.close()
 			default:
 				return
 			}
@@ -138,14 +150,19 @@ func (p *SocketPacketProcessor) ProcessPacket(packet core.Packet) error {
 		return fmt.Errorf("unsupported IP version: %d", ver)
 	}
 
-	// Try to send the packet to the worker pool without copying.
-	// Packet safety is handled by core.NewPacket at creation time, and
-	// each packet is processed by a single worker.
+	// Admission transfers ownership only on success. A rejected packet remains
+	// the caller's responsibility, including any pooled buffer.
+	release, err := p.buffers.ReservePacketBuffer(core.PacketBufferSize(packet))
+	if err != nil {
+		atomic.AddUint64(&p.packetsDropped, 1)
+		return err
+	}
 	select {
-	case p.packetCh <- packet:
+	case p.packetCh <- queuedPacket{packet: packet, release: release}:
 		// Packet sent to worker pool
 		atomic.AddUint64(&p.packetsProcessed, 1)
 	default:
+		release()
 		// Channel is full, drop the packet
 		atomic.AddUint64(&p.packetsDropped, 1)
 		atomic.AddUint64(&p.queueFullDrops, 1)
@@ -173,12 +190,19 @@ func (p *SocketPacketProcessor) worker(id int) {
 			}
 
 			// Process the packet
-			err := p.processPacketInternal(packet)
+			err := p.processQueuedPacket(packet)
 			if err != nil {
 				logging.Errorf("Failed to process packet in worker %d: %v", id, err)
 			}
 		}
 	}
+}
+
+func (p *SocketPacketProcessor) processQueuedPacket(packet queuedPacket) error {
+	// Keep storage charged until the synchronous writer returns, even though
+	// dequeue has already made room for another entry.
+	defer packet.release()
+	return p.processPacketInternal(packet.packet)
 }
 
 // processPacketInternal processes a packet in a worker
