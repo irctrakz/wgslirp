@@ -123,7 +123,12 @@ type tcpState int
 const (
 	tcpSynRcvd tcpState = iota
 	tcpEstablished
-	tcpFinWait
+	tcpFinWait1
+	tcpFinWait2
+	tcpCloseWait
+	tcpClosing
+	tcpLastAck
+	tcpTimeWait
 	tcpClosed
 )
 
@@ -163,7 +168,14 @@ type tcpFlow struct {
 	lastActivity time.Time
 	lastAckTime  time.Time
 
-	finSent bool
+	finSent         bool
+	finReceived     bool
+	hostWriteClosed bool
+	finSeq          uint32
+	finSentAt       time.Time
+	finRTO          time.Duration
+	closeDeadline   time.Time
+	timeWaitUntil   time.Time
 
 	mu sync.Mutex
 	// Out-of-order reassembly buffer (sorted by seq, merged)
@@ -879,9 +891,23 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			case flow.ackCh <- struct{}{}:
 			default:
 			}
+		} else {
+			return nil
 		}
-		return nil
-	case tcpEstablished:
+		// The handshake ACK may also carry data and/or FIN.
+		fallthrough
+	case tcpEstablished, tcpFinWait1, tcpFinWait2, tcpCloseWait, tcpClosing, tcpLastAck, tcpTimeWait:
+		if flow.state == tcpTimeWait {
+			if flags&fFIN != 0 && seq+uint32(len(payload))+1 == flow.clientNxt {
+				b.enterTimeWaitLocked(flow, time.Now())
+				b.sendCloseACKLocked(flow)
+			}
+			return nil
+		}
+		if flags&fACK != 0 && seqAfter(ack, flow.serverNxt) {
+			b.sendCloseACKLocked(flow)
+			return nil
+		}
 		// Handle ACK updates and possible FIN teardown
 		if (flags & fACK) != 0 {
 			// dupACK detection
@@ -891,17 +917,20 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			} else {
 				flow.dupAckCnt = 0
 			}
-			if ack != 0 && ack <= flow.serverNxt && ack > flow.sndUna {
+			if !seqAfter(ack, flow.serverNxt) && seqAfter(ack, flow.sndUna) {
 				prevUna := flow.sndUna
 				flow.sndUna = ack
 				flow.lastAckTime = time.Now()
+				if !flow.closeDeadline.IsZero() {
+					b.beginCloseLocked(flow, flow.lastAckTime)
+				}
 				atomic.AddUint64(&b.ackAdv, 1)
 				// drop acknowledged segments from txQueue and update RTT/RTO
 				now := time.Now()
 				flow.txMu.Lock()
 				for len(flow.txQueue) > 0 {
 					head := flow.txQueue[0]
-					if head.seq+uint32(len(head.data)) <= ack {
+					if !seqAfter(head.seq+uint32(len(head.data)), ack) {
 						// RTT sample (Karn's algorithm: only if not retransmitted)
 						if head.retries == 0 && !head.sentAt.IsZero() {
 							sample := now.Sub(head.sentAt)
@@ -991,12 +1020,9 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 					// trimmed: verbose SACK block debug removed
 				}
 			}
-			if len(payload) == 0 {
-				if flow.finSent && ack == flow.serverNxt {
-					b.removeFlowLocked(flow)
-					return nil
-				}
-				// Pure ACK otherwise falls through
+			b.ackFINLocked(flow, ack, time.Now())
+			if flow.closed {
+				return nil
 			}
 			// Fast retransmit on 3 dupACKs
 			if flow.dupAckCnt >= 3 {
@@ -1018,92 +1044,72 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			}
 		}
 
-		// Out-of-order tolerance: duplicate or future segments -> send dup ACK
-		if seq < flow.clientNxt {
-			// Duplicate segment; ACK current next expected
-			dupAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
-			_ = b.sendToGuest(flow, dupAck)
+		// A consumed FIN closes only the guest->host direction. Continue
+		// processing ACKs/windows above for the host's response and FIN.
+		if flow.finReceived {
+			if len(payload) > 0 || flags&fFIN != 0 {
+				b.sendCloseACKLocked(flow)
+			}
 			return nil
 		}
-		if seq > flow.clientNxt {
-			b.queueFuture(flow, seq, payload)
-
-			// Request retransmit with current ACK
-			dupAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
-			_ = b.sendToGuest(flow, dupAck)
-			return nil
-		}
-
-		// In-order data
-		if len(payload) > 0 {
-			// Log the payload for debugging
-			logging.Debugf("TCP bridge handling client->server data: %d bytes, data: %q",
-				len(payload), string(payload[:minInt(len(payload), 50)]))
-
-			// If not yet connected, enqueue into bounded pending buffer and ACK
-			if flow.conn == nil {
-				flow.pendMu.Lock()
-				if b.reservePending(flow, len(payload)) {
-					cp := make([]byte, len(payload))
-					copy(cp, payload)
-					flow.pending = append(flow.pending, cp)
-					flow.pendingBytes += len(cp)
-					atomic.AddUint64(&b.pendEnq, 1)
-				} else {
-					atomic.AddUint64(&b.pendDrop, 1)
-					b.bufferDrops.Add(1)
-					// Do not advance clientNxt for dropped bytes; let client retransmit later
-					flow.pendMu.Unlock()
-					// Send immediate ACK for already accepted bytes only
-					b.scheduleAck(flow)
-					return nil
-				}
-				flow.pendMu.Unlock()
-				// Accept bytes from client: advance ack and ACK back (even before server write)
-				flow.clientNxt += uint32(len(payload))
-				b.scheduleAck(flow)
+		finSeq := seq + uint32(len(payload))
+		if seqBefore(seq, flow.clientNxt) {
+			skip := uint32(flow.clientNxt - seq)
+			if skip > uint32(len(payload)) {
+				b.sendCloseACKLocked(flow)
 				return nil
 			}
-
-			if n, err := writeTCP(flow.conn, payload); err != nil {
-				atomic.AddUint64(&b.parent.metrics.Errors, 1)
-				logging.Errorf("TCP bridge write error: %v", err)
-				return fmt.Errorf("tcp: write: %w", err)
+			// Keep a new suffix/FIN when only its prefix was retransmitted.
+			payload = payload[skip:]
+			seq = flow.clientNxt
+		}
+		if seqAfter(seq, flow.clientNxt) {
+			// Retain admitted data, but do not consume an out-of-order FIN.
+			// The cumulative ACK asks the peer to retransmit the missing range.
+			b.queueFuture(flow, seq, payload)
+			b.sendCloseACKLocked(flow)
+			return nil
+		}
+		if len(payload) > 0 {
+			if flow.conn == nil {
+				if !b.reservePending(flow, len(payload)) {
+					atomic.AddUint64(&b.pendDrop, 1)
+					b.bufferDrops.Add(1)
+					b.sendCloseACKLocked(flow)
+					return nil
+				}
+				pending := make([]byte, len(payload))
+				copy(pending, payload)
+				flow.pending = append(flow.pending, pending)
+				flow.pendingBytes += len(payload)
+				atomic.AddUint64(&b.pendEnq, 1)
 			} else {
+				n, err := writeTCP(flow.conn, payload)
+				if err != nil {
+					atomic.AddUint64(&b.parent.metrics.Errors, 1)
+					b.abortBufferedFlowLocked(flow)
+					return fmt.Errorf("tcp: write: %w", err)
+				}
 				atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
 				atomic.AddUint64(&b.metrics.PacketsSent, 1)
 				atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
 				atomic.AddUint64(&b.parent.metrics.PacketsSent, 1)
-				logging.Debugf("TCP bridge successfully wrote %d bytes to server", n)
 			}
 			flow.clientNxt += uint32(len(payload))
-			if err := b.flushReassembly(flow); err != nil {
-				b.removeFlowLocked(flow)
-				return fmt.Errorf("tcp: write (reassembly): %w", err)
+			if !flow.closeDeadline.IsZero() {
+				b.beginCloseLocked(flow, time.Now())
 			}
-			// delayed ACK
+			// Data buffered beyond an in-order FIN is outside the stream.
+			if flags&fFIN == 0 {
+				if err := b.flushReassembly(flow); err != nil {
+					b.abortBufferedFlowLocked(flow)
+					return fmt.Errorf("tcp: write (reassembly): %w", err)
+				}
+			}
 			b.scheduleAck(flow)
 		}
-		if (flags & fFIN) != 0 {
-			// Client closing; FIN consumes one seq
-			if seq == flow.clientNxt {
-				flow.clientNxt += 1
-			}
-			if flow.conn != nil {
-				_ = flow.conn.CloseWrite()
-			}
-			finAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
-			_ = b.sendToGuest(flow, finAck)
-			flow.state = tcpFinWait
-		}
-		return nil
-	case tcpFinWait:
-		// Await final ACK from client; if received, close
-		if (flags&fACK) != 0 && (!flow.finSent || ack == flow.serverNxt) {
-			if flow.finSent && ack == flow.serverNxt {
-				b.removeFlowLocked(flow)
-			}
-			// else still waiting for host side close
+		if flags&fFIN != 0 && finSeq == flow.clientNxt {
+			return b.receiveFINLocked(flow, time.Now())
 		}
 		return nil
 	default:
@@ -1147,7 +1153,11 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		}
 	}
 	if err := b.flushReassembly(f); err != nil {
-		b.removeFlowLocked(f)
+		b.abortBufferedFlowLocked(f)
+		return
+	}
+	if f.finReceived {
+		_ = b.closeHostWriteLocked(f)
 	}
 }
 func (b *tcpBridge) removeFlow(key string) {
@@ -1187,6 +1197,7 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	}
 	b.mu.Unlock()
 	f.closed = true
+	f.state = tcpClosed
 	if f.cancelDial != nil {
 		f.cancelDial()
 	}
@@ -1230,7 +1241,7 @@ func (b *tcpBridge) reaper() {
 func (b *tcpBridge) expireFlows(cutoff time.Time) {
 	for _, f := range b.flowSnapshot() {
 		if f.lastActive().Before(cutoff) {
-			b.removeFlowIf(f, func(f *tcpFlow) bool { return f.lastActive().Before(cutoff) })
+			b.removeFlowIf(f, func(f *tcpFlow) bool { return f.closeDeadline.IsZero() && f.lastActive().Before(cutoff) })
 		}
 	}
 }

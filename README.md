@@ -248,7 +248,7 @@ Metrics and health
 
 Socket lifecycle
 
-Socket interfaces are single-use: configure the packet processor before `Start`, then call `Stop` to close connections and join accepted work. Repeated or concurrent `Stop` calls are safe; restart and writes after shutdown return errors. Processor replacement after startup is ignored with a warning. Create a new interface to change the processor or restart. Delivery callbacks must return promptly; shutdown waits for in-flight callbacks to complete. Use `RequestStop` inside callbacks and `StopContext` to bound a caller's wait. See [lifecycle and callback contracts](LIFECYCLE.md) for ownership, re-entry restrictions and shutdown limits.
+Socket interfaces are single-use: configure the packet processor before `Start`, then call `Stop` to close connections and join accepted work. Repeated or concurrent `Stop` calls are safe; restart and writes after shutdown return errors. Processor replacement after startup is ignored with a warning. Create a new interface to change the processor or restart. Delivery callbacks must return promptly; shutdown waits for in-flight callbacks to complete. Use `RequestStop` inside callbacks and `StopContext` to bound a caller's wait. See [lifecycle and callback contracts](LIFECYCLE.md) for ownership, re-entry restrictions and shutdown limits. TCP FIN recovery preserves both half-close directions and retries unacknowledged FINs; see the same document for progress-based close expiry and TIME-WAIT slot retention.
 
 Packet processing and TUN (userspace)
 

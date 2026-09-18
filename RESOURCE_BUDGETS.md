@@ -55,3 +55,13 @@ This demonstrates reservation recovery and bounded storage under the measured tr
 ## Validation
 
 Build, vet, the complete tagged integration suite (including unit/default-migration regressions) and tagged integration-race passed on 2026-09-18. Integration-race completed in 74.79 seconds including compilation; peak cgroup memory was 845,574,144 bytes (806.40 MiB). The 2 GiB/no-swap, one-CPU, 128-PID limits were unchanged. Every stage recorded zero memory/PID-limit events, independent zero-owned-residue checks and restored pause guards. No test process was left running. The workload evidence is for the documented finite profiles, not a production RSS guarantee.
+
+## Close-state capacity caveat (F07)
+
+TCP TIME-WAIT records now retain a flow slot for four minutes after an active or
+simultaneous close, with bounded extension for duplicate FINs. Their host socket
+is closed and acknowledged payload reservations are released, but they count
+against `MaxTCPFlows` and registry-based active/closed metrics until expiry.
+The profiles above keep connections open across exchanges and do not establish
+an appropriate cap for high connection churn. F10 explicitly tracks that workload
+and default-sizing follow-up; see [LIFECYCLE.md](LIFECYCLE.md) for close limits.
