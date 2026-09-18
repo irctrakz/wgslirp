@@ -12,6 +12,7 @@ import (
 func closeGuestPacket(f *tcpFlow, seq, ack uint32, flags byte, data []byte) []byte {
 	p := buildIPv4TCP(f.srcIP, f.dstIP, f.srcPort, f.dstPort, seq, ack, flags, data)
 	binary.BigEndian.PutUint16(p[34:36], 1200)
+	repairTestChecksums(p)
 	return p
 }
 

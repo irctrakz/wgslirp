@@ -327,6 +327,9 @@ func buildIPv4UDPWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []b
 
 	// UDP checksum with pseudo-header (optional for IPv4 but we compute it)
 	ucsum := udpChecksum(pkt[off:off+udpLen], srcIP, dstIP)
+	if ucsum == 0 {
+		ucsum = 0xffff // Zero on the wire means checksum omitted, not a computed zero.
+	}
 	binary.BigEndian.PutUint16(pkt[off+6:off+8], ucsum)
 
 	return pkt

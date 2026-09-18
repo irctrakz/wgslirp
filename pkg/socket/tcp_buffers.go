@@ -33,7 +33,9 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 		return true
 	}
 	start, end := uint64(seq), uint64(seq)+uint64(len(payload))
-	if end > 1<<32 {
+	// Numeric ordering is used by this bounded queue. Do not mix sequence
+	// epochs or retain a segment spanning wrap; the peer must retry in order.
+	if seq < f.clientNxt || end > 1<<32 {
 		return false
 	}
 	left, right := 0, 0
@@ -99,7 +101,7 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 func (b *tcpBridge) flushReassembly(f *tcpFlow) error {
 	for len(f.ooo) > 0 && f.conn != nil {
 		s := f.ooo[0]
-		if s.seq > f.clientNxt {
+		if seqAfter(s.seq, f.clientNxt) {
 			break
 		}
 		skip := int(f.clientNxt - s.seq)
