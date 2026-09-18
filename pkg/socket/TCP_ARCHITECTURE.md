@@ -12,7 +12,8 @@ privileges or runtime configuration.
    handling (`tcp_receive.go`), with bounded reassembly in `tcp_buffers.go`.
 4. ACK/window handling and delayed ACK scheduling (`tcp_ack.go`), plus SACK
    and RTO recovery (`tcp_recovery.go`). Reader/segmentation stay in `tcp_runtime.go`.
-5. Diagnostic snapshots and formatting.
+5. Diagnostic snapshots and formatting (`tcp_diagnostics.go`); the socket facade
+   requests TCP metrics through `snapshotMetrics` instead of reading TCP internals.
 
 Each boundary is a separate local commit, with the tagged integration/race suite
 as its behavior gate. Existing tests cover dial refusal/timeouts/cancellation,
@@ -39,7 +40,7 @@ fixtures; do not replace them with tests that merely mirror extracted helpers.
   cross-flow diagnostic snapshots while holding one flow's state lock.
 - Workers and timers stay bridge-owned and join on shutdown. Lock extraction
   does not permit callbacks to synchronously re-enter locked flow operations;
-  the contract in ../../LIFECYCLE.md still applies.
+  the contract in [LIFECYCLE.md](../../LIFECYCLE.md) still applies.
 
 ## Bounded performance gate
 
@@ -58,5 +59,25 @@ Baseline (original handler, Go 1.23.12, one CPU): five runs measured 646.7,
 651.6, 654.7, 658.1 and 693.1 ns/op; median **654.7 ns/op**, **34 B/op**,
 **2 allocs/op**. The preselected latency ceiling is **818.375 ns/op**.
 Baseline vet passed, peak container memory 365,428,736 bytes; zero resource-limit
-events and independent zero-owned-residue check. Final comparison follows the
-complete extraction sequence.
+events and independent zero-owned-residue check.
+
+Final extraction measurements were 672.0, 671.6, 679.5, 689.4 and 697.3 ns/op;
+median **679.5 ns/op** (+3.79%), with **34 B/op** and **2 allocs/op** unchanged.
+The preselected gate passed; this is a small benchmark comparison, not proof of
+statistically significant slowdown or full forwarding performance equivalence.
+Final vet/benchmark peak was 367,788,032 bytes, with zero resource-limit events
+and independent zero-owned-residue verification.
+
+Reproduce inside the documented bounded Linux test environment:
+
+```sh
+go test -run='^$' -bench='^BenchmarkTCPHandleACK$' -benchmem -benchtime=300ms -count=5 -timeout=30s ./pkg/socket
+```
+
+All five structural stages passed the complete tagged integration suite with the
+race detector, including ordinary unit tests, encrypted WireGuard TCP/UDP, churn,
+concurrent snapshots and lifecycle/protocol regressions. Each stage restored the
+remote pause guards and independently verified removal of its owned resources.
+The architecture plan records per-stage evidence. Production packet encoding
+(PR 4.2), verified dead-code cleanup (PR 4.4), independent review and broader
+performance/release evidence remain separate work.

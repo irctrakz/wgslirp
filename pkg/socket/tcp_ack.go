@@ -2,7 +2,6 @@ package socket
 
 import (
 	"encoding/binary"
-	"github.com/irctrakz/wgslirp/pkg/logging"
 	"sync/atomic"
 	"time"
 )
@@ -107,14 +106,7 @@ func (b *tcpBridge) processTCPACKLocked(flow *tcpFlow, segment tcpSegment) {
 		}
 	}
 	if b.ackTrace {
-		class := "adv"
-		if ack == flow.sndUna && len(payload) == 0 {
-			class = "dup"
-		} else if ack <= flow.sndUna && wnd > prevWnd {
-			class = "wnd"
-		}
-		logging.Infof("TCP ACK trace: flow=%s class=%s ack=%d sndUna=%d nxt=%d wnd=%d ws=%d txq=%d",
-			flow.key, class, ack, flow.sndUna, flow.serverNxt, flow.advWnd, flow.wsIn, len(flow.txQueue))
+		b.logACKLocked(flow, ack, len(payload), wnd, prevWnd)
 	}
 	// Parse SACK blocks if any and SACK permitted
 	if flow.sackPermitted || b.tuning.EnableSACK {

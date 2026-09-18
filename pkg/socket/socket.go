@@ -429,61 +429,7 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 		dm.UDPExt = map[string]uint64{"tx_enq": enq, "tx_proc": proc}
 	}
 	if tcp != nil {
-		flows := tcp.flowSnapshot()
-		active := uint64(len(flows))
-		// Snapshot membership before taking individual flow locks.
-		ackIdle := uint64(0)
-		if tcp.ackIdleGate > 0 {
-			for _, f := range flows {
-				f.stateMu.Lock()
-				inFlight := int(f.serverNxt - f.sndUna)
-				minInflight := tcp.ackIdleMinInflight
-				if minInflight <= 0 {
-					minInflight = f.mss
-				}
-				if inFlight >= minInflight {
-					if time.Since(f.lastAckTime) >= tcp.ackIdleGate {
-						ackIdle++
-					}
-				}
-				f.stateMu.Unlock()
-			}
-		}
-		dm.TCP.DeliveryRefused = tcp.deliveryRefused.Load()
-		dm.TCP.Counters = loadSocketMetrics(&tcp.metrics)
-		dm.TCP.ActiveFlows = active
-		// TCP extra debug counters
-		tcp.rtoMu.Lock()
-		activeRTOFlows := uint64(len(tcp.rtoActiveFlows))
-		tcp.rtoMu.Unlock()
-		// Compose TCPExt with RTO and ACK classification counters
-		dialUsed, dialPeak, dialLimit, dialRejected := tcp.dialSlots.snapshot()
-		bufferUsed, bufferPeak, bufferLimit, bufferRejected := tcp.buffers.snapshot()
-		dm.TCPExt = map[string]uint64{
-			"dial_reserved":         dialUsed,
-			"dial_peak":             dialPeak,
-			"dial_limit":            dialLimit,
-			"dial_refused":          dialRejected,
-			"socket_buffer_bytes":   bufferUsed,
-			"socket_buffer_peak":    bufferPeak,
-			"socket_buffer_limit":   bufferLimit,
-			"socket_buffer_refused": bufferRejected,
-			"buffer_dropped":        tcp.bufferDrops.Load(),
-			"rto":                   atomic.LoadUint64(&tcp.rtoCount),
-			"active_rto_flows":      activeRTOFlows,
-			"ack_advanced":          atomic.LoadUint64(&tcp.ackAdv),
-			"ack_duplicate":         atomic.LoadUint64(&tcp.ackDup),
-			"ack_window_update":     atomic.LoadUint64(&tcp.ackWndOnly),
-			"ack_idle_flows":        ackIdle,
-			// Async dial and pending-buffer instrumentation
-			"dial_start":    atomic.LoadUint64(&tcp.dialStart),
-			"dial_ok":       atomic.LoadUint64(&tcp.dialOk),
-			"dial_fail":     atomic.LoadUint64(&tcp.dialFail),
-			"dial_inflight": uint64(atomic.LoadInt64(&tcp.dialInflight)),
-			"pend_enq":      atomic.LoadUint64(&tcp.pendEnq),
-			"pend_flush":    atomic.LoadUint64(&tcp.pendFlush),
-			"pend_drop":     atomic.LoadUint64(&tcp.pendDrop),
-		}
+		dm.TCP, dm.TCPExt = tcp.snapshotMetrics()
 	}
 	// FlowManager and egress limiter removed
 	// Fallback removed

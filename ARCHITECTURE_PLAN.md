@@ -372,12 +372,13 @@ push. Ownership and benchmark scope are recorded in
 - [x] Registry/admission, lifecycle and expiry. Candidate publication now has an explicit state-lock contract; tagged integration/race passed, peak 801,849,344 bytes, zero resource-limit events and independent cleanup verification.
 - [x] Incoming segment dispatch and reassembly. Validated borrowed segment views and locked payload/FIN processing are explicit; existing reassembly stays in `tcp_buffers.go`. Tagged integration/race passed, peak 829,521,920 bytes, zero resource-limit events and independent cleanup verification.
 - [x] ACK/window handling and recovery. Locked ACK processing and delayed ACK scheduling live in `tcp_ack.go`; SACK/hole/RTO recovery lives in `tcp_recovery.go`, preserving state-before-transmit/SACK locking. Tagged integration/race passed, peak 799,698,944 bytes, zero resource-limit events and independent cleanup verification.
-- [ ] Diagnostics and snapshot formatting.
+- [x] Diagnostics and snapshot formatting. TCP owns its extended metric snapshot and ACK/gating/RTO diagnostics; existing counter semantics, trace text and locking order are preserved. Tagged integration/race passed, peak 802,828,288 bytes, zero resource-limit events and independent cleanup verification.
+
+**Final extraction validation:** all five tagged integration/race stages passed on Linux Go 1.23.12, including all unit tests, encrypted TCP/UDP forwarding, short-connection churn and existing lifecycle/ownership/sequence-wrap regressions. Final build, vet, module tidy/verification (unchanged module-file checksums), and 10-second single-worker fuzzing passed (157,931 executions). The ACK microbenchmark median changed from 654.7 to 679.5 ns/op (+3.79%), within the preselected 25% budget; 34 B/op and 2 allocs/op were unchanged. The largest container peak across the nine baseline/validation stages was 829,521,920 bytes. Every stage recorded zero memory/OOM/PID-limit events, independently verified zero owned container/network/workspace/lock residue, and restored the pause guards. Final build peak was 433,070,080 bytes, vet/benchmark 367,788,032 bytes, and fuzz 342,941,696 bytes. Gofmt and whitespace checks passed. Changes are separate local commits on `codex/architecture-hardening`; independent review remains pending and nothing was pushed. Environment-specific drivers and raw evidence remain ignored/private.
 
 Full PR 4.3 performance acceptance remains separate: the bounded ACK benchmark
 is only an initial latency/allocation gate, not forwarding throughput or dial/load
 validation. PR 4.2 shared encoding and PR 4.4 dead-code cleanup remain separate.
-
 
 Extract one boundary per PR, preserving protocol behavior:
 
