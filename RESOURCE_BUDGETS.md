@@ -23,7 +23,7 @@ The recorded environment uses Go 1.23.12, one CPU, 2 GiB memory with no swap, 12
 - Live/peak reservations must stay within the configured budget. Shutdown must leave zero reservations and no registered flows.
 - Samples cover each traffic round and four post-shutdown observations from zero to three seconds. Heap, RSS, goroutine-stack storage, heap pages and natural GC counts are logged. RSS is observed, not asserted to return to its initial value within three seconds.
 
-The fixture includes allocations and sockets used by the echo peers and guest simulator. Its RSS is not an isolated router RSS measurement. It excludes encrypted WireGuard transport, WAN loss/latency, long-idle expiry and long-duration soak behavior; those remain release/workload coverage under F10. Existing focused tests cover per-flow backpressure, pending-dial admission, queue rejection and ownership release.
+The fixture includes allocations and sockets used by the echo peers and guest simulator. Its RSS is not an isolated router RSS measurement. It excludes encrypted WireGuard transport, WAN loss/latency, long-idle expiry and long-duration soak behavior. F10 separately covers bounded encrypted loopback round trips; encrypted load, WAN and soak evidence remain open in [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md). Existing focused tests cover per-flow backpressure, pending-dial admission, queue rejection and ownership release.
 
 ## Default selection
 
@@ -62,6 +62,21 @@ TCP TIME-WAIT records now retain a flow slot for four minutes after an active or
 simultaneous close, with bounded extension for duplicate FINs. Their host socket
 is closed and acknowledged payload reservations are released, but they count
 against `MaxTCPFlows` and registry-based active/closed metrics until expiry.
-The profiles above keep connections open across exchanges and do not establish
-an appropriate cap for high connection churn. F10 explicitly tracks that workload
-and default-sizing follow-up; see [LIFECYCLE.md](LIFECYCLE.md) for close limits.
+The profiles above keep connections open across exchanges. F10 adds
+`TestTCPDefaultCapacityChurnAndTimeWaitRecovery`: two batches of 64 real loopback
+TCP connections receive exact short responses, complete host-first close, release
+payload storage and close host sockets. Each batch fills the default cap with
+TIME-WAIT records, refuses a new connection, and admits the next batch after
+explicitly advancing the expiry clock. All reservations release at shutdown.
+This is bounded capacity/recovery evidence, not a four-minute wall-clock soak.
+
+**Default-sizing decision:** retain the finite 64-flow default for the measured
+small deployment profile, with an explicit churn constraint. Without duplicate
+FIN extensions, 64 / 240 seconds is about **0.267 host-first closes per second
+(16 per minute)** at steady state with no other active flows. Bursts can consume
+all 64 slots immediately. A starting sizing estimate is active connections plus
+peak sustained host-first closes/second times 240 seconds, plus burst/extension
+headroom. Validate the resulting cap and memory budget for the deployment;
+raising it is not a measured universal recommendation. Guest-first passive close
+does not take this TIME-WAIT path. See [LIFECYCLE.md](LIFECYCLE.md) and
+[RELEASE_VALIDATION.md](RELEASE_VALIDATION.md) for remaining workload limits.

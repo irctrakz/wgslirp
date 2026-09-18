@@ -10,6 +10,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Check out code
@@ -39,4 +40,4 @@ jobs:
         run: go test -race -tags=integration -timeout 120s -count=1 ./...
 
       - name: Fuzz packet boundaries
-        run: go test -run '^$' -fuzz '^FuzzTransportBoundaries$' -fuzztime 10s -parallel 2 ./pkg/socket
+        run: go test -run '^$' -fuzz '^FuzzTransportBoundaries$' -fuzztime 10s -timeout 120s -parallel 2 ./pkg/socket

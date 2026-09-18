@@ -1034,11 +1034,8 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 			}
 			// Parse SACK blocks if any and SACK permitted
 			if flow.sackPermitted || b.tuning.EnableSACK {
-				if dataOff > 20 {
-					opts := pkt[tcpOff+20 : tcpOff+dataOff]
-					parseSACKBlocks(flow, opts)
-					// trimmed: verbose SACK block debug removed
-				}
+				// Also prune acknowledged blocks on ACKs without options.
+				parseSACKBlocks(flow, pkt[tcpOff+20:tcpOff+dataOff])
 			}
 			b.ackFINLocked(flow, ack, time.Now())
 			if flow.closed {
@@ -1049,14 +1046,12 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 				flow.dupAckCnt = 0
 				// Enter SACK recovery and retransmit a hole if available
 				flow.sackRecovery = true
-				if flow.serverNxt > 0 {
-					flow.recover = flow.serverNxt - 1
-				}
-				b.retransmitNextHole(flow)
+				// Exclusive end of data outstanding when recovery begins.
+				flow.recover = flow.serverNxt
 			}
 			// Partial ACK handling: in recovery, keep sending next hole
 			if flow.sackRecovery {
-				if ack >= flow.recover {
+				if !seqBefore(ack, flow.recover) {
 					flow.sackRecovery = false
 				} else {
 					b.retransmitNextHole(flow)
@@ -1463,23 +1458,38 @@ func parseSACKBlocks(f *tcpFlow, opts []byte) {
 			for j := i + 2; j+7 < i+l; j += 8 {
 				left := binary.BigEndian.Uint32(opts[j : j+4])
 				right := binary.BigEndian.Uint32(opts[j+4 : j+8])
-				if right > left {
+				if seqAfter(right, left) {
 					blocks = append(blocks, struct{ left, right uint32 }{left, right})
 				}
 			}
 		}
 		i += l
 	}
-	if len(blocks) == 0 {
-		return
-	}
+	// Merge only ranges inside the outstanding send window. Offsets from
+	// sndUna are ordered even when the actual sequence numbers wrap. Drop
+	// acknowledged/stale blocks on every ACK so they cannot survive a full lap.
+	// Caller holds stateMu; TCP windows are smaller than half the sequence space.
 	// Merge with existing, normalize and cap size
 	all := append([]struct{ left, right uint32 }{}, f.sackList...)
 	all = append(all, blocks...)
+	valid := all[:0]
+	for _, block := range all {
+		if !seqAfter(block.right, f.sndUna) || seqAfter(block.right, f.serverNxt) {
+			continue
+		}
+		if seqBefore(block.left, f.sndUna) {
+			block.left = f.sndUna
+		}
+		if !seqBefore(block.left, block.right) {
+			continue
+		}
+		valid = append(valid, block)
+	}
+	all = valid
 	// sort by left (simple insertion sort for small N)
 	for i := 1; i < len(all); i++ {
 		j := i
-		for j > 0 && all[j-1].left > all[j].left {
+		for j > 0 && all[j-1].left-f.sndUna > all[j].left-f.sndUna {
 			all[j-1], all[j] = all[j], all[j-1]
 			j--
 		}
@@ -1487,9 +1497,9 @@ func parseSACKBlocks(f *tcpFlow, opts []byte) {
 	// merge overlaps
 	merged := make([]struct{ left, right uint32 }, 0, len(all))
 	for _, b := range all {
-		if len(merged) == 0 || b.left > merged[len(merged)-1].right {
+		if len(merged) == 0 || seqAfter(b.left, merged[len(merged)-1].right) {
 			merged = append(merged, b)
-		} else if b.right > merged[len(merged)-1].right {
+		} else if seqAfter(b.right, merged[len(merged)-1].right) {
 			merged[len(merged)-1].right = b.right
 		}
 	}
@@ -1505,7 +1515,7 @@ func isSACKed(f *tcpFlow, left, right uint32) bool {
 	list := append([]struct{ left, right uint32 }{}, f.sackList...)
 	f.sackMu.Unlock()
 	for _, b := range list {
-		if left >= b.left && right <= b.right {
+		if seqBefore(left, right) && !seqBefore(left, b.left) && !seqAfter(right, b.right) {
 			return true
 		}
 	}
@@ -1519,7 +1529,7 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 	f.txMu.Lock()
 	inFlight := 0
 	for _, s := range f.txQueue {
-		if s.seq+uint32(len(s.data)) <= f.sndUna {
+		if !seqAfter(s.seq+uint32(len(s.data)), f.sndUna) {
 			continue
 		}
 		if isSACKed(f, s.seq, s.seq+uint32(len(s.data))) {
@@ -1538,7 +1548,7 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 	idx := -1
 	for i := 0; i < len(f.txQueue); i++ {
 		s := f.txQueue[i]
-		if s.seq+uint32(len(s.data)) <= f.sndUna {
+		if !seqAfter(s.seq+uint32(len(s.data)), f.sndUna) {
 			continue
 		}
 		if isSACKed(f, s.seq, s.seq+uint32(len(s.data))) {

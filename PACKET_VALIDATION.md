@@ -63,3 +63,20 @@ wrap refusal followed by exact in-order delivery with released reservations.
 `FuzzTransportBoundaries` exercises both raw bytes and checksum-repaired copies
 to reach deeper parsing paths, checking accepted lengths, flags, checksums and
 input immutability. Fuzzing is bounded evidence, not exhaustive proof.
+
+### Bounded SACK loss recovery verification (F10)
+
+Seeded sequence-boundary fixtures send three real bridge segments, lose the first
+and third, SACK the middle segment, and verify exact hole retransmissions,
+partial/cumulative ACK processing, recovery exit and reservation release. Cases
+cover an ordinary sequence, a SACK block spanning zero, a block ending at zero,
+and a recovery endpoint of zero. Recovery remains active until the exclusive
+end is acknowledged, including the final byte.
+
+SACK ranges now use serial arithmetic, are restricted to outstanding sent bytes,
+and are pruned on every eligible ACK, including ACKs without options. Recovery
+selection and completion use serial arithmetic too. An initial failing run
+reproduced stale-block retention and missed wrap recovery before these fixes.
+This advances the earlier coverage limit; it does not establish a multi-gigabyte
+transfer, full RFC 6675 implementation, receiver reneging recovery, or WAN soak
+behavior. The receive-side out-of-order restrictions above remain in effect.

@@ -118,7 +118,9 @@ reset and shutdown still remove flows immediately.
 TIME-WAIT records count against the existing TCP flow cap (64 by default), and
 `ActiveFlows`/`ConnectionsClosed` retain their registry-membership meanings.
 This increases slot retention for short-lived connections. The existing F03
-capacity fixture measures persistent flows, not high connection churn; F10 tracks
-that additional sizing work. No automatic tuple reuse or unlimited tombstone map
+capacity fixture measures persistent flows. F10 adds two 64-connection churn
+batches with refusal and simulated-expiry recovery; see [RESOURCE_BUDGETS.md](RESOURCE_BUDGETS.md)
+for the default cap's approximately 16 host-first closes/minute constraint. Larger
+encrypted churn/soak sizing remains open in [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md). No automatic tuple reuse or unlimited tombstone map
 is introduced. Tests advance close deadlines explicitly rather than sleeping for
 minutes, and real-socket fixtures verify loss recovery and both half-close orders.
