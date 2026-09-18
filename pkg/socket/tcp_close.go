@@ -144,7 +144,10 @@ func (b *tcpBridge) closeTickLocked(f *tcpFlow, now time.Time) bool {
 	if !now.Before(f.closeDeadline) {
 		// Expiration aborts rather than pretending unacknowledged bytes were delivered.
 		atomic.AddUint64(&b.parent.metrics.Errors, 1)
-		logging.Warnf("TCP close timed out: flow=%s state=%d unacknowledged=%d", f.key, f.state, f.serverNxt-f.sndUna)
+		atomic.AddUint64(&b.metrics.Errors, 1)
+		if b.failureLog.Allow(now) {
+			logging.Warnf("TCP close timed out: flow=%s state=%d unacknowledged=%d", f.key, f.state, f.serverNxt-f.sndUna)
+		}
 		_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
 		b.removeFlowLocked(f)
 		return false

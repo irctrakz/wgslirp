@@ -38,22 +38,26 @@ import (
 // retransmission rather than protocol-specific tweaks.
 
 type tcpBridge struct {
-	tuning        TransportConfig
-	dialSlots     *resourceBudget
-	buffers       *resourceBudget
-	retransmitCap int
-	dial          func(context.Context, string, time.Duration) (*net.TCPConn, error)
-	bufferDrops   atomic.Uint64
-	lifecycleMu   sync.Mutex
-	workers       sync.WaitGroup
-	stopOnce      sync.Once
-	ctx           context.Context
-	cancel        context.CancelFunc
-	parent        *SocketInterface
-	mu            sync.RWMutex
-	flows         map[string]*tcpFlow
-	stopCh        chan struct{}
-	lifetime      time.Duration
+	deliveryRefused atomic.Uint64
+	failureLog      logging.RateLimiter
+	deliver         packetDelivery
+	startOnce       sync.Once
+	tuning          TransportConfig
+	dialSlots       *resourceBudget
+	buffers         *resourceBudget
+	retransmitCap   int
+	dial            func(context.Context, string, time.Duration) (*net.TCPConn, error)
+	bufferDrops     atomic.Uint64
+	lifecycleMu     sync.Mutex
+	workers         sync.WaitGroup
+	stopOnce        sync.Once
+	ctx             context.Context
+	cancel          context.CancelFunc
+	parent          *SocketInterface
+	mu              sync.RWMutex
+	flows           map[string]*tcpFlow
+	stopCh          chan struct{}
+	lifetime        time.Duration
 
 	metrics  core.SocketMetrics
 	maxFlows int
@@ -258,6 +262,7 @@ type tcpFlow struct {
 func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	b := &tcpBridge{
 		parent:   parent,
+		deliver:  parent.packetDelivery(),
 		flows:    make(map[string]*tcpFlow),
 		stopCh:   make(chan struct{}),
 		lifetime: 2 * time.Minute,
@@ -302,10 +307,12 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	b.dialSlots = &resourceBudget{limit: budgetDefault(parent.config.MaxPendingTCPDials, DefaultPendingTCPDials)}
 	b.dial = dialTCP
 	b.ctx, b.cancel = context.WithCancel(context.Background())
-	b.launch(b.reaper)
-	// Start connection health monitor
-	b.launch(b.monitorConnectionHealth)
 	return b
+}
+
+// start owns periodic work; construction performs no I/O or goroutine launch.
+func (b *tcpBridge) start() {
+	b.startOnce.Do(func() { b.launch(b.reaper); b.launch(b.monitorConnectionHealth) })
 }
 
 // sendToGuest transfers a reserved packet to the downstream processor.
@@ -318,13 +325,14 @@ func (b *tcpBridge) sendToGuest(f *tcpFlow, pkt core.Packet) bool {
 		core.ReleasePacket(pkt)
 		return false
 	}
-	if deliverPacket(b.parent.processor, pkt) {
+	if b.deliver(pkt) {
 		atomic.AddUint64(&b.metrics.PacketsReceived, 1)
 		atomic.AddUint64(&b.metrics.BytesReceived, uint64(size))
 		atomic.AddUint64(&b.parent.metrics.PacketsReceived, 1)
 		atomic.AddUint64(&b.parent.metrics.BytesReceived, uint64(size))
 		return true
 	}
+	b.deliveryRefused.Add(1)
 	return false
 }
 
@@ -429,11 +437,21 @@ func (b *tcpBridge) stop() {
 
 func (b *tcpBridge) Name() string { return "tcp" }
 
-func (b *tcpBridge) HandleOutbound(pkt []byte) error {
+func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
+	admitted := false
+	// Publish the operation's error before allowing lifecycle waits to complete.
+	defer func() {
+		if err != nil {
+			atomic.AddUint64(&b.metrics.Errors, 1)
+		}
+		if admitted {
+			b.workers.Done()
+		}
+	}()
 	if !b.beginWork() {
 		return fmt.Errorf("TCP bridge stopped")
 	}
-	defer b.workers.Done()
+	admitted = true
 
 	pkt, ihl, err := parseTransport(pkt, 6)
 	if err != nil {
@@ -490,7 +508,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 				b.parent.admission.tcpFlows.Add(1)
 				rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
 				if rst != nil {
-					_ = deliverPacket(b.parent.processor, rst)
+					_ = b.sendToGuest(nil, rst)
 				}
 				return fmt.Errorf("tcp: %w", ErrFlowLimit)
 			}
@@ -499,7 +517,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		if !b.dialSlots.acquire(1) {
 			b.parent.admission.pendingDials.Add(1)
 			if b.parent.processor != nil {
-				_ = deliverPacket(b.parent.processor, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
+				_ = b.sendToGuest(nil, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
 			}
 			return ErrDialLimit
 		}
@@ -530,17 +548,18 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 						switch b.errorSignal {
 						case "icmp":
 							if icmp := b.buildICMPUnreachable(dstIP, srcIP, 1, pkt); icmp != nil {
-								_ = deliverPacket(b.parent.processor, icmp)
+								_ = b.sendToGuest(nil, icmp)
 							}
 						case "rst":
 							rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
 							if rst != nil {
-								_ = deliverPacket(b.parent.processor, rst)
+								_ = b.sendToGuest(nil, rst)
 							}
 						case "none":
 						}
 					}
 					atomic.AddUint64(&b.parent.metrics.Errors, 1)
+					atomic.AddUint64(&b.metrics.Errors, 1)
 					return nil
 				}
 			}
@@ -670,7 +689,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 					preConn.Close()
 				}
 				if b.parent.processor != nil {
-					_ = deliverPacket(b.parent.processor, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
+					_ = b.sendToGuest(nil, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
 				}
 				return fmt.Errorf("tcp: %w", ErrFlowLimit)
 			}
@@ -711,18 +730,19 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 							switch b.errorSignal {
 							case "icmp":
 								if icmp := b.buildICMPUnreachable(f.dstIP, f.srcIP, 1, quotedPacket); icmp != nil {
-									_ = deliverPacket(b.parent.processor, icmp)
+									_ = b.sendToGuest(nil, icmp)
 								}
 							case "rst":
 								rst := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, 0, f.clientISN+1, 0x04|0x10, nil)
 								if rst != nil {
-									_ = deliverPacket(b.parent.processor, rst)
+									_ = b.sendToGuest(nil, rst)
 								}
 							case "none":
 							}
 						}
 						atomic.AddUint64(&b.dialFail, 1)
 						atomic.AddUint64(&b.parent.metrics.Errors, 1)
+						atomic.AddUint64(&b.metrics.Errors, 1)
 						atomic.AddInt64(&b.dialInflight, -1)
 						// Remove the flow on dial failure
 						b.removeFlowLocked(f)
@@ -1086,14 +1106,11 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			} else {
 				n, err := writeTCP(flow.conn, payload)
 				if err != nil {
-					atomic.AddUint64(&b.parent.metrics.Errors, 1)
 					b.abortBufferedFlowLocked(flow)
 					return fmt.Errorf("tcp: write: %w", err)
 				}
 				atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
 				atomic.AddUint64(&b.metrics.PacketsSent, 1)
-				atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
-				atomic.AddUint64(&b.parent.metrics.PacketsSent, 1)
 			}
 			flow.clientNxt += uint32(len(payload))
 			if !flow.closeDeadline.IsZero() {
@@ -1141,23 +1158,27 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		if n, err := writeTCP(f.conn, p); err == nil {
 			atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
 			atomic.AddUint64(&b.metrics.PacketsSent, 1)
-			atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
-			atomic.AddUint64(&b.parent.metrics.PacketsSent, 1)
 			f.toSrvBytes += uint64(n)
 			f.toSrvPkts += 1
 			atomic.AddUint64(&b.pendFlush, 1)
 		} else {
 			atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			atomic.AddUint64(&b.metrics.Errors, 1)
 			b.abortBufferedFlowLocked(f)
 			return
 		}
 	}
 	if err := b.flushReassembly(f); err != nil {
+		atomic.AddUint64(&b.parent.metrics.Errors, 1)
+		atomic.AddUint64(&b.metrics.Errors, 1)
 		b.abortBufferedFlowLocked(f)
 		return
 	}
 	if f.finReceived {
-		_ = b.closeHostWriteLocked(f)
+		if err := b.closeHostWriteLocked(f); err != nil {
+			atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			atomic.AddUint64(&b.metrics.Errors, 1)
+		}
 	}
 }
 func (b *tcpBridge) removeFlow(key string) {
@@ -1681,12 +1702,16 @@ func (b *tcpBridge) configureHostSocket(conn *net.TCPConn) {
 	_ = conn.SetKeepAlivePeriod(30 * time.Second)
 	if n := b.tuning.SocketReceiveBuffer; n > 0 {
 		if err := conn.SetReadBuffer(n); err != nil {
-			logging.Warnf("TCP receive buffer: %v", err)
+			if b.failureLog.Allow(time.Now()) {
+				logging.Warnf("TCP receive buffer: %v", err)
+			}
 		}
 	}
 	if n := b.tuning.SocketSendBuffer; n > 0 {
 		if err := conn.SetWriteBuffer(n); err != nil {
-			logging.Warnf("TCP send buffer: %v", err)
+			if b.failureLog.Allow(time.Now()) {
+				logging.Warnf("TCP send buffer: %v", err)
+			}
 		}
 	}
 }

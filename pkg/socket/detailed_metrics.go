@@ -8,8 +8,9 @@ import (
 
 // BridgeMetrics captures per-bridge counters and active flow count.
 type BridgeMetrics struct {
-	Counters    core.SocketMetrics
-	ActiveFlows uint64
+	DeliveryRefused uint64
+	Counters        core.SocketMetrics
+	ActiveFlows     uint64
 }
 
 // SocketDetailedMetrics exposes total and per-bridge metrics for the socket interface.

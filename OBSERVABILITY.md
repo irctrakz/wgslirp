@@ -1,4 +1,4 @@
-# Admission metrics
+# Observability and metrics
 
 `SocketInterface.DetailedMetrics().Admission` and the JSON reporter's additive
 `admission` object expose the same fixed set of cumulative counters. Text metrics
@@ -62,6 +62,87 @@ queue metrics and is separate from these byte/flow/dial limits.
   Legacy `buffer_dropped` and `pend_drop` also overlap subsets and can include
   non-admission failures. **Do not add legacy and new counters together.**
 
-This change adds admission diagnostics only. General packet/error counter cleanup,
-reporter-owned interval state and broader metrics contracts remain architectural
-F09 work.
+## Versioned reporting contract (F09)
+
+JSON reports now include `schema_version: 1` and `wg_available`. Existing JSON
+keys remain available, including legacy null objects. This is the first explicitly
+versioned schema. Additive keys may appear; consumers should ignore unknown keys.
+Existing field names remain stable, but the erroneous counting described below is
+corrected; dashboards must not assume continuity with previously inflated totals.
+Text reports identify the schema and WireGuard-state availability too.
+
+Each periodic reporter owns its previous RTO sample. The first delta is the
+current cumulative value; a decrease is treated as a counter reset and the delta
+is the new value. Independent reporters never consume each other's history.
+One-shot reports have no previous sample. Counters are not reset by reporting.
+
+WireGuard monitoring and reporting use the same peer-state parser. Each peer
+section is counted once, including peers that have never completed a handshake.
+Unknown fields and malformed numeric values are ignored; device secrets are not
+retained by the parser. Never-handshaken peers are stale. Freshness uses the
+larger of 60 seconds and three keepalive intervals. Future handshake timestamps
+have age zero. Oldest/newest ages cover completed handshakes only; zero can mean
+no completed handshakes. `wg_available=false` means the device/state was
+unavailable, not that the device has no peers. Host statistics that cannot be read
+are omitted from `srv_limits`; text displays `unavailable` instead of a false zero.
+
+## Packet, byte, failure and lifecycle units
+
+| Field | Counting boundary |
+| --- | --- |
+| `total.pkts_sent` / `bytes_sent` | IPv4 frames dispatched to a supported bridge with a nil result by the running public socket write path, and their declared IP length (headers included, padding excluded). TCP control packets and consumed retransmissions count. This is not proof of delivery to the host. |
+| `tcp` / `udp` `pkts_sent` / `bytes_sent` | Successful host socket write operations and payload bytes, excluding guest IP/transport headers. TCP reassembly/pending flushes may change the number of writes. UDP includes empty datagrams, which are now forwarded instead of silently skipped. These are not additive with the frame totals. |
+| `total`, `tcp`, `udp` `pkts_recv` / `bytes_recv` | Synthesized frames accepted by the downstream packet processor and full frame bytes, including control/error replies attributed to their producing bridge. Retransmissions and UDP fragments are individual frames. Acceptance into a queue is not eventual wire delivery. |
+| `tcp.delivery_refused` / `udp.delivery_refused` | Synthesized frames rejected by the downstream delivery collaborator. Allocation refusal before a frame exists remains in admission/buffer metrics. |
+| `total.errors` | Failures of running public writes, unsupported protocols consumed without forwarding, and handled/background bridge failures. Returned bridge errors are counted once at the public boundary. Direct bridge calls do not increment public write-failure counts. |
+| `tcp.errors` / `udp.errors` | Errors returned by the bridge plus handled/background failures owned by it. These overlap total errors; do not sum them. Delivery refusal is counted separately. Normal close/cancellation is not a read error. |
+| `conns_created` / `conns_closed` | Cumulative admitted flow insertion/removal, not dial attempts. Closed TIME-WAIT host sockets can still occupy active TCP flow slots. |
+| `tcp_active` / `udp_active` | Current registry entries. Snapshots are race-safe, not transactional across every field. |
+| `wg.plaintext_from_wg` | IPv4 bytes accepted by successful TUN writes, including overlay forwarding. Earlier successes survive a later failure in the same batch. |
+| `wg.plaintext_to_wg` | Bytes accepted into the TUN read queue, counted once on enqueue. Reading a queued frame does not count it again. |
+| `wg.queue_drops` | TUN enqueue failures from queue-slot or retained-byte admission limits. |
+| `udp.tx_enq` / `udp.tx_proc` | Frame delivery attempts / accepted deliveries, scoped to one socket interface. |
+
+`errors` is not an exhaustive packet-loss count: admission refusals, downstream
+rejections, retransmissions and resource-driven resets have separate counters
+where documented. Do not infer successful delivery from a zero error count.
+
+The public total outbound frame counters no longer also add TCP/UDP host payload
+writes. Queue saturation tracks consecutive `ErrQueueFull` outcomes in serialized
+injection order; the maximum updates when a failure occurs, and success or another
+error ends the current streak. Burst and maximum counts are cumulative. Snapshot
+maps are detached. `ResetMetrics` uses atomic stores, but resetting several fields
+is not an atomic transaction and resets can intentionally discard concurrent work.
+
+## Dependencies, diagnostics and probes
+
+`core.PacketWriter` and `core.PacketBufferReserver` define the neutral borrowing
+and reservation contracts; the existing `socket` names are compatibility aliases.
+The TUN still uses the socket budget factory for its compatible finite fallback,
+but its writer and reservation collaborators use neutral interfaces.
+TCP/UDP bridges expose private dial/delivery collaborators for focused tests.
+Their constructors launch no maintenance workers; the socket lifecycle explicitly
+starts reaping/health work. Existing lifecycle ownership and stop bounds still
+apply. TCP close-time checks already accept an explicit time for deterministic
+fixtures. No generic scheduler or packet framework is introduced.
+
+`wireguard.ErrQueueFull` identifies queue-slot saturation with `errors.Is`;
+reservation failures remain distinct. Worker errors preserve the wrapped writer
+cause. Repetitive socket read/deadline/oversize, ICMP parse, processor write, TCP close-expiry and host
+socket-option warnings are limited to one per 30 seconds per owning limiter;
+metrics continue counting every event. Existing periodic health/handshake logs and
+one-time capture/MTU warnings retain their existing bounds.
+
+Startup health probes are one-shot diagnostics of direct host egress and slirp DNS.
+They are not a persistent liveness/readiness endpoint or a proof of sustained
+forwarding. The health tee exposes the primary processor's metrics without
+resetting or hiding them. No endpoint is added without a deployment requirement.
+
+
+The optional socket worker processor retains `packetsProcessed` as the legacy
+queue-admission counter. Additive `packetsDelivered`, `writeErrors`, and
+`shutdownDropped` distinguish successful writer completions, failed writes, and
+queued work discarded at shutdown. `packetsDropped` / `queueFullDrops` describe
+pre-enqueue rejection. These counters are not interchangeable. The metrics
+reporter consumes narrow snapshot/state interfaces; sampling and emission are
+separate, so fixtures require no live WireGuard device or socket bridge.

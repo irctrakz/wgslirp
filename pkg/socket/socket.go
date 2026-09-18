@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -18,7 +19,8 @@ import (
 // SocketInterface represents a socket interface for connecting to the host network
 // It implements the core.SocketInterface interface and the SocketWriter interface
 type SocketInterface struct {
-	admission admissionCounters
+	failureLog logging.RateLimiter
+	admission  admissionCounters
 	// Configuration
 	config       Config
 	budgetOnce   sync.Once
@@ -108,7 +110,7 @@ func (s *SocketInterface) Start() error {
 		// For ICMP, use the icmp package. This works in privileged mode ("ip4:icmp").
 		s.conn, err = icmp.ListenPacket(protocol, "0.0.0.0") // Bind to all interfaces
 		if err != nil {
-			return fmt.Errorf("failed to create raw socket with protocol %s: %v", protocol, err)
+			return fmt.Errorf("failed to create raw socket with protocol %s: %w", protocol, err)
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
 		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
@@ -118,7 +120,7 @@ func (s *SocketInterface) Start() error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to create raw socket with protocol %s: %v", protocol, err)
+		return fmt.Errorf("failed to create raw socket with protocol %s: %w", protocol, err)
 	}
 
 	if s.conn != nil {
@@ -127,7 +129,7 @@ func (s *SocketInterface) Start() error {
 		if err != nil {
 			s.conn.Close()
 			s.conn = nil
-			return fmt.Errorf("failed to set read deadline: %v", err)
+			return fmt.Errorf("failed to set read deadline: %w", err)
 		}
 	}
 
@@ -155,6 +157,8 @@ func (s *SocketInterface) Start() error {
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
 	s.icmp = newICMPBridge(s)
+	s.udp.start()
+	s.tcp.start()
 
 	// No egress limiter configuration
 
@@ -259,7 +263,9 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	}
 	// Check packet size against MTU
 	if len(data) > s.config.MTU {
-		logging.Warnf("Packet size %d exceeds MTU %d, packet will be fragmented", len(data), s.config.MTU)
+		if s.failureLog.Allow(time.Now()) {
+			logging.Warnf("Guest packet size %d exceeds configured MTU %d", len(data), s.config.MTU)
+		}
 	}
 
 	// Extract IP header information for detailed logging
@@ -415,10 +421,11 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 		udp.flowsMu.Lock()
 		active := uint64(len(udp.flows))
 		udp.flowsMu.Unlock()
+		dm.UDP.DeliveryRefused = udp.deliveryRefused.Load()
 		dm.UDP.Counters = loadSocketMetrics(&udp.metrics)
 		dm.UDP.ActiveFlows = active
 		// Add UDP debug counters
-		enq, proc := getUDPTxDebug()
+		enq, proc := udp.txEnqueued.Load(), udp.txProcessed.Load()
 		dm.UDPExt = map[string]uint64{"tx_enq": enq, "tx_proc": proc}
 	}
 	if tcp != nil {
@@ -442,6 +449,7 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 				f.stateMu.Unlock()
 			}
 		}
+		dm.TCP.DeliveryRefused = tcp.deliveryRefused.Load()
 		dm.TCP.Counters = loadSocketMetrics(&tcp.metrics)
 		dm.TCP.ActiveFlows = active
 		// TCP extra debug counters
@@ -482,7 +490,10 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 	// Include processor metrics if available
 	if processor != nil {
 		if m, ok := processor.(interface{ Metrics() map[string]uint64 }); ok {
-			dm.Processor = m.Metrics()
+			dm.Processor = make(map[string]uint64)
+			for k, v := range m.Metrics() {
+				dm.Processor[k] = v
+			}
 		}
 	}
 	return dm
@@ -557,7 +568,13 @@ func (s *SocketInterface) listenLoop(releaseRead func()) {
 			// Reset read deadline to prevent permanent timeout
 			err := s.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			if err != nil {
-				logging.Errorf("Failed to reset read deadline: %v", err)
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				if s.failureLog.Allow(time.Now()) {
+					logging.Errorf("Failed to reset read deadline: %v", err)
+				}
+				atomic.AddUint64(&s.metrics.Errors, 1)
 				time.Sleep(100 * time.Millisecond) // Avoid tight loop if errors persist
 				continue
 			}
@@ -569,7 +586,12 @@ func (s *SocketInterface) listenLoop(releaseRead func()) {
 					// This is just a timeout, not an error
 					continue
 				}
-				logging.Errorf("Failed to read from socket: %v", err)
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				if s.failureLog.Allow(time.Now()) {
+					logging.Errorf("Failed to read from socket: %v", err)
+				}
 				atomic.AddUint64(&s.metrics.Errors, 1)
 				time.Sleep(100 * time.Millisecond) // Avoid tight loop if errors persist
 				continue

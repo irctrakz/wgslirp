@@ -112,8 +112,6 @@ func (b *tcpBridge) flushReassembly(f *tcpFlow) error {
 			}
 			atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
 			atomic.AddUint64(&b.metrics.PacketsSent, 1)
-			atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
-			atomic.AddUint64(&b.parent.metrics.PacketsSent, 1)
 			f.toSrvBytes += uint64(n)
 			f.toSrvPkts++
 			f.clientNxt += uint32(n)

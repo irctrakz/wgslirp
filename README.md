@@ -334,7 +334,7 @@ Existing constructors remain compatible. Custom writers can implement `socket.Pa
 
 When dial admission is exhausted, new attempts receive RST and `socket.ErrDialLimit`. A new UDP flow without buffer capacity returns `socket.ErrBufferLimit` before sending its payload. TCP pending/reassembly rejection does not acknowledge unaccepted data, allowing retransmission. The per-flow retransmission cap pauses host reads until ACK progress; aggregate exhaustion while queuing a server reply resets only that flow. Active-flow admission remains `socket.ErrFlowLimit`. Errors can be checked with `errors.Is`.
 
-Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`, `dial_limit`, `dial_refused`, `socket_buffer_bytes`, `socket_buffer_peak`, `socket_buffer_limit`, `socket_buffer_refused`, and `buffer_dropped`. Socket-buffer values cover TCP, UDP and adapters using that socket's packet buffer budget. Refusal counters count reservation attempts, including retries, rather than unique packets or flows; `buffer_dropped` counts rejected TCP queue operations/aborted buffered flows. Queue budget refusal returns `socket.ErrBufferLimit`; shared-budget refusals are classified by the `admission` counters documented in [OBSERVABILITY.md](OBSERVABILITY.md). Broader queue/error metric semantics remain F09.
+Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`, `dial_limit`, `dial_refused`, `socket_buffer_bytes`, `socket_buffer_peak`, `socket_buffer_limit`, `socket_buffer_refused`, and `buffer_dropped`. Socket-buffer values cover TCP, UDP and adapters using that socket's packet buffer budget. Refusal counters count reservation attempts, including retries, rather than unique packets or flows; `buffer_dropped` counts rejected TCP queue operations/aborted buffered flows. Queue budget refusal returns `socket.ErrBufferLimit`; shared-budget refusals are classified by the `admission` counters documented in [OBSERVABILITY.md](OBSERVABILITY.md). Queue/error counting and compatibility contracts are documented there as part of completed F09.
 
 - `TCP_ACK_DELAY_MS`: delayed ACK timer (ms). Lower (e.g., 5) reduces ACK latency.
 - `TCP_ENABLE_SACK`: advertise SACK permitted in SYN-ACK (recommended 1 for modern stacks).
@@ -373,6 +373,8 @@ The router now always operates in simple mode: inline delivery, no FlowManager, 
 <!-- Auto-Fallback removed -->
 
 ### Metrics Reporter
+
+Metrics JSON includes `schema_version: 1`. See [observability contracts](OBSERVABILITY.md) for corrected frame/payload counting, reporter-local deltas, unavailable statistics and queue saturation semantics.
 
 Enable periodic metrics logs for visibility. Text or JSON formats are supported. Set `METRICS_LOG=true` or a positive `METRICS_INTERVAL` to enable; explicit `METRICS_LOG=false` overrides the interval.
 

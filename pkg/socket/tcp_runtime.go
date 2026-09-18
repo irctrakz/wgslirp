@@ -157,6 +157,8 @@ func (b *tcpBridge) reader(f *tcpFlow) {
 		if errors.Is(err, io.EOF) {
 			b.startFINLocked(f, time.Now())
 		} else {
+			atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			atomic.AddUint64(&b.metrics.Errors, 1)
 			b.abortBufferedFlowLocked(f)
 		}
 		f.stateMu.Unlock()

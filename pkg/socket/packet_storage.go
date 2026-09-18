@@ -129,12 +129,16 @@ func (b *udpBridge) deliverDatagram(f *udpFlow, payload []byte, tos, ttl byte, m
 }
 
 func (b *udpBridge) deliverReply(packet core.Packet) bool {
-	size := packet.Length()
-	udpDebugEnqueue()
-	if !deliverPacket(b.parent.processor, packet) {
+	if packet == nil {
 		return false
 	}
-	udpDebugProcessed()
+	size := packet.Length()
+	b.txEnqueued.Add(1)
+	if !b.deliver(packet) {
+		b.deliveryRefused.Add(1)
+		return false
+	}
+	b.txProcessed.Add(1)
 	atomic.AddUint64(&b.metrics.PacketsReceived, 1)
 	atomic.AddUint64(&b.metrics.BytesReceived, uint64(size))
 	atomic.AddUint64(&b.parent.metrics.PacketsReceived, 1)

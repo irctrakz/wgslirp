@@ -2,6 +2,7 @@ package socket
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -15,14 +16,19 @@ import (
 // udpBridge implements a simple slirp-style UDP translator.
 // It maps guest UDP 5-tuples to host UDP sockets and relays payloads.
 type udpBridge struct {
-	buffers  *resourceBudget
-	parent   *SocketInterface
-	flowsMu  sync.RWMutex
-	flows    map[string]*udpFlow
-	stopCh   chan struct{}
-	lifetime time.Duration
-	stopped  bool // guarded by flowsMu; serializes worker admission with stop
-	workers  sync.WaitGroup
+	deliveryRefused         atomic.Uint64
+	deliver                 packetDelivery
+	dial                    func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)
+	startOnce               sync.Once
+	txEnqueued, txProcessed atomic.Uint64
+	buffers                 *resourceBudget
+	parent                  *SocketInterface
+	flowsMu                 sync.RWMutex
+	flows                   map[string]*udpFlow
+	stopCh                  chan struct{}
+	lifetime                time.Duration
+	stopped                 bool // guarded by flowsMu; serializes worker admission with stop
+	workers                 sync.WaitGroup
 
 	metrics  core.SocketMetrics
 	maxFlows int
@@ -48,6 +54,8 @@ type udpFlow struct {
 func newUDPBridge(parent *SocketInterface) *udpBridge {
 	b := &udpBridge{
 		parent:   parent,
+		deliver:  parent.packetDelivery(),
+		dial:     net.DialUDP,
 		flows:    make(map[string]*udpFlow),
 		stopCh:   make(chan struct{}),
 		lifetime: 60 * time.Second,
@@ -59,9 +67,19 @@ func newUDPBridge(parent *SocketInterface) *udpBridge {
 		}
 		b.maxFlows = parent.config.MaxUDPFlows
 	}
-	b.workers.Add(1)
-	go func() { defer b.workers.Done(); b.reaper() }()
 	return b
+}
+
+func (b *udpBridge) start() {
+	b.startOnce.Do(func() {
+		b.flowsMu.Lock()
+		defer b.flowsMu.Unlock()
+		if b.stopped {
+			return
+		}
+		b.workers.Add(1)
+		go func() { defer b.workers.Done(); b.reaper() }()
+	})
 }
 
 func (b *udpBridge) Name() string { return "udp" }
@@ -87,7 +105,17 @@ func (b *udpBridge) stop() {
 // HandleOutbound parses an IPv4+UDP packet and forwards the UDP payload via a host UDP socket.
 // It creates a flow if needed and writes the payload. The flow's read goroutine sends replies
 // back to the netstack as synthesized IPv4+UDP packets.
-func (b *udpBridge) HandleOutbound(pkt []byte) error {
+func (b *udpBridge) HandleOutbound(pkt []byte) (err error) {
+	admitted := false
+	// Publish the operation's error before allowing lifecycle waits to complete.
+	defer func() {
+		if err != nil {
+			atomic.AddUint64(&b.metrics.Errors, 1)
+		}
+		if admitted {
+			b.workers.Done()
+		}
+	}()
 	b.flowsMu.Lock()
 	if b.stopped {
 		b.flowsMu.Unlock()
@@ -95,7 +123,7 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 	}
 	b.workers.Add(1)
 	b.flowsMu.Unlock()
-	defer b.workers.Done()
+	admitted = true
 	pkt, ihl, err := parseTransport(pkt, 17)
 	if err != nil {
 		return err
@@ -119,7 +147,7 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 	// Reject unspecified destination addresses
 	if net.IP(dstIP[:]).IsUnspecified() {
 		if b.parent != nil && b.parent.processor != nil {
-			_ = deliverPacket(b.parent.processor, b.buffers.buildICMPUnreachable(dstIP, srcIP, 3 /*port unreachable*/, pkt))
+			_ = b.deliverReply(b.buffers.buildICMPUnreachable(dstIP, srcIP, 3 /*port unreachable*/, pkt))
 		}
 		return fmt.Errorf("udp: unspecified destination address")
 	}
@@ -131,13 +159,12 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 	if flow == nil {
 		// Dial UDP to destination outside of lock
 		raddr := &net.UDPAddr{IP: net.IP(dstIP[:]), Port: int(dstPort)}
-		conn, err := net.DialUDP("udp", nil, raddr)
+		conn, err := b.dial("udp", nil, raddr)
 		if err != nil {
 			// ICMP error mapping: port unreachable back to client
 			if b.parent != nil && b.parent.processor != nil {
-				_ = deliverPacket(b.parent.processor, b.buffers.buildICMPUnreachable(dstIP, srcIP, 3 /*Port Unreachable*/, pkt))
+				_ = b.deliverReply(b.buffers.buildICMPUnreachable(dstIP, srcIP, 3 /*Port Unreachable*/, pkt))
 			}
-			atomic.AddUint64(&b.parent.metrics.Errors, 1)
 			return fmt.Errorf("udp: dial %v: %w", raddr, err)
 		}
 		candidate := &udpFlow{
@@ -168,7 +195,7 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 				b.flowsMu.Unlock()
 				_ = conn.Close()
 				if b.parent != nil && b.parent.processor != nil {
-					_ = deliverPacket(b.parent.processor, b.buffers.buildICMPUnreachable(dstIP, srcIP, 1, pkt))
+					_ = b.deliverReply(b.buffers.buildICMPUnreachable(dstIP, srcIP, 1, pkt))
 				}
 				return fmt.Errorf("udp: %w", ErrFlowLimit)
 			}
@@ -191,15 +218,12 @@ func (b *udpBridge) HandleOutbound(pkt []byte) error {
 	flow.touch()
 
 	// Write payload to remote
-	if len(payload) > 0 {
+	{
 		if n, err := flow.conn.Write(payload); err != nil {
-			atomic.AddUint64(&b.parent.metrics.Errors, 1)
 			return fmt.Errorf("udp: write: %w", err)
 		} else {
 			atomic.AddUint64(&b.metrics.PacketsSent, 1)
 			atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
-			atomic.AddUint64(&b.parent.metrics.PacketsSent, 1)
-			atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
 		}
 	}
 	return nil
@@ -211,6 +235,10 @@ func (b *udpBridge) reader(f *udpFlow) {
 	for {
 		n, _, err := f.conn.ReadFrom(buf)
 		if err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				atomic.AddUint64(&b.metrics.Errors, 1)
+				atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			}
 			// Closed or error; remove flow
 			b.removeFlow(f)
 			return
