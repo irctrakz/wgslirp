@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -161,14 +162,35 @@ func (s *SocketInterface) Start() error {
 	return nil
 }
 
-// Stop stops the socket interface
-func (s *SocketInterface) Stop() error {
-	s.mu.Lock()
-	if s.stopped {
-		done := s.stopDone
-		s.mu.Unlock()
-		<-done
+// Stop requests shutdown and joins all accepted work. Call RequestStop from
+// a delivery callback; waiting here inside that callback would join itself.
+func (s *SocketInterface) Stop() error { return s.StopContext(context.Background()) }
+
+// StopContext bounds the caller's wait, not the lifetime of accepted callbacks.
+// On timeout cleanup continues; RequestStop's channel closes only after joining.
+func (s *SocketInterface) StopContext(ctx context.Context) error {
+	done := s.RequestStop()
+	select {
+	case <-done:
 		return nil
+	default:
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// RequestStop closes admission synchronously and starts exactly one finalizer.
+// It is safe inside a delivery callback provided the callback does not wait for
+// the returned completion channel (which includes that callback's return).
+func (s *SocketInterface) RequestStop() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return s.stopDone
 	}
 	s.stopped = true
 	s.running = false
@@ -177,21 +199,27 @@ func (s *SocketInterface) Stop() error {
 		close(s.stopCh)
 	}
 	conn, udp, tcp := s.conn, s.udp, s.tcp
-	s.mu.Unlock()
-	// Close descriptors before joining blocked readers. Bridge pointers remain
-	// stable after startup so concurrent snapshots never observe torn teardown.
-	if conn != nil {
-		_ = conn.Close()
-	}
-	if udp != nil {
-		udp.stop()
-	}
-	if tcp != nil {
-		tcp.stop()
-	}
-	s.wg.Wait()
-	close(s.stopDone)
-	return nil
+	go func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		// Signal both bridges before joining either callback domain.
+		if tcp != nil {
+			tcp.requestStop()
+		}
+		if udp != nil {
+			udp.requestStop()
+		}
+		if tcp != nil {
+			tcp.stop()
+		}
+		if udp != nil {
+			udp.stop()
+		}
+		s.wg.Wait()
+		close(s.stopDone)
+	}()
+	return s.stopDone
 }
 
 // SetPacketProcessor configures delivery before Start. Runtime replacement is
@@ -471,20 +499,13 @@ func (s *SocketInterface) ResetAllTCPFlows() int {
 		return 0
 	}
 
-	// Get all flow keys
-	tcp.mu.RLock()
-	keys := make([]string, 0, len(tcp.flows))
-	for k := range tcp.flows {
-		keys = append(keys, k)
+	count := 0
+	for _, f := range tcp.flowSnapshot() {
+		if tcp.removeFlowIf(f, nil) {
+			count++
+		}
 	}
-	tcp.mu.RUnlock()
-
-	// Reset each flow
-	for _, k := range keys {
-		tcp.removeFlow(k)
-	}
-
-	return len(keys)
+	return count
 }
 
 // ResetRTOTCPFlows resets only TCP flows that are in the retransmit state.
@@ -498,20 +519,19 @@ func (s *SocketInterface) ResetRTOTCPFlows() int {
 		return 0
 	}
 
-	// Get RTO flow keys
 	tcp.rtoMu.Lock()
-	rtoKeys := make([]string, 0, len(tcp.rtoActiveFlows))
-	for k := range tcp.rtoActiveFlows {
-		rtoKeys = append(rtoKeys, k)
+	flows := make([]*tcpFlow, 0, len(tcp.rtoActiveFlows))
+	for _, f := range tcp.rtoActiveFlows {
+		flows = append(flows, f)
 	}
 	tcp.rtoMu.Unlock()
-
-	// Reset only RTO flows
-	for _, k := range rtoKeys {
-		tcp.removeFlow(k)
+	count := 0
+	for _, f := range flows {
+		if tcp.removeFlowIf(f, nil) {
+			count++
+		}
 	}
-
-	return len(rtoKeys)
+	return count
 }
 
 // listenLoop listens for packets from the host network

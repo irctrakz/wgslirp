@@ -297,7 +297,7 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 		// Diagnostics take snapshots of multiple flows, so run them only
 		// after releasing this flow's state lock.
 		if packet != nil {
-			b.trackRTOFlow(f.key)
+			b.trackRTOFlow(f)
 		}
 	}
 }

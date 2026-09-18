@@ -1,6 +1,7 @@
 package wireguard
 
 import (
+	"fmt"
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/logging"
 	"strings"
@@ -37,7 +38,10 @@ func NewWGPacketProcessor(tun *WGTun) core.PacketProcessor {
 // ProcessPacket implements core.PacketProcessor.
 func (p *WGPacketProcessor) ProcessPacket(packet core.Packet) error {
 	if p == nil || p.tun == nil {
-		return nil
+		return fmt.Errorf("WireGuard processor has no TUN")
+	}
+	if packet == nil {
+		return fmt.Errorf("nil packet")
 	}
 	// Guarded sanity check: detect pooled packet early-release regressions.
 	if r, ok := packet.(interface{ Released() bool }); ok && r.Released() {

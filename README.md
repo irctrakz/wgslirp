@@ -248,7 +248,7 @@ Metrics and health
 
 Socket lifecycle
 
-Socket interfaces are single-use: configure the packet processor before `Start`, then call `Stop` to close connections and join accepted work. Repeated or concurrent `Stop` calls are safe; restart and writes after shutdown return errors. Processor replacement after startup is ignored with a warning. Create a new interface to change the processor or restart. Delivery callbacks must return promptly; shutdown waits for in-flight callbacks to complete.
+Socket interfaces are single-use: configure the packet processor before `Start`, then call `Stop` to close connections and join accepted work. Repeated or concurrent `Stop` calls are safe; restart and writes after shutdown return errors. Processor replacement after startup is ignored with a warning. Create a new interface to change the processor or restart. Delivery callbacks must return promptly; shutdown waits for in-flight callbacks to complete. Use `RequestStop` inside callbacks and `StopContext` to bound a caller's wait. See [lifecycle and callback contracts](LIFECYCLE.md) for ownership, re-entry restrictions and shutdown limits.
 
 Packet processing and TUN (userspace)
 
@@ -320,7 +320,7 @@ remain available. WireGuard/capture settings and process-wide pooling policy als
 
 Flow-cap migration: previously, unset flow caps were unlimited. The application and `socket.DefaultConfig()` now default to 64 TCP and 256 UDP flows. Set positive caps for larger measured workloads, or explicitly set `MAX_TCP_FLOWS=0` / `MAX_UDP_FLOWS=0` to retain unlimited flow admission. Explicit zero fields in manually constructed Go configs keep their previous meaning. Dial and buffer budgets still apply independently. See [resource-budget measurements](RESOURCE_BUDGETS.md) for the workload, rationale and limits of these defaults.
 
-The four new dial/buffer controls use their finite defaults when zero; zero never disables these limits. In particular, `TCP_PEND_CAP_BYTES=0` now means 64 KiB rather than unlimited buffering. Defaults are provisional safety limits; representative workload sizing remains tracked in the architecture plan.
+The four new dial/buffer controls use their finite defaults when zero; zero never disables these limits. In particular, `TCP_PEND_CAP_BYTES=0` now means 64 KiB rather than unlimited buffering. Defaults are supported by the finite mixed TCP/UDP bridge workload in [RESOURCE_BUDGETS.md](RESOURCE_BUDGETS.md); encrypted end-to-end, WAN and soak validation remain tracked in F10.
 
 The shared buffer budget reserves capacity before allocating TCP pending, reassembly and retransmission payloads, asynchronous-dial ICMP quotes, TCP/UDP/raw-ICMP read buffers, synthesized TCP/UDP/ICMP packets, ICMP parser/marshal scratch and WireGuard-to-socket copies. Retained packet/queue entries also incur a 128-byte accounting allowance; reassembly merges reserve replacement storage while old data remains live. Each UDP flow requires a 65,535-byte read-buffer reservation. Raw ICMP startup fails if its 65,536-byte reader plus entry allowance cannot be reserved. Reservations release on ACK, flush, rejection, expiry or worker/flow teardown as appropriate.
 
@@ -334,7 +334,7 @@ Existing constructors remain compatible. Custom writers can implement `socket.Pa
 
 When dial admission is exhausted, new attempts receive RST and `socket.ErrDialLimit`. A new UDP flow without buffer capacity returns `socket.ErrBufferLimit` before sending its payload. TCP pending/reassembly rejection does not acknowledge unaccepted data, allowing retransmission. The per-flow retransmission cap pauses host reads until ACK progress; aggregate exhaustion while queuing a server reply resets only that flow. Active-flow admission remains `socket.ErrFlowLimit`. Errors can be checked with `errors.Is`.
 
-Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`, `dial_limit`, `dial_refused`, `socket_buffer_bytes`, `socket_buffer_peak`, `socket_buffer_limit`, `socket_buffer_refused`, and `buffer_dropped`. Socket-buffer values cover TCP, UDP and adapters using that socket's packet buffer budget. Refusal counters count reservation attempts, including retries, rather than unique packets or flows; `buffer_dropped` counts rejected TCP queue operations/aborted buffered flows. Queue budget refusal returns `socket.ErrBufferLimit`; reason-specific queue counters remain a separate observability follow-up.
+Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`, `dial_limit`, `dial_refused`, `socket_buffer_bytes`, `socket_buffer_peak`, `socket_buffer_limit`, `socket_buffer_refused`, and `buffer_dropped`. Socket-buffer values cover TCP, UDP and adapters using that socket's packet buffer budget. Refusal counters count reservation attempts, including retries, rather than unique packets or flows; `buffer_dropped` counts rejected TCP queue operations/aborted buffered flows. Queue budget refusal returns `socket.ErrBufferLimit`; shared-budget refusals are classified by the `admission` counters documented in [OBSERVABILITY.md](OBSERVABILITY.md). Broader queue/error metric semantics remain F09.
 
 - `TCP_ACK_DELAY_MS`: delayed ACK timer (ms). Lower (e.g., 5) reduces ACK latency.
 - `TCP_ENABLE_SACK`: advertise SACK permitted in SYN-ACK (recommended 1 for modern stacks).

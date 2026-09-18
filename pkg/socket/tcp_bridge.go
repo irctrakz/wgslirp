@@ -85,9 +85,9 @@ type tcpBridge struct {
 
 	// RTO metrics tracking
 	rtoMu              sync.Mutex
-	rtoActiveFlows     map[string]bool // Tracks flows currently in RTO retransmission
-	rtoMetricsDumped   bool            // Flag to prevent repeated dumps for the same event
-	rtoMetricsDumpTime time.Time       // Last time metrics were dumped
+	rtoActiveFlows     map[string]*tcpFlow // Tracks flows currently in RTO retransmission
+	rtoMetricsDumped   bool                // Flag to prevent repeated dumps for the same event
+	rtoMetricsDumpTime time.Time           // Last time metrics were dumped
 
 	// ACK classification counters (userspace visibility for return path)
 	ackAdv     uint64 // ACK advanced sndUna
@@ -255,7 +255,7 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 		// and fail/reset truly stuck flows after 120s.
 		ackIdleGate:    6 * time.Second,
 		ackIdleFail:    120 * time.Second,
-		rtoActiveFlows: make(map[string]bool),
+		rtoActiveFlows: make(map[string]*tcpFlow),
 	}
 	if parent != nil {
 		cfg := parent.config
@@ -333,7 +333,7 @@ func (b *tcpBridge) monitorConnectionHealth() {
 			return
 		case <-ticker.C:
 			now := time.Now()
-			stalledFlows := make([]string, 0)
+			stalledFlows := make([]*tcpFlow, 0)
 
 			// Identify stalled flows
 			for _, f := range b.flowSnapshot() {
@@ -348,7 +348,7 @@ func (b *tcpBridge) monitorConnectionHealth() {
 					// 1. It has meaningful in-flight data
 					// 2. No ACK progress for a significant period
 					if inFlight >= minInFlight && idleTime >= stallThreshold {
-						stalledFlows = append(stalledFlows, k)
+						stalledFlows = append(stalledFlows, f)
 						logging.Warnf("Stalled connection detected: flow=%s idle=%v inFlight=%d bytes",
 							k, idleTime.Round(time.Second), inFlight)
 					}
@@ -357,14 +357,19 @@ func (b *tcpBridge) monitorConnectionHealth() {
 			}
 
 			// Reset stalled flows
-			for _, k := range stalledFlows {
-				logging.Warnf("Health monitor resetting stalled flow: %s", k)
-				b.removeFlow(k)
+			reset := 0
+			for _, f := range stalledFlows {
+				// Recheck progress after taking a snapshot: an ACK may have arrived.
+				if b.removeFlowIf(f, func(f *tcpFlow) bool {
+					return f.state == tcpEstablished && int(f.serverNxt-f.sndUna) >= minInFlight && now.Sub(f.lastAckTime) >= stallThreshold
+				}) {
+					reset++
+				}
 			}
 
 			// Log health check summary if any issues found
-			if len(stalledFlows) > 0 {
-				logging.Infof("Connection health check: reset %d stalled flows", len(stalledFlows))
+			if reset > 0 {
+				logging.Infof("Connection health check: reset %d stalled flows", reset)
 			}
 		}
 	}
@@ -388,14 +393,23 @@ func (b *tcpBridge) SetPaceUS(us int) {
 	logging.Infof("TCP pacing set to %d us (0=disabled)", us)
 }
 
+func (b *tcpBridge) requestStop() {
+	b.lifecycleMu.Lock()
+	defer b.lifecycleMu.Unlock()
+	select {
+	case <-b.stopCh:
+		return
+	default:
+	}
+	close(b.stopCh)
+	b.cancel()
+}
+
 func (b *tcpBridge) stop() {
+	b.requestStop()
 	b.stopOnce.Do(func() {
-		b.lifecycleMu.Lock()
-		close(b.stopCh)
-		b.cancel()
-		b.lifecycleMu.Unlock()
 		for _, f := range b.flowSnapshot() {
-			b.removeFlow(f.key)
+			b.removeFlowIf(f, nil)
 		}
 		b.workers.Wait()
 	})
@@ -1143,9 +1157,22 @@ func (b *tcpBridge) removeFlow(key string) {
 	if f == nil {
 		return
 	}
+	b.removeFlowIf(f, nil)
+}
+
+// removeFlowIf acts on the observed identity, never a later tuple replacement.
+// The predicate runs under stateMu so expiry/health checks cannot race progress.
+func (b *tcpBridge) removeFlowIf(f *tcpFlow, predicate func(*tcpFlow) bool) bool {
 	f.stateMu.Lock()
 	defer f.stateMu.Unlock()
+	b.mu.RLock()
+	current := b.flows[f.key] == f
+	b.mu.RUnlock()
+	if !current || f.closed || (predicate != nil && !predicate(f)) {
+		return false
+	}
 	b.removeFlowLocked(f)
+	return true
 }
 
 // removeFlowLocked requires stateMu; removal is conditional on identity so an
@@ -1177,7 +1204,9 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 		close(f.rtoStop)
 	}
 	b.rtoMu.Lock()
-	delete(b.rtoActiveFlows, f.key)
+	if b.rtoActiveFlows[f.key] == f {
+		delete(b.rtoActiveFlows, f.key)
+	}
 	b.rtoMu.Unlock()
 	atomic.AddUint64(&b.metrics.ConnectionsClosed, 1)
 	atomic.AddUint64(&b.parent.metrics.ConnectionsClosed, 1)
@@ -1192,19 +1221,16 @@ func (b *tcpBridge) reaper() {
 			return
 		case <-t.C:
 			cutoff := time.Now().Add(-b.lifetime)
-			// Collect expired flow keys under lock, then remove outside the lock.
-			b.mu.Lock()
-			expired := make([]string, 0)
-			for k, f := range b.flows {
-				if f.lastActive().Before(cutoff) {
-					expired = append(expired, k)
-				}
-			}
-			b.mu.Unlock()
-			for _, k := range expired {
-				logging.Debugf("TCP flow expired and removed: %s", k)
-				b.removeFlow(k)
-			}
+			b.expireFlows(cutoff)
+		}
+	}
+}
+
+// expireFlows rechecks liveness under flow state after registry observation.
+func (b *tcpBridge) expireFlows(cutoff time.Time) {
+	for _, f := range b.flowSnapshot() {
+		if f.lastActive().Before(cutoff) {
+			b.removeFlowIf(f, func(f *tcpFlow) bool { return f.lastActive().Before(cutoff) })
 		}
 	}
 }
@@ -1567,12 +1593,20 @@ func (b *tcpBridge) logSendGated(f *tcpFlow, cause string, advWnd, inFlight, cw 
 }
 
 // trackRTOFlow adds a flow to the RTO tracking map and checks if we need to dump metrics
-func (b *tcpBridge) trackRTOFlow(flowKey string) {
+func (b *tcpBridge) trackRTOFlow(f *tcpFlow) {
+	f.stateMu.Lock()
+	b.mu.RLock()
+	current := b.flows[f.key] == f
+	b.mu.RUnlock()
+	if f.closed || !current {
+		f.stateMu.Unlock()
+		return
+	}
 	// Decide whether a dump is needed without holding the lock during the dump
 	needDump := false
 	b.rtoMu.Lock()
 	// Add this flow to the active RTO flows map
-	b.rtoActiveFlows[flowKey] = true
+	b.rtoActiveFlows[f.key] = f
 	if len(b.rtoActiveFlows) >= 3 {
 		if !b.rtoMetricsDumped || time.Since(b.rtoMetricsDumpTime) > 30*time.Second {
 			// Mark as dumped and record time under lock
@@ -1590,12 +1624,13 @@ func (b *tcpBridge) trackRTOFlow(flowKey string) {
 				}
 				b.rtoMu.Lock()
 				b.rtoMetricsDumped = false
-				b.rtoActiveFlows = make(map[string]bool)
+				b.rtoActiveFlows = make(map[string]*tcpFlow)
 				b.rtoMu.Unlock()
 			})
 		}
 	}
 	b.rtoMu.Unlock()
+	f.stateMu.Unlock()
 	if needDump {
 		b.dumpDetailedMetrics()
 	}

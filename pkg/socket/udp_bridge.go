@@ -22,7 +22,6 @@ type udpBridge struct {
 	stopCh   chan struct{}
 	lifetime time.Duration
 	stopped  bool // guarded by flowsMu; serializes worker admission with stop
-	stopOnce sync.Once
 	workers  sync.WaitGroup
 
 	metrics  core.SocketMetrics
@@ -67,17 +66,22 @@ func newUDPBridge(parent *SocketInterface) *udpBridge {
 
 func (b *udpBridge) Name() string { return "udp" }
 
+func (b *udpBridge) requestStop() {
+	b.flowsMu.Lock()
+	defer b.flowsMu.Unlock()
+	if b.stopped {
+		return
+	}
+	b.stopped = true
+	close(b.stopCh)
+	for _, f := range b.flows {
+		b.removeFlowLocked(f)
+	}
+}
+
 func (b *udpBridge) stop() {
-	b.stopOnce.Do(func() {
-		b.flowsMu.Lock()
-		b.stopped = true
-		close(b.stopCh)
-		for _, f := range b.flows {
-			b.removeFlowLocked(f)
-		}
-		b.flowsMu.Unlock()
-		b.workers.Wait()
-	})
+	b.requestStop()
+	b.workers.Wait()
 }
 
 // HandleOutbound parses an IPv4+UDP packet and forwards the UDP payload via a host UDP socket.
