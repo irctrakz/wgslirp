@@ -21,7 +21,7 @@ func dialTCP(ctx context.Context, address string, timeout time.Duration) (*net.T
 // bytes are silently discarded and unrelated flows keep their reservations.
 func (b *tcpBridge) abortBufferedFlowLocked(f *tcpFlow) {
 	b.bufferDrops.Add(1)
-	_ = b.sendToGuest(f, buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
+	_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
 	b.removeFlowLocked(f)
 }
 

@@ -356,23 +356,22 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	return b
 }
 
-// sendToGuest attempts to deliver a synthesized packet toward the guest.
-// If a per-flow scheduler is available, route via the FlowManager to gain
-// backpressure-aware retries on WG queue-full; otherwise, send inline via
-// the parent's processor. Returns true if the packet was accepted for send.
-func (b *tcpBridge) sendToGuest(f *tcpFlow, pkt []byte) bool {
+// sendToGuest transfers a reserved packet to the downstream processor.
+func (b *tcpBridge) sendToGuest(f *tcpFlow, pkt core.Packet) bool {
 	if pkt == nil {
 		return false
 	}
-	// Prefer per-flow scheduler; if enqueue fails (queue full), fall back to inline send.
-	if b.parent != nil && b.parent.processor != nil {
-		if err := b.parent.processor.ProcessPacket(WrapPacket(pkt)); err == nil {
-			atomic.AddUint64(&b.metrics.PacketsReceived, 1)
-			atomic.AddUint64(&b.metrics.BytesReceived, uint64(len(pkt)))
-			atomic.AddUint64(&b.parent.metrics.PacketsReceived, 1)
-			atomic.AddUint64(&b.parent.metrics.BytesReceived, uint64(len(pkt)))
-			return true
-		}
+	size := pkt.Length()
+	if b.parent == nil {
+		core.ReleasePacket(pkt)
+		return false
+	}
+	if deliverPacket(b.parent.processor, pkt) {
+		atomic.AddUint64(&b.metrics.PacketsReceived, 1)
+		atomic.AddUint64(&b.metrics.BytesReceived, uint64(size))
+		atomic.AddUint64(&b.parent.metrics.PacketsReceived, 1)
+		atomic.AddUint64(&b.parent.metrics.BytesReceived, uint64(size))
+		return true
 	}
 	return false
 }
@@ -522,9 +521,9 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			cur := len(b.flows)
 			b.mu.RUnlock()
 			if cur >= b.maxFlows {
-				rst := buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
-				if rst != nil && b.parent.processor != nil {
-					_ = b.parent.processor.ProcessPacket(WrapPacket(rst))
+				rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
+				if rst != nil {
+					_ = deliverPacket(b.parent.processor, rst)
 				}
 				return fmt.Errorf("tcp: %w", ErrFlowLimit)
 			}
@@ -532,7 +531,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		// One reservation spans fast dialing and asynchronous fallback.
 		if !b.dialSlots.acquire(1) {
 			if b.parent.processor != nil {
-				_ = b.parent.processor.ProcessPacket(WrapPacket(buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil)))
+				_ = deliverPacket(b.parent.processor, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
 			}
 			return ErrDialLimit
 		}
@@ -566,13 +565,13 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 					if b.parent != nil && b.parent.processor != nil {
 						switch b.errorSignal {
 						case "icmp":
-							if icmp := buildICMPUnreachable(dstIP, srcIP, 1, pkt); icmp != nil {
-								_ = b.parent.processor.ProcessPacket(WrapPacket(icmp))
+							if icmp := b.buildICMPUnreachable(dstIP, srcIP, 1, pkt); icmp != nil {
+								_ = deliverPacket(b.parent.processor, icmp)
 							}
 						case "rst":
-							rst := buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
+							rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
 							if rst != nil {
-								_ = b.parent.processor.ProcessPacket(WrapPacket(rst))
+								_ = deliverPacket(b.parent.processor, rst)
 							}
 						case "none":
 						}
@@ -712,7 +711,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 					preConn.Close()
 				}
 				if b.parent.processor != nil {
-					_ = b.parent.processor.ProcessPacket(WrapPacket(buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil)))
+					_ = deliverPacket(b.parent.processor, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
 				}
 				return fmt.Errorf("tcp: %w", ErrFlowLimit)
 			}
@@ -752,13 +751,13 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 						if b.parent != nil && b.parent.processor != nil {
 							switch b.errorSignal {
 							case "icmp":
-								if icmp := buildICMPUnreachable(f.dstIP, f.srcIP, 1, quotedPacket); icmp != nil {
-									_ = b.parent.processor.ProcessPacket(WrapPacket(icmp))
+								if icmp := b.buildICMPUnreachable(f.dstIP, f.srcIP, 1, quotedPacket); icmp != nil {
+									_ = deliverPacket(b.parent.processor, icmp)
 								}
 							case "rst":
-								rst := buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, 0, f.clientISN+1, 0x04|0x10, nil)
+								rst := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, 0, f.clientISN+1, 0x04|0x10, nil)
 								if rst != nil {
-									_ = b.parent.processor.ProcessPacket(WrapPacket(rst))
+									_ = deliverPacket(b.parent.processor, rst)
 								}
 							case "none":
 							}
@@ -832,14 +831,15 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 						if f.sackPermitted || strings.TrimSpace(os.Getenv("TCP_ENABLE_SACK")) == "1" {
 							synOpts = append(synOpts, 4, 2)
 						}
-						synAck := buildIPv4TCPOpts(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverISN, f.clientISN+1, fSYN|fACK, nil, synOpts)
 						if !f.synAckSent {
-							f.synAckSent = true
+							synAck := b.buildIPv4TCPOpts(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverISN, f.clientISN+1, fSYN|fACK, nil, synOpts)
 							if b.logHandshake {
 								logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
 									f.key, effMTU, int(b.mssClamp.Load()), int(f.clientMSS), int(mss))
 							}
-							_ = b.sendToGuest(f, synAck)
+							if err := b.sendSYNACKLocked(f, synAck); err != nil {
+								return
+							}
 						}
 					}
 					// Start reader now that conn exists
@@ -889,13 +889,14 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 				if flow.sackPermitted || strings.TrimSpace(os.Getenv("TCP_ENABLE_SACK")) == "1" {
 					synOpts = append(synOpts, 4, 2)
 				}
-				synAck := buildIPv4TCPOpts(dstIP, srcIP, dstPort, srcPort, serverISN, seq+1, fSYN|fACK, nil, synOpts)
+				synAck := b.buildIPv4TCPOpts(dstIP, srcIP, dstPort, srcPort, serverISN, seq+1, fSYN|fACK, nil, synOpts)
 				if b.logHandshake {
 					logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
 						key, effMTU, int(b.mssClamp.Load()), int(flow.clientMSS), int(mss))
 				}
-				_ = b.sendToGuest(flow, synAck)
-				flow.synAckSent = true
+				if err := b.sendSYNACKLocked(flow, synAck); err != nil {
+					return err
+				}
 			}
 			// If already connected (fast pre-dial), start reader immediately
 			if flow.conn != nil {
@@ -911,7 +912,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		const fRST = 0x04
 		if (flags & fACK) != 0 {
 			// RST with seq = ack
-			rst := buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, ack, 0, fRST, nil)
+			rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, ack, 0, fRST, nil)
 			if rst != nil {
 				_ = b.sendToGuest(flow, rst)
 			}
@@ -925,7 +926,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			if (flags & 0x01) != 0 { // FIN
 				segLen++
 			}
-			rst := buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+segLen, fRST|fACK, nil)
+			rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+segLen, fRST|fACK, nil)
 			if rst != nil {
 				_ = b.sendToGuest(flow, rst)
 			}
@@ -1096,7 +1097,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 		// Out-of-order tolerance: duplicate or future segments -> send dup ACK
 		if seq < flow.clientNxt {
 			// Duplicate segment; ACK current next expected
-			dupAck := buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
+			dupAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
 			_ = b.sendToGuest(flow, dupAck)
 			return nil
 		}
@@ -1104,7 +1105,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			b.queueFuture(flow, seq, payload)
 
 			// Request retransmit with current ACK
-			dupAck := buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
+			dupAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
 			_ = b.sendToGuest(flow, dupAck)
 			return nil
 		}
@@ -1167,7 +1168,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			if flow.conn != nil {
 				_ = flow.conn.CloseWrite()
 			}
-			finAck := buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
+			finAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
 			_ = b.sendToGuest(flow, finAck)
 			flow.state = tcpFinWait
 		}
@@ -1321,7 +1322,7 @@ func (b *tcpBridge) scheduleAck(f *tcpFlow) {
 		if f.closed {
 			return
 		}
-		ack := buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x10, nil)
+		ack := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x10, nil)
 		_ = b.sendToGuest(f, ack)
 	}) {
 		f.ackScheduled = false
@@ -1358,13 +1359,7 @@ func buildIPv4TCPWithIP(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack 
 // buildIPv4TCPOptsWith allows specifying both options and IP TOS/TTL.
 func buildIPv4TCPOptsWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack uint32, flags byte, payload []byte, options []byte, tos byte, ttl byte) []byte {
 	ihl := 20
-	thl := 20 + len(options)
-	if thl%4 != 0 {
-		// pad options to 4-byte multiple
-		pad := 4 - (thl % 4)
-		options = append(options, make([]byte, pad)...)
-		thl += pad
-	}
+	thl := 20 + ((len(options) + 3) &^ 3)
 	total := ihl + thl + len(payload)
 	pkt := bufMaybePool(total)
 
@@ -1599,7 +1594,7 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 	if b.parent != nil {
 		tosOut, ttlOut = b.parent.effTosTTL(f.tos, f.ttl)
 	}
-	pkt := buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort,
+	pkt := b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort,
 		seg.seq, f.clientNxt, 0x18, seg.data, tosOut, ttlOut)
 	if pkt != nil {
 		_ = b.sendToGuest(f, pkt)

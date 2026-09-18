@@ -46,7 +46,7 @@ func (p *WGPacketProcessor) ProcessPacket(packet core.Packet) error {
 	// InjectToPeer copies synchronously after reservation. Keep the original
 	// alive through capture and injection; avoid a second intermediate copy.
 	defer core.ReleasePacket(packet)
-	data := packet.Data()
+	data := core.BorrowPacketData(packet)
 	// Optional PCAP tee of plaintext server->guest packet
 	if IsIPv4(data) {
 		pcapWriteIPv4(data)

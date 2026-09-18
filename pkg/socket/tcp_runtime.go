@@ -2,6 +2,7 @@ package socket
 
 import (
 	"errors"
+	"github.com/irctrakz/wgslirp/pkg/core"
 	"io"
 	"net"
 	"sync/atomic"
@@ -86,7 +87,7 @@ func (b *tcpBridge) sendAllowanceLocked(f *tcpFlow) int {
 	if b.ackIdleGate > 0 && inFlight >= minInflight && time.Since(f.lastAckTime) >= b.ackIdleGate {
 		if b.ackIdleFail > 0 && time.Since(f.lastAckTime) >= b.ackIdleFail {
 			if b.errorSignal != "none" {
-				_ = b.sendToGuest(f, buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
+				_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
 			}
 			b.removeFlowLocked(f)
 		}
@@ -149,7 +150,7 @@ func (b *tcpBridge) reader(f *tcpFlow) {
 			return
 		}
 		if errors.Is(err, io.EOF) {
-			fin := buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x11, nil)
+			fin := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x11, nil)
 			f.serverNxt++
 			f.finSent = true
 			_ = b.sendToGuest(f, fin)
@@ -225,7 +226,7 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 		}{seq: seq, data: data, sentAt: time.Now()})
 		f.txMu.Unlock()
 		tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
-		pkt := buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seq, f.clientNxt, 0x18, data, tos, ttl)
+		pkt := b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seq, f.clientNxt, 0x18, data, tos, ttl)
 		if b.sendToGuest(f, pkt) {
 			f.toCliBytes += uint64(size)
 			f.toCliPkts++
@@ -262,7 +263,7 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 		}
 		f.txMu.Lock()
 		now := time.Now()
-		var packet []byte
+		var packet core.Packet
 		for i := range f.txQueue {
 			seg := &f.txQueue[i]
 			if seg.seq+uint32(len(seg.data)) <= f.sndUna || isSACKed(f, seg.seq, seg.seq+uint32(len(seg.data))) {
@@ -276,7 +277,7 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 			seg.rtx = true
 			f.rto = minDur(2*f.rto, 2*time.Second)
 			tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
-			packet = buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seg.seq, f.clientNxt, 0x18, seg.data, tos, ttl)
+			packet = b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seg.seq, f.clientNxt, 0x18, seg.data, tos, ttl)
 			break
 		}
 		f.txMu.Unlock()

@@ -235,37 +235,7 @@ func (b *udpBridge) reader(f *udpFlow) {
 		if mtu <= 0 {
 			mtu = 1500
 		}
-		// Compute total length if unfragmented
-		total := 20 + 8 + len(payload)
-		frags := [][]byte{}
-		if total > mtu {
-			// Fragment the UDP datagram into IPv4 fragments obeying 8-byte boundaries
-			frags = buildIPv4UDPFragmentsWith(f.dstIP, f.srcIP, f.dstPort, f.srcPort, payload, tosOut, ttlOut, mtu)
-		} else {
-			p := buildIPv4UDPWith(f.dstIP, f.srcIP, f.dstPort, f.srcPort, payload, tosOut, ttlOut)
-			if p != nil {
-				frags = [][]byte{p}
-			}
-		}
-		if len(frags) == 0 {
-			continue
-		}
-		// Deliver fragments back to processor inline.
-		for _, pkt := range frags {
-			out := pkt
-			udpDebugEnqueue()
-			if poolingEnabled() && !poolWrapEnabled() {
-				out = append([]byte(nil), pkt...)
-			}
-			if b.parent.processor != nil {
-				_ = b.parent.processor.ProcessPacket(WrapPacket(out))
-				udpDebugProcessed()
-			}
-			atomic.AddUint64(&b.metrics.PacketsReceived, 1)
-			atomic.AddUint64(&b.metrics.BytesReceived, uint64(len(pkt)))
-			atomic.AddUint64(&b.parent.metrics.PacketsReceived, 1)
-			atomic.AddUint64(&b.parent.metrics.BytesReceived, uint64(len(pkt)))
-		}
+		b.deliverDatagram(f, payload, tosOut, ttlOut, mtu)
 	}
 }
 

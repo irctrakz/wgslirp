@@ -14,7 +14,8 @@ import (
 
 const ipv4MinHeaderSize = 20
 
-// SocketWriter is an interface for writing packets to a socket
+// SocketWriter synchronously borrows a packet. Implementations must copy any
+// data they retain after WritePacket returns; ownership stays with the caller.
 type SocketWriter interface {
 	WritePacket(packet core.Packet) error
 }
@@ -137,7 +138,7 @@ func (p *SocketPacketProcessor) ProcessPacket(packet core.Packet) error {
 		return fmt.Errorf("nil packet")
 	}
 	// Basic validation
-	data := packet.Data()
+	data := core.BorrowPacketData(packet)
 	if len(data) < ipv4MinHeaderSize {
 		atomic.AddUint64(&p.packetsDropped, 1)
 		return fmt.Errorf("packet too short")

@@ -26,7 +26,9 @@ type TUNDevice interface {
 
 // PacketProcessor processes packets from a TUN device
 type PacketProcessor interface {
-	// ProcessPacket processes a packet from the TUN device
+	// ProcessPacket transfers ownership on success. Accepted pooled packets must
+	// eventually be released. A rejecting producer releases its packet; a
+	// synchronous consumer may already have released it before returning an error.
 	ProcessPacket(packet Packet) error
 }
 
@@ -47,4 +49,3 @@ type TUNMetrics struct {
 	// Errors is the number of errors encountered
 	Errors uint64
 }
-

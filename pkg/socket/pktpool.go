@@ -1,73 +1,73 @@
 package socket
 
-import "sync"
-
-// Packet buffer pools for small/medium/large common sizes to reduce
-// allocations in builders. Callers should only return buffers that originated
-// from pktGet (checked via capacity match).
-
+// Idle storage is bounded independently of live per-socket reservations.
+// Four classes of 32 entries retain at most 960 KiB process-wide. Full pools
+// discard returned buffers; GC is not needed to enforce this retention limit.
 const (
-    pktSmall = 2048
-    pktMed   = 4096
-    pktLarge = 8192
-    pktXL    = 16384
+	pktSmall          = 2048
+	pktMed            = 4096
+	pktLarge          = 8192
+	pktXL             = 16384
+	packetPoolEntries = 32
 )
 
 var (
-    poolSmall = sync.Pool{New: func() any { b := make([]byte, pktSmall); return &b }}
-    poolMed   = sync.Pool{New: func() any { b := make([]byte, pktMed); return &b }}
-    poolLarge = sync.Pool{New: func() any { b := make([]byte, pktLarge); return &b }}
-    poolXL    = sync.Pool{New: func() any { b := make([]byte, pktXL); return &b }}
+	poolSmall = make(chan []byte, packetPoolEntries)
+	poolMed   = make(chan []byte, packetPoolEntries)
+	poolLarge = make(chan []byte, packetPoolEntries)
+	poolXL    = make(chan []byte, packetPoolEntries)
 )
 
+func packetCapacity(n int) int {
+	switch {
+	case n <= pktSmall:
+		return pktSmall
+	case n <= pktMed:
+		return pktMed
+	case n <= pktLarge:
+		return pktLarge
+	case n <= pktXL:
+		return pktXL
+	default:
+		return n
+	}
+}
+func packetPool(capacity int) chan []byte {
+	switch capacity {
+	case pktSmall:
+		return poolSmall
+	case pktMed:
+		return poolMed
+	case pktLarge:
+		return poolLarge
+	case pktXL:
+		return poolXL
+	default:
+		return nil
+	}
+}
 func pktGet(n int) []byte {
-    switch {
-    case n <= pktSmall:
-        p := poolSmall.Get().(*[]byte)
-        return (*p)[:n]
-    case n <= pktMed:
-        p := poolMed.Get().(*[]byte)
-        return (*p)[:n]
-    case n <= pktLarge:
-        p := poolLarge.Get().(*[]byte)
-        return (*p)[:n]
-    case n <= pktXL:
-        p := poolXL.Get().(*[]byte)
-        return (*p)[:n]
-    default:
-        return make([]byte, n)
-    }
+	capacity := packetCapacity(n)
+	select {
+	case b := <-packetPool(capacity):
+		b = b[:n]
+		clear(b) // old checksum, urgent-pointer and option bytes must not leak
+		return b
+	default:
+		return make([]byte, n, capacity)
+	}
 }
-
 func pktPut(b []byte) {
-    c := cap(b)
-    switch c {
-    case pktSmall:
-        bb := b[:pktSmall]
-        poolSmall.Put(&bb)
-    case pktMed:
-        bb := b[:pktMed]
-        poolMed.Put(&bb)
-    case pktLarge:
-        bb := b[:pktLarge]
-        poolLarge.Put(&bb)
-    case pktXL:
-        bb := b[:pktXL]
-        poolXL.Put(&bb)
-    }
+	select {
+	case packetPool(cap(b)) <- b[:cap(b)]:
+	default:
+	}
 }
+func pktShouldPut(b []byte) bool { return packetPool(cap(b)) != nil }
 
-func pktShouldPut(b []byte) bool {
-    switch cap(b) {
-    case pktSmall, pktMed, pktLarge, pktXL:
-        return true
-    default:
-        return false
-    }
-}
-
-// PktPut exposes returning a buffer to the pool for other packages.
+// PktPut relinquishes exclusive ownership of a buffer to the bounded cache.
+// The caller must not use or return the buffer again.
 func PktPut(b []byte) { pktPut(b) }
 
-// PktShouldPut reports whether a buffer originated from one of the pools.
+// PktShouldPut reports capacity eligibility, not allocation provenance.
 func PktShouldPut(b []byte) bool { return pktShouldPut(b) }

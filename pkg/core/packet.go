@@ -34,6 +34,20 @@ type Packet interface {
 	Length() int
 }
 
+// BorrowPacketData returns a read-only view valid until the packet is released.
+// It avoids diagnostic copies for built-in packets. Callers must neither mutate
+// nor retain the view beyond the packet's ownership lifetime.
+func BorrowPacketData(packet Packet) []byte {
+	switch p := packet.(type) {
+	case *SimplePacket:
+		return p.data
+	case *pooledPacket:
+		return p.data
+	default:
+		return packet.Data()
+	}
+}
+
 // PacketBufferSize reports retained slice capacity rather than payload length.
 // Built-in packets can be measured without Data's optional debug copy. Custom
 // packets must expose their retained storage through Data; allocator overhead
@@ -81,11 +95,10 @@ func (p *pooledPacket) Released() bool { return p.data == nil }
 // created via NewPooledPacket and a releaser was provided.
 func ReleasePacket(p Packet) {
 	if pp, ok := p.(*pooledPacket); ok {
-		if pp.releaser != nil && len(pp.data) > 0 {
-			pp.releaser(pp.data)
-			// prevent double release
-			pp.data = nil
-			pp.releaser = nil
+		data, release := pp.data, pp.releaser
+		pp.data, pp.releaser = nil, nil
+		if release != nil {
+			release(data)
 		}
 	}
 }

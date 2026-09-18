@@ -130,10 +130,19 @@ func (s *SocketInterface) Start() error {
 		}
 	}
 
+	var releaseRead func()
+	if s.conn != nil {
+		releaseRead, err = s.ReservePacketBuffer(65536)
+		if err != nil {
+			_ = s.conn.Close()
+			s.conn = nil
+			return err
+		}
+	}
 	s.running = true
 	if s.conn != nil {
 		s.wg.Add(1)
-		go s.listenLoop()
+		go s.listenLoop(releaseRead)
 	}
 
 	// SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
@@ -225,7 +234,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		return fmt.Errorf("nil packet")
 	}
 
-	data, _, err := parseIPv4(packet.Data())
+	data, _, err := parseIPv4(core.BorrowPacketData(packet))
 	if err != nil {
 		atomic.AddUint64(&s.metrics.Errors, 1)
 		return err
@@ -515,8 +524,9 @@ func (s *SocketInterface) ResetRTOTCPFlows() int {
 }
 
 // listenLoop listens for packets from the host network
-func (s *SocketInterface) listenLoop() {
+func (s *SocketInterface) listenLoop(releaseRead func()) {
 	defer s.wg.Done()
+	defer releaseRead()
 
 	// Create a buffer for receiving packets
 	buf := make([]byte, 65536) // Use a large buffer to accommodate jumbo frames
@@ -554,96 +564,14 @@ func (s *SocketInterface) listenLoop() {
 				continue
 			}
 
-			// Process the received packet based on the protocol
-			var fullPacket []byte
-
-			// Extract peer IP address
-			peerIP := peer.(*net.IPAddr).IP
-			if peerIP == nil || peerIP.Equal(myIP) {
-				// Skip our own packets or invalid peer addresses
+			peerAddr, ok := peer.(*net.IPAddr)
+			if !ok || peerAddr.IP.To4() == nil || peerAddr.IP.Equal(myIP) {
 				continue
 			}
-
-			// Determine the protocol based on the socket configuration
-			protocol := uint8(1) // Only ICMP supported for now
-
-			// Process the received packet based on the protocol
-			if protocol == 1 { // ICMP
-				// Parse the ICMP message
-				msg, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), buf[:n])
-				if err != nil {
-					logging.Errorf("Failed to parse ICMP message: %v", err)
-					atomic.AddUint64(&s.metrics.Errors, 1)
-					continue
-				}
-
-				// Log the ICMP message details (debug)
-				logging.Debugf("SOCKET INCOMING: from=%v, type=%v, code=%v", peer, msg.Type, msg.Code)
-
-				// For echo replies, extract more details
-				if msg.Type == ipv4.ICMPTypeEchoReply {
-					if echo, ok := msg.Body.(*icmp.Echo); ok {
-						logging.Debugf("SOCKET INCOMING ICMP: type=0, code=0, id=%d, seq=%d",
-							echo.ID, echo.Seq)
-					}
-				}
-
-				// Construct a full IP packet with the ICMP message
-				ipHeader := make([]byte, 20)
-				ipHeader[0] = 0x45 // Version 4, header length 5 (20 bytes)
-				ipHeader[1] = 0x00 // DSCP & ECN
-				total := 20 + n
-				ipHeader[2] = byte(total >> 8)   // Total length (high byte)
-				ipHeader[3] = byte(total & 0xff) // Total length (low byte)
-				// Identification
-				{
-					id := nextIPID()
-					ipHeader[4] = byte(id >> 8)
-					ipHeader[5] = byte(id)
-				}
-				ipHeader[6] = 0x00                  // Flags & Fragment offset
-				ipHeader[7] = 0x00                  // Fragment offset
-				ipHeader[8] = 64                    // TTL
-				ipHeader[9] = protocol              // Protocol
-				ipHeader[10] = 0x00                 // Header checksum (will be calculated later)
-				ipHeader[11] = 0x00                 // Header checksum
-				copy(ipHeader[12:16], peerIP.To4()) // Source IP (the peer)
-				copy(ipHeader[16:20], myIP.To4())   // Destination IP (our IP)
-
-				// Calculate IP header checksum
-				checksum := calculateChecksum(ipHeader)
-				ipHeader[10] = byte(checksum >> 8)
-				ipHeader[11] = byte(checksum & 0xff)
-
-				// Combine IP header and ICMP message
-				fullPacket = append(ipHeader, buf[:n]...)
-			} else {
-				// For unknown protocols, log a warning and skip
-				logging.Warnf("Received packet with unsupported protocol: %d", protocol)
+			if err := s.processICMPReply(buf[:n], peerAddr.IP, myIP); err != nil {
+				logging.Debugf("ICMP reply dropped: %v", err)
 				atomic.AddUint64(&s.metrics.Errors, 1)
-				continue
 			}
-
-			// Update metrics
-			atomic.AddUint64(&s.metrics.PacketsReceived, 1)
-			atomic.AddUint64(&s.metrics.BytesReceived, uint64(len(fullPacket)))
-
-			// Create a packet from the data
-			packet := core.NewPacket(fullPacket)
-
-			// Process the packet
-			if s.processor != nil {
-				if err := s.processor.ProcessPacket(packet); err != nil {
-					logging.Errorf("Failed to process packet: %v", err)
-					atomic.AddUint64(&s.metrics.Errors, 1)
-					continue
-				}
-				logging.Debugf("Packet processed by processor: length=%d", len(fullPacket))
-			} else {
-				logging.Warnf("No packet processor set, packet not processed: length=%d", len(fullPacket))
-			}
-
-			logging.Debugf("Received packet of length %d from host network", len(fullPacket))
 		}
 	}
 }
@@ -661,4 +589,43 @@ func calculateChecksum(data []byte) uint16 {
 		sum = (sum & 0xffff) + (sum >> 16)
 	}
 	return uint16(^sum)
+}
+
+// processICMPReply accounts parser scratch and the synthesized reply separately.
+func (s *SocketInterface) processICMPReply(body []byte, peerIP, myIP net.IP) error {
+	if len(body) > 65515 {
+		return fmt.Errorf("ICMP reply exceeds IPv4 length")
+	}
+	release, err := s.ReservePacketBuffer(len(body))
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), body); err != nil {
+		return err
+	}
+	packet := s.buffers().buildPacket(20+len(body), false, func() []byte {
+		out := make([]byte, 20+len(body))
+		out[0], out[8], out[9] = 0x45, 64, 1
+		total := len(out)
+		out[2], out[3] = byte(total>>8), byte(total)
+		id := nextIPID()
+		out[4], out[5] = byte(id>>8), byte(id)
+		copy(out[12:16], peerIP.To4())
+		copy(out[16:20], myIP.To4())
+		checksum := calculateChecksum(out[:20])
+		out[10], out[11] = byte(checksum>>8), byte(checksum)
+		copy(out[20:], body)
+		return out
+	})
+	if packet == nil {
+		return ErrBufferLimit
+	}
+	size := packet.Length()
+	if !deliverPacket(s.processor, packet) {
+		return fmt.Errorf("ICMP reply delivery rejected")
+	}
+	atomic.AddUint64(&s.metrics.PacketsReceived, 1)
+	atomic.AddUint64(&s.metrics.BytesReceived, uint64(size))
+	return nil
 }

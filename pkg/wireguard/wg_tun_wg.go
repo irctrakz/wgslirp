@@ -79,8 +79,7 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		dst := net.IPv4(pkt[16], pkt[17], pkt[18], pkt[19])
 		// Exclusion first: always egress via slirp
 		if t.dstInExclude(dst) {
-			cp := append([]byte(nil), pkt...)
-			if err := t.writer.WritePacket(core.NewPacket(cp)); err != nil {
+			if err := t.writeToSocket(pkt); err != nil {
 				return sent, err
 			}
 			sent++
@@ -96,8 +95,7 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 			continue
 		}
 		// Default: egress via slirp
-		cp := append([]byte(nil), pkt...)
-		if err := t.writer.WritePacket(core.NewPacket(cp)); err != nil {
+		if err := t.writeToSocket(pkt); err != nil {
 			return sent, err
 		}
 		sent++
@@ -132,3 +130,17 @@ func (t *WGTun) Events() <-chan wtun.Event {
 
 // BatchSize returns 1 to indicate minimal batch support.
 func (t *WGTun) BatchSize() int { return 1 }
+
+// writeToSocket owns its copy until the synchronous SocketWriter returns.
+func (t *WGTun) writeToSocket(data []byte) error {
+	release, err := t.buffers.ReservePacketBuffer(len(data))
+	if err != nil {
+		return err
+	}
+	defer release()
+	copied := make([]byte, len(data))
+	copy(copied, data)
+	packet := core.NewPooledPacket(copied, nil)
+	defer core.ReleasePacket(packet)
+	return t.writer.WritePacket(packet)
+}

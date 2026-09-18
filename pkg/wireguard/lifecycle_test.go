@@ -235,3 +235,32 @@ func TestTUNConcurrentReadInjectAndCloseReleasesBudget(t *testing.T) {
 	workers.Wait()
 	assertAllQueueBudgetAvailable(t, s, 4096)
 }
+
+func TestTUNWriteAccountsSynchronousCopy(t *testing.T) {
+	s := socket.NewSocketInterface(socket.Config{SocketBufferCapBytes: 300})
+	writer := &sharedQueueWriter{s, make(chan struct{}), make(chan struct{})}
+	tun := NewWGTun("write-budget", 1380, writer)
+	defer tun.Close()
+	done := make(chan error, 1)
+	data := make([]byte, 20)
+	data[0] = 0x45
+	go func() { _, err := tun.Write([][]byte{data}, 0); done <- err }()
+	var once sync.Once
+	defer once.Do(func() { close(writer.unblock) })
+	select {
+	case <-writer.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer did not start")
+	}
+	if release, err := s.ReservePacketBuffer(25); !errors.Is(err, socket.ErrBufferLimit) {
+		if release != nil {
+			release()
+		}
+		t.Fatal("in-flight write not charged")
+	}
+	once.Do(func() { close(writer.unblock) })
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	assertAllQueueBudgetAvailable(t, s, 300)
+}

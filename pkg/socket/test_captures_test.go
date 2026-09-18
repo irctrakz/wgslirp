@@ -15,6 +15,7 @@ type captureProcessor struct {
 }
 
 func (c *captureProcessor) ProcessPacket(p core.Packet) error {
+	defer core.ReleasePacket(p)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	d := make([]byte, p.Length())
