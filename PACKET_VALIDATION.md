@@ -1,6 +1,7 @@
 # Guest packet validation and supported scope
 
-The socket boundary consumes complete IPv4 packets with finalized checksums.
+Socket input and DNS health replies share the strict `internal/packetwire`
+parser for complete IPv4 packets with finalized checksums.
 `SocketInterface.WritePacket` and the direct TCP/UDP/ICMP bridge entry points
 reject invalid input before dialing, retaining payloads, writing to a host socket,
 or generating a network response. Errors are returned to the caller; socket-level
@@ -93,5 +94,21 @@ Computed-zero UDP checksums are consistently emitted as `0xffff`, including
 health probes and the legacy fragment builder that previously emitted zero.
 Incoming IPv4 UDP checksums explicitly omitted with zero remain accepted.
 Oversized private TCP/UDP builders now reject before allocating; production
-budgeted builders already enforced these bounds. Parsing policy is unchanged;
-reconciling health and socket parsing remains a separate architectural item.
+budgeted builders already enforced these bounds.
+
+### Shared parsing and health compatibility
+
+`ParseIPv4` validates IPv4 framing; `ParseTransport` also validates TCP, UDP or
+ICMP framing and checksums. Both return borrowed slices bounded by the declared
+IP length, leave input unchanged and allocate nothing on success. Callers own the
+storage lifetime; parsing does not retain packets, reserve buffers or manage flows.
+Socket wrappers retain the existing public error identities and wrapping behavior.
+
+DNS health replies now use the same strict wire policy shown above. Unlike the
+previous health-only parser, they reject invalid IPv4/nonzero UDP checksums,
+reserved IPv4 flags and all IPv4 options. Nonzero UDP checksums now detect
+answer-byte corruption before DNS matching. DF, trailing link padding and zero UDP
+checksum omission remain accepted. DNS source/destination, ports, transaction ID,
+question matching, response status and bounded alias traversal remain health-only
+checks. TCP options and protocol state remain with TCP. No relaxed parsing mode
+or new configuration is introduced.

@@ -1,4 +1,4 @@
-// Package packetwire encodes wire bytes into caller-owned storage. It owns no
+// Package packetwire validates borrowed packets and encodes wire bytes into caller-owned storage. It owns no
 // buffers, pools, budgets, IDs, sockets or protocol state. Inputs must not overlap
 // output storage. Encoders reject invalid sizes without modifying output.
 package packetwire

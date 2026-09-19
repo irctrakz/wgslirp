@@ -143,19 +143,16 @@ func validDNSHealthReply(p []byte, server, client [4]byte, id uint16) bool {
 }
 
 func validDNSHealthReplyForName(p []byte, server, client [4]byte, id uint16, name string) bool {
-	if len(p) < 28 || p[0]>>4 != 4 || p[9] != 17 {
-		return false
-	}
-	ihl := int(p[0]&15) * 4
-	total := int(binary.BigEndian.Uint16(p[2:4]))
-	if ihl < 20 || total < ihl+8 || total > len(p) || binary.BigEndian.Uint16(p[6:8])&0x3fff != 0 {
+	// Apply the same wire validation as socket input before DNS-specific matching.
+	p, ihl, err := packetwire.ParseTransport(p, 17)
+	if err != nil {
 		return false
 	}
 	if string(p[12:16]) != string(server[:]) || string(p[16:20]) != string(client[:]) {
 		return false
 	}
-	u := p[ihl:total]
-	if binary.BigEndian.Uint16(u[:2]) != 53 || binary.BigEndian.Uint16(u[2:4]) != 40053 || int(binary.BigEndian.Uint16(u[4:6])) != len(u) {
+	u := p[ihl:]
+	if binary.BigEndian.Uint16(u[:2]) != 53 || binary.BigEndian.Uint16(u[2:4]) != 40053 {
 		return false
 	}
 	var msg dnsmessage.Message
