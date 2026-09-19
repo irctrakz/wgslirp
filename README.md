@@ -89,8 +89,6 @@ services:
       #  If you want tcp / flow debugging enabled 
       #- "METRICS_INTERVAL=60s"
       #- "METRICS_FORMAT=text"
-      #- "TCP_GATE_LOG=on"
-      - "TCP_GATE_LOG=off"
 
       # If you want to fill up your logs fast
       #- "DEBUG=1"
@@ -148,7 +146,6 @@ Get up and running quickly with these steps:
       -e WG_TUN_QUEUE_CAP=2048 \
       -e TCP_ACK_DELAY_MS=5 \
       -e TCP_ENABLE_SACK=1 \
-      -e TCP_GATE_LOG=off \
       -e WG_PRIVATE_KEY=<private_key> \
       -e WG_LISTEN_PORT=51820 \
       -e WG_MTU=1200 \
@@ -294,7 +291,7 @@ fallback. Booleans accept true/false, 1/0, yes/no and on/off (case-insensitive).
 | `TCP_PACE_US` | 0 | Inter-segment pacing in microseconds; zero disables. |
 | `TCP_ERROR_SIGNAL` | icmp | Dial-failure signaling: `icmp`, `rst`, or `none`. |
 | `TCP_LOG_HANDSHAKE` | false | Log SYN-ACK MSS decisions. |
-| `TCP_GATE_LOG` | info | Send-gate log level: `info`, `debug`, `off`; true/false aliases remain accepted. |
+| `TCP_GATE_LOG` | info | Deprecated, inactive setting; `info`, `debug`, `off` and true/false aliases remain accepted for compatibility. |
 | `TCP_FAST_DIAL_MS` | 5 | Preliminary dial deadline; zero retains the historical 1 ms minimum. Async fallback remains bounded to 5 seconds. |
 | `TCP_CC` | newreno | Congestion control: `newreno` (`reno`/`new-reno` aliases) or `off`. |
 | `TCP_INIT_CWND_MSS` | 0 | Positive values reduce the RFC 6928 initial window to at most this many MSS; zero uses the RFC default. |
@@ -340,7 +337,7 @@ Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`
 - `TCP_ENABLE_SACK`: advertise SACK permitted in SYN-ACK (recommended 1 for modern stacks).
 - `TCP_MSS_CLAMP`: clamp advertised MSS (bytes). Leave unset unless troubleshooting PMTUD.
 - `TCP_PACE_US`: microseconds to sleep between host→guest segments (0 disables). Use only when packet bursts cause loss/ECN on marginal paths.
-- `TCP_GATE_LOG`: controls send-gating logs; `off` disables, `debug` logs at debug level, `info` logs at info level (default).
+- `TCP_GATE_LOG`: deprecated and inactive; accepted for configuration compatibility. It does not control active TCP logging.
 - `TCP_CC`: congestion control algo for host→guest path; `off` to disable, default newreno.
 - `TCP_ERROR_SIGNAL`: how to signal outbound connect failure to the guest: `icmp` (default), `rst`, or `none`.
 - `TCP_FAST_DIAL_MS`: fast pre-dial timeout (ms) to map immediate refusals to ICMP/RST without sending SYN-ACK first (default ~5ms).
@@ -437,7 +434,6 @@ docker run --name wgslirp \
   -e WG_TUN_QUEUE_CAP=2048 \
   -e TCP_ACK_DELAY_MS=5 \
   -e TCP_ENABLE_SACK=1 \
-  -e TCP_GATE_LOG=off \
   -e WG_PRIVATE_KEY=<private_key> \
   -e WG_LISTEN_PORT=51820 \
   -e WG_MTU=1200 \
@@ -464,7 +460,6 @@ services:
       - "WG_TUN_QUEUE_CAP=2048"
       - "TCP_ACK_DELAY_MS=5"
       - "TCP_ENABLE_SACK=1"
-      - "TCP_GATE_LOG=off"
       - "WG_PRIVATE_KEY=<private_key>"
       - "WG_LISTEN_PORT=51820"
       - "WG_MTU=1200"

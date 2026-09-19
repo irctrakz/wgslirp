@@ -105,7 +105,7 @@ func (b *udpBridge) stop() {
 
 // HandleOutbound parses an IPv4+UDP packet and forwards the UDP payload via a host UDP socket.
 // It creates a flow if needed and writes the payload. The flow's read goroutine sends replies
-// back to the netstack as synthesized IPv4+UDP packets.
+// back to the guest through packet delivery as synthesized IPv4+UDP packets.
 func (b *udpBridge) HandleOutbound(pkt []byte) (err error) {
 	admitted := false
 	// Publish the operation's error before allowing lifecycle waits to complete.

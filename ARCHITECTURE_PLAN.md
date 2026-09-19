@@ -444,7 +444,7 @@ push. Ownership and benchmark scope are recorded in
 
 Full PR 4.3 performance acceptance remains separate: the bounded ACK benchmark
 is only an initial latency/allocation gate, not forwarding throughput or dial/load
-validation. PR 4.2 parsing/encoding is implemented; PR 4.4 dead-code cleanup remains.
+validation. PR 4.2 parsing/encoding and PR 4.4 verified dead-code cleanup are implemented.
 
 Extract one boundary per PR, preserving protocol behavior:
 
@@ -468,6 +468,41 @@ Extract one boundary per PR, preserving protocol behavior:
 - Keep architectural decisions and lifecycle/ownership documentation adjacent to the owning packages.
 
 **Acceptance:** dependencies form understandable boundaries; documentation describes active code; exported removals have explicit compatibility decisions.
+
+**PR 4.4 cleanup (2026-09-18):** repository-wide Go reference searches, including
+tests and platform/tagged files, found no callers for `pktWrapMaybe`,
+`pktReleaseMaybe`, `minU32`, `maxU32`, `maxDur`, `logSendGated` or `getMaxRetries`.
+Removed these private helpers, the unused TCP `ackMu`/`lastAck` fields and state
+used only by the uncalled gate logger. Removed the discarded stress-tool flow key
+and stale FlowManager/netstack/generic-constraint/debug-removal comments. The
+legacy stress executable is compiled, not executed, by this validation batch.
+
+`TransportConfig.GateLog` / `TCP_GATE_LOG` remain accepted and validated with the
+same default and aliases, but are now explicitly deprecated as inactive. Existing
+configuration tests verify the retained snapshot contract instead of deleted
+private fields. Active diagnostics and metrics are unchanged. Public constructors,
+`WrapPacket`, the legacy config package, test-used helpers, CLI compatibility
+flags and platform implementations are retained; absence from the executable's
+imports does not prove an exported API has no consumers. Existing constructor/
+config deprecations remain documented. No dependency or public API was removed.
+
+**PR 4.4 validation:** Linux Go 1.23.12 unit/tagged integration tests passed with
+the race detector, including encrypted TCP/UDP and lifecycle/ownership regression
+coverage. Build, vet, module tidy/verification (unchanged module files), and
+sequential 10-second parser/encoder fuzz campaigns passed (172,066 / 403,672
+executions). ACK benchmark median: 685.6 ns/op, 34 B/op, 2 allocs/op; within the
+recorded 818.375 ns/op ceiling, without implying forwarding-throughput validation.
+Gofmt and whitespace checks passed; formatting of the pre-existing stress utility
+was reviewed separately with a whitespace-insensitive diff. The post-cleanup
+reference scan found no remaining declaration-only private-function candidates;
+this is bounded source evidence, not proof that every possible dead path is gone.
+
+All four stages had zero memory/OOM/PID-limit events and independent zero-owned-
+residue checks, with pause guards restored. Peaks: integration/race 824,512,512
+bytes; build 439,848,960; vet 361,426,944; fuzz 342,761,472. Environment-specific
+scripts and evidence remain ignored/private. PR 4.4's verified cleanup is complete;
+independent review and broader performance/release evidence remain open. Local
+commit only on `codex/architecture-hardening`; nothing pushed.
 
 **Principles:** 1–11, 17–19, 23, 29, 30.
 

@@ -6,43 +6,6 @@ import (
 	"time"
 )
 
-// logSendGated emits a throttled message about send gating. To avoid
-// log spam, it logs at most once per 5 seconds per flow and includes the number of
-// suppressed messages since the previous emission.
-func (b *tcpBridge) logSendGated(f *tcpFlow, cause string, advWnd, inFlight, cw int) {
-	if b.gateLogDisabled {
-		return
-	}
-	const gateEvery = 5 * time.Second // Increased from 200ms to reduce log volume
-	now := time.Now()
-	f.gateMu.Lock()
-	defer f.gateMu.Unlock()
-	if !f.lastGateLog.IsZero() && now.Sub(f.lastGateLog) < gateEvery {
-		f.suppressedGates++
-		return
-	}
-
-	if f.suppressedGates > 0 {
-		if b.gateLogDebug {
-			logging.Debugf("TCP send-gated: flow=%s cause=%s advWnd=%d inflight=%d cwnd=%d (suppressed=%d)",
-				f.key, cause, advWnd, inFlight, cw, f.suppressedGates)
-		} else {
-			logging.Infof("TCP send-gated: flow=%s cause=%s advWnd=%d inflight=%d cwnd=%d (suppressed=%d)",
-				f.key, cause, advWnd, inFlight, cw, f.suppressedGates)
-		}
-	} else {
-		if b.gateLogDebug {
-			logging.Debugf("TCP send-gated: flow=%s cause=%s advWnd=%d inflight=%d cwnd=%d",
-				f.key, cause, advWnd, inFlight, cw)
-		} else {
-			logging.Infof("TCP send-gated: flow=%s cause=%s advWnd=%d inflight=%d cwnd=%d",
-				f.key, cause, advWnd, inFlight, cw)
-		}
-	}
-	f.lastGateLog = now
-	f.suppressedGates = 0
-}
-
 // trackRTOFlow adds a flow to the RTO tracking map and checks if we need to dump metrics
 func (b *tcpBridge) trackRTOFlow(f *tcpFlow) {
 	f.stateMu.Lock()
@@ -97,20 +60,6 @@ func (b *tcpBridge) dumpDetailedMetrics() {
 			f.key, f.serverNxt-f.sndUna, f.advWnd, f.rto, f.closed)
 		f.stateMu.Unlock()
 	}
-}
-
-// getMaxRetries returns the maximum retry count for any segment in the flow's txQueue
-func (b *tcpBridge) getMaxRetries(f *tcpFlow) int {
-	f.txMu.Lock()
-	defer f.txMu.Unlock()
-
-	maxRetries := 0
-	for _, seg := range f.txQueue {
-		if seg.retries > maxRetries {
-			maxRetries = seg.retries
-		}
-	}
-	return maxRetries
 }
 
 // logACKLocked formats the existing trace under flow.stateMu. It does not take

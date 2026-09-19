@@ -81,6 +81,8 @@ remote pause guards and independently verified removal of its owned resources.
 The architecture plan records per-stage evidence. Production packet encoding
 now uses `internal/packetwire`, with allocation and reservation ownership retained
 by the socket layer. Shared IPv4/transport validation also lives there, with
-socket error compatibility retained by local wrappers (PR 4.2). Verified dead-code
-cleanup (PR 4.4), independent review and broader performance/release evidence
-remain separate work.
+socket error compatibility retained by local wrappers (PR 4.2). PR 4.4 removed
+uncalled private helpers and unused TCP state. The former send-gate logger had no
+callers; its configuration remains accepted as a deprecated inactive setting.
+Active ACK, handshake, admission-failure and RTO diagnostics retain their behavior.
+Independent review and broader performance/release evidence remain separate work.

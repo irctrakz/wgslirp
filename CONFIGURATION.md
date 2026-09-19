@@ -101,3 +101,12 @@ Do not mechanically map legacy kernel-TUN/router fields or source-validation
 flags: there is no equivalent supported setting for those in the current inline
 userspace path. This deprecation avoids inventing a lossy adapter or removing an
 exported API whose external consumers cannot be inventoried locally.
+
+### Inactive send-gate logging compatibility
+
+`TCP_GATE_LOG` and `socket.TransportConfig.GateLog` are deprecated. Their former
+private logger had no callers; removing it does not change emitted logs. Values
+`info`, `debug`, `off` and existing environment aliases remain accepted and
+validated, with the same default, so existing configurations keep loading. The
+field remains in configuration snapshots for compatibility. It does not control
+active ACK, handshake, admission-failure or RTO diagnostics.

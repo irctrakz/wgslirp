@@ -15,7 +15,7 @@ import (
 
 // TCP slirp bridge for host networking.
 //
-// Overview (generic, protocol-agnostic):
+// Overview (independent of the application protocol):
 // - Performs a full TCP handshake to a host socket on initial SYN.
 // - Parses and honors client MSS and Window Scale options.
 // - Handles guest out-of-order data with a per-flow reassembly buffer that
@@ -71,8 +71,6 @@ type tcpBridge struct {
 	// it (policy-controlled) to avoid indefinite stalls. 0 disables.
 	ackIdleFail time.Duration
 
-	// debug removed (was verbose per-flow tracing)
-
 	// Optional MSS clamp (bytes). When >0, we clamp advertised MSS in
 	// SYN-ACK and the effective segmentation MSS to min(client, clamp, MTU-40).
 	mssClamp atomic.Int64
@@ -114,10 +112,6 @@ type tcpBridge struct {
 
 	// Handshake logging toggle (SYN-ACK MSS). Enable via TCP_LOG_HANDSHAKE=1|true|on|yes
 	logHandshake bool
-
-	// Send-gate logging controls
-	gateLogDisabled bool // disable "TCP send-gated" logs entirely
-	gateLogDebug    bool // log send-gated at debug level instead of info
 }
 
 type tcpState int
@@ -194,7 +188,6 @@ type tcpFlow struct {
 	advWnd    uint32 // latest advertised peer window in bytes
 
 	// delayed ack scheduling
-	ackMu        sync.Mutex
 	ackScheduled bool
 
 	// Preserve DSCP/ECN and TTL for host->guest data segments
@@ -217,7 +210,6 @@ type tcpFlow struct {
 		rtx     bool
 	}
 	dupAckCnt int
-	lastAck   uint32
 	// RTT/RTO estimation (RFC 6298)
 	srtt    time.Duration
 	rttvar  time.Duration
@@ -248,11 +240,6 @@ type tcpFlow struct {
 	cc        congestionControl
 	ccEnabled bool
 	mss       int
-
-	// Throttled logging for send-gated (zero-window/cwnd) messages
-	gateMu          sync.Mutex
-	lastGateLog     time.Time
-	suppressedGates int
 }
 
 // newTCPBridge constructs a TCP bridge instance and wires optional per-flow
@@ -292,8 +279,6 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	b.paceUS.Store(int64(b.tuning.PaceUS))
 	b.errorSignal = b.tuning.ErrorSignal
 	b.logHandshake = b.tuning.LogHandshake
-	b.gateLogDisabled = b.tuning.GateLog == "off"
-	b.gateLogDebug = b.tuning.GateLog == "debug"
 
 	// Log the creation of the TCP bridge
 	logging.Infof("Creating TCP bridge: lifetime=%v, ackDelay=%v, reasmCap=%d, errSignal=%s",
@@ -381,10 +366,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 	return b.handleTCPFlow(flow, segment)
 }
 
-// ordered is a minimal constraint for types that support < and > comparisons
-// used by the generic min/max helpers below. We keep it local to avoid an
-// external dependency on x/exp/constraints.
-// Local typed helpers (avoid generics to keep compatibility with older toolchains)
+// Typed bounds used by transport buffering and retransmission timing.
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -397,26 +379,8 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
-func minU32(a, b uint32) uint32 {
-	if a < b {
-		return a
-	}
-	return b
-}
-func maxU32(a, b uint32) uint32 {
-	if a > b {
-		return a
-	}
-	return b
-}
 func minDur(a, b time.Duration) time.Duration {
 	if a < b {
-		return a
-	}
-	return b
-}
-func maxDur(a, b time.Duration) time.Duration {
-	if a > b {
 		return a
 	}
 	return b
