@@ -63,3 +63,11 @@ Environment-specific launchers and raw evidence stay private and ignored.
 See F10 in [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md) for the completed stage
 results and resource/cleanup evidence. Do not mark F10 complete until the external
 and workload gates above have recorded results or an explicit scope decision.
+
+## Bounded refactoring performance evidence
+
+[PERFORMANCE.md](PERFORMANCE.md) records the pre-extraction/current loopback
+comparison and its preselected budgets. It passed throughput, latency, allocation
+and sampled-memory checks for eight clients per protocol. This advances PR 4.3;
+it does not replace encrypted/high-churn deployment sizing, WAN or soak evidence
+listed above, and does not close F10.

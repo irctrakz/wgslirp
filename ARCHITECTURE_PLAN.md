@@ -442,9 +442,27 @@ push. Ownership and benchmark scope are recorded in
 
 **Final extraction validation:** all five tagged integration/race stages passed on Linux Go 1.23.12, including all unit tests, encrypted TCP/UDP forwarding, short-connection churn and existing lifecycle/ownership/sequence-wrap regressions. Final build, vet, module tidy/verification (unchanged module-file checksums), and 10-second single-worker fuzzing passed (157,931 executions). The ACK microbenchmark median changed from 654.7 to 679.5 ns/op (+3.79%), within the preselected 25% budget; 34 B/op and 2 allocs/op were unchanged. The largest container peak across the nine baseline/validation stages was 829,521,920 bytes. Every stage recorded zero memory/OOM/PID-limit events, independently verified zero owned container/network/workspace/lock residue, and restored the pause guards. Final build peak was 433,070,080 bytes, vet/benchmark 367,788,032 bytes, and fuzz 342,941,696 bytes. Gofmt and whitespace checks passed. Changes are separate local commits on `codex/architecture-hardening`; independent review remains pending and nothing was pushed. Environment-specific drivers and raw evidence remain ignored/private.
 
-Full PR 4.3 performance acceptance remains separate: the bounded ACK benchmark
-is only an initial latency/allocation gate, not forwarding throughput or dial/load
-validation. PR 4.2 parsing/encoding and PR 4.4 verified dead-code cleanup are implemented.
+**PR 4.3 bounded performance comparison completed (2026-09-18):** the identical
+finite loopback fixture compared pre-extraction `5d6f291` with production code
+`fb99a4c` across five TCP and UDP samples. Preselected throughput, p50/p95 latency,
+handshake latency, allocations and sampled memory budgets all passed. TCP/UDP
+throughput changed +3.64%/+4.56%; TCP handshake p95 rose 30.13% within a 35% budget.
+UDP sampled heap rose about 0.78 MiB, within the explicit memory allowance; RSS
+and allocation rates were essentially unchanged. Exact methodology, limits and
+all medians are in [PERFORMANCE.md](PERFORMANCE.md). The full race/integration
+suite including the fixture passed, with zero final packet reservations and
+verified per-stage resource enforcement/cleanup. These are small-profile
+regression signals, not statistical speedup or deployment-capacity claims.
+
+Final build, module verification (unchanged files) and tagged vet passed. All five
+performance/validation stages recorded zero memory/OOM/PID-limit events and
+independently verified cleanup; the largest peak was 778,158,080 bytes. No
+production code or runtime defaults changed, and nothing was pushed upstream.
+
+PR 4.2 parsing/encoding and PR 4.4 verified dead-code cleanup are implemented.
+The bounded PR 4.3 refactoring/performance gate is complete. Encrypted throughput,
+WAN behavior, sustained/large profiles and release-image evidence remain F10d/F10e;
+this comparison does not close those items or change defaults.
 
 Extract one boundary per PR, preserving protocol behavior:
 

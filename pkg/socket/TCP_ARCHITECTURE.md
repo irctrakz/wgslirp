@@ -52,8 +52,9 @@ the original handler to the final extraction; record both measurements here.
 
 This benchmark isolates established-flow ACK dispatch, locking, window/recovery
 and diagnostic decisions. It is not a host-dial benchmark or a forwarding
-throughput claim. Broader throughput, latency distributions and deployment memory
-regression budgets remain necessary for the full PR 4.3 performance acceptance.
+throughput claim. The subsequent bounded throughput, latency-distribution, allocation and sampled
+memory comparison is recorded in [PERFORMANCE.md](../../PERFORMANCE.md). It passed
+the preselected loopback regression budgets; deployment-scale evidence remains F10.
 
 Baseline (original handler, Go 1.23.12, one CPU): five runs measured 646.7,
 651.6, 654.7, 658.1 and 693.1 ns/op; median **654.7 ns/op**, **34 B/op**,
@@ -85,4 +86,5 @@ socket error compatibility retained by local wrappers (PR 4.2). PR 4.4 removed
 uncalled private helpers and unused TCP state. The former send-gate logger had no
 callers; its configuration remains accepted as a deprecated inactive setting.
 Active ACK, handshake, admission-failure and RTO diagnostics retain their behavior.
-Independent review and broader performance/release evidence remain separate work.
+The bounded PR 4.3 performance comparison is complete; independent review and
+broader deployment performance/release evidence remain separate work.
