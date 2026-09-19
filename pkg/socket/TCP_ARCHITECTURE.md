@@ -79,5 +79,7 @@ race detector, including ordinary unit tests, encrypted WireGuard TCP/UDP, churn
 concurrent snapshots and lifecycle/protocol regressions. Each stage restored the
 remote pause guards and independently verified removal of its owned resources.
 The architecture plan records per-stage evidence. Production packet encoding
-(PR 4.2), verified dead-code cleanup (PR 4.4), independent review and broader
-performance/release evidence remain separate work.
+now uses `internal/packetwire`, with allocation and reservation ownership retained
+by the socket layer. Shared parsing (PR 4.2),
+verified dead-code cleanup (PR 4.4), independent review and broader performance/
+release evidence remain separate work.

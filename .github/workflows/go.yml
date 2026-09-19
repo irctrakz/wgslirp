@@ -41,3 +41,6 @@ jobs:
 
       - name: Fuzz packet boundaries
         run: go test -run '^$' -fuzz '^FuzzTransportBoundaries$' -fuzztime 10s -timeout 120s -parallel 2 ./pkg/socket
+
+      - name: Fuzz shared encoding
+        run: go test -run '^$' -fuzz '^FuzzEncoding$' -fuzztime 10s -timeout 120s -parallel 2 ./internal/packetwire

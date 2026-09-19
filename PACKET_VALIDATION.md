@@ -80,3 +80,18 @@ reproduced stale-block retention and missed wrap recovery before these fixes.
 This advances the earlier coverage limit; it does not establish a multi-gigabyte
 transfer, full RFC 6675 implementation, receiver reneging recovery, or WAN soak
 behavior. The receive-side out-of-order restrictions above remain in effect.
+
+### Shared encoding
+
+`internal/packetwire` writes IPv4 headers and TCP/UDP segments into caller-owned
+storage without allocating. Callers retain IP IDs, buffer pools, reservations,
+fragmentation and protocol policy; inputs must not overlap output. Invalid sizes
+leave output untouched. Literal expected-byte fixtures and an independent
+checksum fuzz oracle check padding, checksums, lengths and input immutability.
+
+Computed-zero UDP checksums are consistently emitted as `0xffff`, including
+health probes and the legacy fragment builder that previously emitted zero.
+Incoming IPv4 UDP checksums explicitly omitted with zero remain accepted.
+Oversized private TCP/UDP builders now reject before allocating; production
+budgeted builders already enforced these bounds. Parsing policy is unchanged;
+reconciling health and socket parsing remains a separate architectural item.

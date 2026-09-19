@@ -2,7 +2,6 @@ package socket
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -380,92 +379,6 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 		return b.establishTCP(segment)
 	}
 	return b.handleTCPFlow(flow, segment)
-}
-
-// buildIPv4TCP builds an IPv4+TCP packet with given sequence/ack and flags.
-func buildIPv4TCP(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack uint32, flags byte, payload []byte) []byte {
-	return buildIPv4TCPOptsWith(srcIP, dstIP, srcPort, dstPort, seq, ack, flags, payload, nil, 0x00, 64)
-}
-
-// buildIPv4TCPOpts allows specifying TCP options (must be padded to 4-byte multiple).
-func buildIPv4TCPOpts(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack uint32, flags byte, payload []byte, options []byte) []byte {
-	return buildIPv4TCPOptsWith(srcIP, dstIP, srcPort, dstPort, seq, ack, flags, payload, options, 0x00, 64)
-}
-
-// buildIPv4TCPWithIP allows specifying IP TOS/TTL without options.
-func buildIPv4TCPWithIP(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack uint32, flags byte, payload []byte, tos byte, ttl byte) []byte {
-	return buildIPv4TCPOptsWith(srcIP, dstIP, srcPort, dstPort, seq, ack, flags, payload, nil, tos, ttl)
-}
-
-// buildIPv4TCPOptsWith allows specifying both options and IP TOS/TTL.
-func buildIPv4TCPOptsWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack uint32, flags byte, payload []byte, options []byte, tos byte, ttl byte) []byte {
-	ihl := 20
-	thl := 20 + ((len(options) + 3) &^ 3)
-	total := ihl + thl + len(payload)
-	pkt := bufMaybePool(total)
-
-	// IPv4 header
-	pkt[0] = 0x45
-	pkt[1] = tos
-	pkt[2] = byte(total >> 8)
-	pkt[3] = byte(total & 0xff)
-	// Identification: incrementing ID to avoid zero-ID issues on some paths
-	id := nextIPID()
-	pkt[4] = byte(id >> 8)
-	pkt[5] = byte(id)
-	pkt[6], pkt[7] = 0, 0
-	pkt[8] = ttl
-	pkt[9] = 6
-	copy(pkt[12:16], srcIP[:])
-	copy(pkt[16:20], dstIP[:])
-	ipcs := calculateChecksum(pkt[:20])
-	pkt[10] = byte(ipcs >> 8)
-	pkt[11] = byte(ipcs & 0xff)
-
-	// TCP header
-	off := 20
-	binary.BigEndian.PutUint16(pkt[off:off+2], srcPort)
-	binary.BigEndian.PutUint16(pkt[off+2:off+4], dstPort)
-	binary.BigEndian.PutUint32(pkt[off+4:off+8], seq)
-	binary.BigEndian.PutUint32(pkt[off+8:off+12], ack)
-	pkt[off+12] = byte((thl / 4) << 4) // data offset
-	pkt[off+13] = flags
-	// Window size: choose a large default
-	pkt[off+14] = 0xff
-	pkt[off+15] = 0xff
-	// Checksum later
-	// Urgent pointer = 0
-	// Options
-	copy(pkt[off+20:off+20+len(options)], options)
-	copy(pkt[off+thl:], payload)
-
-	// TCP checksum with pseudo-header
-	csum := tcpChecksum(pkt[off:off+thl+len(payload)], srcIP, dstIP)
-	binary.BigEndian.PutUint16(pkt[off+16:off+18], csum)
-	return pkt
-}
-
-func tcpChecksum(tcp []byte, srcIP, dstIP [4]byte) uint16 {
-	sum := uint32(0)
-	var pseudo [12]byte
-	copy(pseudo[0:4], srcIP[:])
-	copy(pseudo[4:8], dstIP[:])
-	pseudo[8] = 0
-	pseudo[9] = 6
-	binary.BigEndian.PutUint16(pseudo[10:12], uint16(len(tcp)))
-	for i := 0; i < len(pseudo); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(pseudo[i : i+2]))
-	}
-	for i := 0; i+1 < len(tcp); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(tcp[i : i+2]))
-	}
-	if len(tcp)%2 == 1 {
-		sum += uint32(uint16(tcp[len(tcp)-1]) << 8)
-	}
-	for (sum >> 16) != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
 }
 
 // ordered is a minimal constraint for types that support < and > comparisons

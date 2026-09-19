@@ -361,6 +361,39 @@ Committed locally in `c7686b2`. Linux Go 1.23.12 verification passed before the 
 
 **Acceptance:** known packet fixtures, malformed packet tests, and fuzz targets pass; no behavior changes are hidden in code movement.
 
+**Shared encoding implemented:** `internal/packetwire` owns fixed IPv4 headers,
+TCP/UDP serialization and Internet/pseudoheader checksums. Socket bridges, ICMP
+wrapping, fragmentation and health probes share these primitives. Allocation,
+pooling, reservations, IP IDs, fragmentation policy and locks remain with callers.
+Independent literal wire fixtures, dirty-buffer/size/zero-allocation tests and an
+independent checksum fuzz oracle cover the boundary.
+
+Two explicit corrections accompany extraction: health/legacy fragment builders
+now encode computed-zero UDP checksums as `0xffff`; oversized private builders
+reject before allocation instead of truncating lengths. Incoming omitted UDP
+checksums remain accepted. No privilege or transport architecture changes.
+
+**Encoding validation (2026-09-18):** Linux Go 1.23.12 unit and tagged integration
+tests passed with the race detector, including encrypted TCP/UDP forwarding and
+existing ownership/lifecycle regressions. Build, vet, module tidy/verification
+(unchanged module files), and separate 10-second single-worker parser/encoder fuzz
+campaigns passed (154,863 / 405,372 executions). The encoder fuzz smoke target is
+also configured in CI; GitHub execution remains pending. The existing ACK
+microbenchmark median was 692.9 ns/op, 34 B/op and 2 allocs/op; this is not encoder
+throughput evidence. Gofmt and whitespace checks passed.
+
+Across both integration/race runs plus final fuzz, build and vet, the largest
+container peak was 794,804,224 bytes. All five bounded stages recorded zero
+memory/OOM/PID-limit events and independently verified removal of owned
+containers, networks, temporary workspaces and locks. Pause guards were restored.
+Environment-specific scripts and raw evidence remain ignored/private. This is a
+local change on `codex/architecture-hardening`; nothing is pushed.
+
+- [x] Shared encoding and independent byte fixtures.
+- [ ] Shared validated parsing: reconcile health-probe and socket acceptance/
+  checksum policies explicitly before extracting a shared parser. Socket-local
+  validated parsing already exists; the health probe still parses independently.
+
 ### PR 4.3 — Decompose TCP by responsibility
 
 **Structural extraction sequence (2026-09-18):** tracked independently from F10
@@ -378,7 +411,7 @@ push. Ownership and benchmark scope are recorded in
 
 Full PR 4.3 performance acceptance remains separate: the bounded ACK benchmark
 is only an initial latency/allocation gate, not forwarding throughput or dial/load
-validation. PR 4.2 shared encoding and PR 4.4 dead-code cleanup remain separate.
+validation. PR 4.2 shared parsing and PR 4.4 dead-code cleanup remain separate.
 
 Extract one boundary per PR, preserving protocol behavior:
 

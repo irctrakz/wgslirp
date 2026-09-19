@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"net"
 	"sync"
 	"time"
@@ -322,44 +323,13 @@ func buildIPv4UDP(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []byte)
 }
 
 // buildIPv4UDPWith builds an IPv4+UDP packet with specified TOS and TTL.
-func buildIPv4UDPWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []byte, tos byte, ttl byte) []byte {
-	ihl := 20
-	udpLen := 8 + len(payload)
-	totalLen := ihl + udpLen
-	pkt := make([]byte, totalLen)
-
-	// IPv4 header
-	pkt[0] = 0x45 // version=4, IHL=5
-	pkt[1] = tos  // DSCP/ECN
-	pkt[2] = byte(totalLen >> 8)
-	pkt[3] = byte(totalLen & 0xff)
-	// Identification: incrementing ID to avoid zero-ID issues on some paths
-	id := nextIPID()
-	pkt[4] = byte(id >> 8)
-	pkt[5] = byte(id)
-	pkt[6], pkt[7] = 0, 0 // flags/frag offset
-	pkt[8] = ttl          // TTL
-	pkt[9] = 17           // UDP
-	copy(pkt[12:16], srcIP[:])
-	copy(pkt[16:20], dstIP[:])
-	csum := calculateChecksum(pkt[:20])
-	pkt[10] = byte(csum >> 8)
-	pkt[11] = byte(csum & 0xff)
-
-	// UDP header
-	off := 20
-	binary.BigEndian.PutUint16(pkt[off:off+2], srcPort)
-	binary.BigEndian.PutUint16(pkt[off+2:off+4], dstPort)
-	binary.BigEndian.PutUint16(pkt[off+4:off+6], uint16(udpLen))
-	copy(pkt[off+8:], payload)
-
-	// UDP checksum with pseudo-header (optional for IPv4 but we compute it)
-	ucsum := udpChecksum(pkt[off:off+udpLen], srcIP, dstIP)
-	if ucsum == 0 {
-		ucsum = 0xffff // Zero on the wire means checksum omitted, not a computed zero.
+func buildIPv4UDPWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []byte, tos, ttl byte) []byte {
+	if len(payload) > 65507 {
+		return nil
 	}
-	binary.BigEndian.PutUint16(pkt[off+6:off+8], ucsum)
-
+	pkt := make([]byte, 28+len(payload))
+	packetwire.IPv4Header(pkt, srcIP, dstIP, 17, tos, ttl, nextIPID(), 0)
+	packetwire.UDP(pkt[20:], srcIP, dstIP, srcPort, dstPort, payload)
 	return pkt
 }
 
@@ -368,20 +338,13 @@ func buildIPv4UDPWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []b
 // UDP header; subsequent fragments carry only UDP payload bytes. Fragment sizes
 // are aligned to 8-byte boundaries per IPv4 requirements.
 func buildIPv4UDPFragmentsWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []byte, tos byte, ttl byte, mtu int) [][]byte {
-	if mtu <= 28 {
+	if mtu <= 28 || len(payload) > 65507 {
 		return nil
 	}
 	// Prepare full UDP datagram (header + payload)
 	udpLen := 8 + len(payload)
 	full := make([]byte, udpLen)
-	// UDP header
-	binary.BigEndian.PutUint16(full[0:2], srcPort)
-	binary.BigEndian.PutUint16(full[2:4], dstPort)
-	binary.BigEndian.PutUint16(full[4:6], uint16(udpLen))
-	copy(full[8:], payload)
-	// Checksum over full datagram
-	ucsum := udpChecksum(full[:udpLen], srcIP, dstIP)
-	binary.BigEndian.PutUint16(full[6:8], ucsum)
+	packetwire.UDP(full, srcIP, dstIP, srcPort, dstPort, payload)
 
 	// Max data per fragment after 20-byte IP header
 	maxFrag := mtu - 20
@@ -406,35 +369,12 @@ func buildIPv4UDPFragmentsWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, pa
 		// total packet length = IP header + fragment data
 		total := 20 + size
 		pkt := make([]byte, total)
-		// IPv4 header
-		pkt[0] = 0x45
-		pkt[1] = tos
-		pkt[2] = byte(total >> 8)
-		pkt[3] = byte(total & 0xff)
-		pkt[4] = byte(id >> 8)
-		pkt[5] = byte(id)
-		// flags+frag offset
-		// Offset in 8-byte units
-		offUnits := offset / 8
-		// More Fragments flag if not last
-		flags := 0
+		flags := uint16(offset / 8)
 		if offset+size < udpLen {
-			flags = 0x2000
-		} // MF bit
-		// Combine flags and offset
-		fo := uint16(flags) | uint16(offUnits)
-		pkt[6] = byte(fo >> 8)
-		pkt[7] = byte(fo)
-		pkt[8] = ttl
-		pkt[9] = 17 // UDP
-		copy(pkt[12:16], srcIP[:])
-		copy(pkt[16:20], dstIP[:])
-		// Copy fragment data (slice of UDP datagram)
+			flags |= 0x2000
+		}
+		packetwire.IPv4Header(pkt, srcIP, dstIP, 17, tos, ttl, id, flags)
 		copy(pkt[20:], full[offset:offset+size])
-		// IP header checksum
-		csum := calculateChecksum(pkt[:20])
-		pkt[10] = byte(csum >> 8)
-		pkt[11] = byte(csum & 0xff)
 		frags = append(frags, pkt)
 		offset += size
 	}
@@ -442,30 +382,5 @@ func buildIPv4UDPFragmentsWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, pa
 }
 
 func udpChecksum(udp []byte, srcIP, dstIP [4]byte) uint16 {
-	// Pseudo-header: src(4) dst(4) zero(1) proto(1) udpLen(2)
-	sum := uint32(0)
-	var pseudo [12]byte
-	copy(pseudo[0:4], srcIP[:])
-	copy(pseudo[4:8], dstIP[:])
-	pseudo[8] = 0
-	pseudo[9] = 17
-	binary.BigEndian.PutUint16(pseudo[10:12], uint16(len(udp)))
-
-	// Sum pseudo-header
-	for i := 0; i < len(pseudo); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(pseudo[i : i+2]))
-	}
-
-	// Sum UDP header+payload
-	for i := 0; i+1 < len(udp); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(udp[i : i+2]))
-	}
-	if len(udp)%2 == 1 {
-		sum += uint32(uint16(udp[len(udp)-1]) << 8)
-	}
-
-	for (sum >> 16) != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
+	return packetwire.TransportChecksum(udp, srcIP, dstIP, 17)
 }
