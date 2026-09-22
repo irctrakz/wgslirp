@@ -71,3 +71,13 @@ comparison and its preselected budgets. It passed throughput, latency, allocatio
 and sampled-memory checks for eight clients per protocol. This advances PR 4.3;
 it does not replace encrypted/high-churn deployment sizing, WAN or soak evidence
 listed above, and does not close F10.
+
+## Initial encrypted WAN/soak investigation
+
+[ENCRYPTED_WORKLOADS.md](ENCRYPTED_WORKLOADS.md) describes the explicit opt-in
+30-second TCP/UDP fixture with userspace ciphertext delay, selective loss and
+reordering. It has produced both guard failures and a finite successful diagnostic
+completion; memory acceptance is unresolved. The separately tagged diagnostic may
+force one collection after traffic stops to measure live retention. It does not
+satisfy natural-GC soak acceptance. Ordinary CI excludes the `soak` tag, and F10e
+remains open, including the concrete encrypted-memory follow-up in the plan.

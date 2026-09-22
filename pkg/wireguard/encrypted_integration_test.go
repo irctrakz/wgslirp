@@ -94,11 +94,13 @@ func encryptedChecksum(p []byte) uint16 {
 	return ^uint16(sum)
 }
 
-func TestEncryptedWireGuardTCPUDP(t *testing.T) {
+func encryptedTestLink(t *testing.T, endpoint func(int) string) (*socket.SocketInterface, *WGTun, encryptedGuestSink) {
+	t.Helper()
 	serverPrivate, serverPublic := encryptedKey(t)
 	guestPrivate, guestPublic := encryptedKey(t)
 	cfg := socket.DefaultConfig()
 	cfg.Protocol = "ip4:tcp"
+	cfg.MTU = 1380
 	cfg.TCPAckDelayMs = 0
 	s := socket.NewSocketInterface(cfg)
 	serverTun, err := NewWGTunWithConfig("encrypted-server", 1380, s, DefaultTunConfig())
@@ -137,11 +139,16 @@ func TestEncryptedWireGuardTCPUDP(t *testing.T) {
 	}
 	t.Cleanup(func() { guestTun.Close() })
 	guest, err := StartDevice(DeviceConfig{Options: &DeviceOptions{}, PrivateKey: guestPrivate, MTU: 1380,
-		Peers: []PeerConfig{{PublicKey: serverPublic, AllowedIPs: []string{"0.0.0.0/0"}, Endpoint: fmt.Sprintf("127.0.0.1:%d", port)}}}, guestTun)
+		Peers: []PeerConfig{{PublicKey: serverPublic, AllowedIPs: []string{"0.0.0.0/0"}, Endpoint: endpoint(port)}}}, guestTun)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { guest.Close() })
+	return s, guestTun, responses
+}
+
+func TestEncryptedWireGuardTCPUDP(t *testing.T) {
+	_, guestTun, responses := encryptedTestLink(t, func(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) })
 	send := func(p []byte) {
 		t.Helper()
 		if err := guestTun.InjectToPeer(p); err != nil {
