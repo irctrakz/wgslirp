@@ -2,6 +2,15 @@
 
 ## Objective and evidence
 
+**Current reassessment (2026-09-21):** see
+[ARCHITECTURE_ASSESSMENT.md](ARCHITECTURE_ASSESSMENT.md) for all 30 current ratings
+and the impact-ordered A1–A7 follow-ups. Independent review and verified branch
+protections are satisfied assumptions for that analysis, as requested by the
+user; historical verification records below remain unchanged. Immediate priority
+is F10e.2 encrypted memory acceptance, followed by release-artifact validation and
+PR 2.3 privilege defaults. PR 4.1 still has a public debug-dependent packet API
+remainder; the completed internal ownership work does not close that criterion.
+
 Bring all 30 reviewed principles to **Strong**, with **Excellent** reserved for areas supported by sustained operational evidence. Prioritize preventable crashes, secret exposure, unsafe releases, and ineffective limits before refactoring.
 
 Baseline: static review of commit `aded0ae`. Builds, tests, and race detection were not run because Go was unavailable on PATH. Findings below must be reproduced or verified against the implementation before fixes are considered complete. Repository settings such as required reviews and branch protection remain unverified.
