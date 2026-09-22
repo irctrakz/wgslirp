@@ -113,7 +113,7 @@ func encryptedTestLink(t *testing.T, endpoint func(int) string) (*socket.SocketI
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Stop() })
-	server, err := StartDevice(DeviceConfig{Options: &DeviceOptions{}, PrivateKey: serverPrivate, MTU: 1380,
+	server, err := StartDevice(DeviceConfig{PrivateKey: serverPrivate, MTU: 1380,
 		Peers: []PeerConfig{{PublicKey: guestPublic, AllowedIPs: []string{"10.0.0.2/32"}}}}, serverTun)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func encryptedTestLink(t *testing.T, endpoint func(int) string) (*socket.SocketI
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { guestTun.Close() })
-	guest, err := StartDevice(DeviceConfig{Options: &DeviceOptions{}, PrivateKey: guestPrivate, MTU: 1380,
+	guest, err := StartDevice(DeviceConfig{PrivateKey: guestPrivate, MTU: 1380,
 		Peers: []PeerConfig{{PublicKey: serverPublic, AllowedIPs: []string{"0.0.0.0/0"}, Endpoint: endpoint(port)}}}, guestTun)
 	if err != nil {
 		t.Fatal(err)

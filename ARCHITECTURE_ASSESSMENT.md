@@ -7,6 +7,12 @@ measurements and retained failed tight-guard evidence. A2/A3 are next; larger
 workloads and release-image validation remain open. The ratings and analysis
 below describe the assessed source revision, not a new blanket rating upgrade.
 
+**A3 default-policy update (2026-09-22):** default IPv6 sysctl writes are now
+disabled; explicit `WG_DISABLE_IPV6=true` / `DeviceOptions.DisableIPv6=true`
+preserves the documented legacy opt-in. Release-image and optional ICMP
+deployment checks remain open. The snapshot findings below retain their original
+revision context; the default-policy portion of A3 is implemented.
+
 ## Scope and conclusion
 
 Assessed source: `1ef5ca73142150e64603e9304f5e803f2bded959` on

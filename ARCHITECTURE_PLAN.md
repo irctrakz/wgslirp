@@ -320,6 +320,23 @@ Committed locally in `c7686b2`. Linux Go 1.23.12 verification passed before the 
 
 ### PR 2.3 — Make deployment privileges explicit
 
+**Default-policy update (2026-09-22):** `WG_DISABLE_IPV6` and nil/default library
+device options now leave IPv6 sysctls unchanged. Explicit true retains the legacy
+three best-effort writes and nonfatal failure behavior; false remains a no-op.
+[CONFIGURATION.md](CONFIGURATION.md) records the intentional default change and
+migration. Encrypted integration peers now use omitted options to exercise the
+default userspace TCP/UDP path. The hardened release-image test and explicit
+ICMP deployment validation remain open; this change does not complete A3/PR 2.3.
+
+**Verification:** full unit/tagged integration tests passed with race detection,
+including encrypted TCP/UDP with nil/default device options. Regression cases
+cover unset/false values, all existing true aliases and explicit library opt-in.
+Build/module tidy/verification and tagged vet passed; module files were unchanged.
+All three bounded stages recorded zero memory/OOM/PID-limit events and independent
+zero-owned-residue checks; maximum container peak was 790,646,784 bytes. Pause
+guards were restored, formatting/whitespace checks passed, and private tooling
+remains ignored. No release image was built or exercised by these checks.
+
 - Remove default application writes to IPv6 sysctls; move required namespace configuration into documented deployment configuration.
 - Preserve non-root TCP/UDP operation. Document and verify the real ICMP activation path; granting a capability alone must not be presented as enabling a code path that is not started.
 - Add a tested container example with dropped capabilities and read-only filesystem where compatible; explicitly mount writable capture/config paths when required.

@@ -137,7 +137,7 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 	if tun == nil {
 		return nil, fmt.Errorf("nil tun")
 	}
-	// Best-effort IPv6 disable: default ON unless WG_DISABLE_IPV6 explicitly set false/0
+	// Preserve legacy sysctl writes only for explicit opt-in configuration.
 	options := cfg.deviceOptions()
 	if options.DisableIPv6 {
 		disableIPv6Sysctls()

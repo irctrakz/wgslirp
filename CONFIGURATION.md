@@ -42,9 +42,16 @@ Unknown variables are not rejected (the process inherits unrelated OS variables)
   capture does not truncate it. After close, write failure or size exhaustion it
   cannot reopen within the process. Runtime capture failures stop capture while
   forwarding continues. Existing 0600 permissions and complete-record limits apply.
-- `WG_DISABLE_IPV6` still defaults to true for compatibility. Its best-effort
-  sysctl behavior is unchanged in F04; deployment privilege changes remain in
-  architecture-plan PR 2.3. Set it false to avoid those writes today.
+- `WG_DISABLE_IPV6` now defaults to **false**: startup leaves IPv6 sysctls unchanged.
+  This is an intentional default change; it does not add IPv6 forwarding support
+  or affect userspace IPv4 TCP/UDP forwarding. Deployments relying on the previous
+  best-effort disable attempt must explicitly set `WG_DISABLE_IPV6=true` (existing
+  true aliases remain supported), or configure their network namespace through
+  deployment tooling. Explicit false remains a no-op. Explicit true retains the
+  same three sysctl writes and nonfatal failure behavior; it grants no privileges.
+  Do not grant elevated privileges merely to preserve the old implicit default.
+  Library callers using nil/default options also get false; an explicit
+  `DeviceOptions{DisableIPv6: true}` preserves the legacy opt-in behavior.
 
 `PRINT_CONFIG=true` emits a JSON effective-settings summary at startup, independent
 of logging level. The summary includes transport/resource controls, queue/pool

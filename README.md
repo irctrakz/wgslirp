@@ -224,7 +224,7 @@ Overlay routing (optional)
 
 - `WG_OVERLAY_ROUTING`: enable overlay re-route for packets destined to AllowedIPs.
 - `WG_OVERLAY_EXCLUDE_CIDRS`: CIDRs that should always egress via slirp.
-- `WG_DISABLE_IPV6`: defaults to true and attempts disabling IPv6 sysctls (best effort); set false to avoid these writes.
+- `WG_DISABLE_IPV6`: defaults to false and leaves namespace sysctls unchanged. Explicit true preserves the legacy best-effort IPv6-disable writes; failures remain nonfatal. Deployments relying on the old default must opt in or manage namespace policy externally; see [migration notes](CONFIGURATION.md#validation-and-migration). This setting does not enable IPv6 forwarding.
 
 Logging and diagnostics
 

@@ -39,8 +39,29 @@ func TestDeviceEnvironmentSnapshot(t *testing.T) {
 	if err := cfg.LoadFromEnv(); err == nil || !reflect.DeepEqual(cfg, previous) {
 		t.Fatal("failed load mutated configuration")
 	}
-	if !DefaultDeviceOptions().DisableIPv6 {
-		t.Fatal("F04 must preserve IPv6 default; privilege change is F06")
+	if DefaultDeviceOptions().DisableIPv6 {
+		t.Fatal("default configuration must leave IPv6 sysctls unchanged")
+	}
+}
+
+func TestIPv6SysctlOptIn(t *testing.T) {
+	for _, value := range []string{"unset", "false", "0", "off", "no", "true", "1", "on", "yes"} {
+		t.Run(value, func(t *testing.T) {
+			options, err := DeviceOptionsFromEnv(func(key string) (string, bool) {
+				return value, key == "WG_DISABLE_IPV6" && value != "unset"
+			})
+			want := value == "true" || value == "1" || value == "on" || value == "yes"
+			if err != nil || options.DisableIPv6 != want {
+				t.Fatalf("IPv6 opt-in %q: options=%+v err=%v", value, options, err)
+			}
+		})
+	}
+	// Both omitted library options and explicit zero options leave sysctls alone.
+	if (DeviceConfig{}).deviceOptions().DisableIPv6 || (DeviceConfig{Options: &DeviceOptions{}}).deviceOptions().DisableIPv6 {
+		t.Fatal("library default unexpectedly enables sysctl writes")
+	}
+	if !(DeviceConfig{Options: &DeviceOptions{DisableIPv6: true}}).deviceOptions().DisableIPv6 {
+		t.Fatal("explicit library opt-in was lost")
 	}
 }
 
