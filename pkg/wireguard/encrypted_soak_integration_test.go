@@ -107,13 +107,24 @@ func newEncryptedWAN(t *testing.T, serverPort int) *encryptedWAN {
 // Initial finite soak: one persistent TCP stream plus UDP, 30 seconds or 32
 // rounds, at most 160 KiB application payload per direction. Each I/O has a
 // five-second deadline; the separate test tag keeps this out of ordinary CI.
-func TestEncryptedWANSoak(t *testing.T) { runEncryptedWAN(t, false) }
+func TestEncryptedWANSoak(t *testing.T) { runEncryptedWAN(t, false, nil) }
 
 // This diagnostic stops at the same guard. GC is used only to measure retained
 // heap, never to rescue the soak or continue sending traffic after a refusal.
-func TestEncryptedWANMemoryDiagnostic(t *testing.T) { runEncryptedWAN(t, true) }
+func TestEncryptedWANMemoryDiagnostic(t *testing.T) {
+	t.Run("traffic", func(t *testing.T) { runEncryptedWAN(t, true, nil) })
+	// The child's cleanup has joined both devices, the relay and host peers.
+	// Observe allocator retention separately from the live-link measurement.
+	for i := 0; i < 5; i++ {
+		encryptedMemorySample(t, "drained")
+		time.Sleep(time.Second)
+	}
+	runtime.GC()
+	encryptedMemorySample(t, "drained_diagnostic_gc")
+	encryptedAllocationProfile(t)
+}
 
-func runEncryptedWAN(t *testing.T, diagnostic bool) {
+func runEncryptedWAN(t *testing.T, diagnostic bool, acceptance *encryptedMemoryAcceptance) {
 	var wan *encryptedWAN
 	s, tun, responses := encryptedTestLink(t, func(port int) string { wan = newEncryptedWAN(t, port); return wan.conn.LocalAddr().String() })
 	send := func(p []byte) {
@@ -165,17 +176,30 @@ func runEncryptedWAN(t *testing.T, diagnostic bool) {
 	var initial runtime.MemStats
 	runtime.ReadMemStats(&initial)
 	t.Logf("SOAK_BASELINE heap=%d goroutines=%d cpus=%d", initial.HeapAlloc, runtime.NumGoroutine(), runtime.NumCPU())
+	if acceptance != nil {
+		acceptance.initialize(t, initial)
+	}
+	if diagnostic {
+		encryptedMemorySample(t, "initialized")
+	}
 	diagnose := func(m runtime.MemStats, rounds int) {
 		before := m
+		encryptedMemorySample(t, "live_before_diagnostic_gc")
 		runtime.GC()
 		runtime.ReadMemStats(&m)
 		dm := s.DetailedMetrics()
 		t.Logf("MEMORY_DIAGNOSTIC rounds=%d heap_before=%d heap_after_gc=%d baseline=%d gc_before=%d gc_after=%d goroutines=%d reserved=%d dropped=%d reordered=%d rto=%d", rounds, before.HeapAlloc, m.HeapAlloc, initial.HeapAlloc, before.NumGC, m.NumGC, runtime.NumGoroutine(), dm.TCPExt["socket_buffer_bytes"], wan.dropped.Load(), wan.reordered.Load(), dm.TCPExt["rto"])
+		encryptedMemorySample(t, "live_after_diagnostic_gc")
+		encryptedAllocationProfile(t)
 	}
 	start := time.Now()
 	rounds := 0
 	var heapPeak uint64
-	for rounds < 32 && time.Since(start) < 30*time.Second {
+	maxRounds, duration := 32, 30*time.Second
+	if acceptance != nil {
+		maxRounds, duration = 96, 90*time.Second
+	}
+	for rounds < maxRounds && time.Since(start) < duration {
 		payload := bytes.Repeat([]byte{byte(rounds)}, 1024)
 		udp.SetDeadline(time.Now().Add(5 * time.Second))
 		send(encryptedPacket(17, uint16(udp.LocalAddr().(*net.UDPAddr).Port), 0, 0, 0, payload))
@@ -244,7 +268,9 @@ func runEncryptedWAN(t *testing.T, diagnostic bool) {
 		if m.HeapAlloc > heapPeak {
 			heapPeak = m.HeapAlloc
 		}
-		if m.HeapAlloc > 64<<20 || runtime.NumGoroutine() > 256 {
+		if acceptance != nil {
+			acceptance.observe(t, m, rounds)
+		} else if m.HeapAlloc > 64<<20 || runtime.NumGoroutine() > 256 {
 			if diagnostic {
 				diagnose(m, rounds)
 				if err := s.Stop(); err != nil {
@@ -266,6 +292,9 @@ func runEncryptedWAN(t *testing.T, diagnostic bool) {
 	}
 	if rounds < 16 || wan.dropped.Load() == 0 || wan.reordered.Load() == 0 {
 		t.Fatalf("insufficient workload: rounds=%d dropped=%d reordered=%d", rounds, wan.dropped.Load(), wan.reordered.Load())
+	}
+	if acceptance != nil {
+		acceptance.finish(t, rounds)
 	}
 	if diagnostic {
 		var final runtime.MemStats

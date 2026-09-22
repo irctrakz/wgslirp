@@ -23,7 +23,7 @@ The recorded environment uses Go 1.23.12, one CPU, 2 GiB memory with no swap, 12
 - Live/peak reservations must stay within the configured budget. Shutdown must leave zero reservations and no registered flows.
 - Samples cover each traffic round and four post-shutdown observations from zero to three seconds. Heap, RSS, goroutine-stack storage, heap pages and natural GC counts are logged. RSS is observed, not asserted to return to its initial value within three seconds.
 
-The fixture includes allocations and sockets used by the echo peers and guest simulator. Its RSS is not an isolated router RSS measurement. It excludes encrypted WireGuard transport, WAN loss/latency, long-idle expiry and long-duration soak behavior. F10 separately covers bounded encrypted loopback round trips; encrypted load, WAN and soak evidence remain open in [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md). Existing focused tests cover per-flow backpressure, pending-dial admission, queue rejection and ownership release.
+The fixture includes allocations and sockets used by the echo peers and guest simulator. Its RSS is not an isolated router RSS measurement. It excludes encrypted WireGuard transport, WAN loss/latency, long-idle expiry and long-duration soak behavior. F10 separately covers bounded encrypted loopback round trips and an accepted finite low-rate natural-GC profile with ciphertext loss/reordering; see [ENCRYPTED_WORKLOADS.md](ENCRYPTED_WORKLOADS.md). Larger encrypted/WAN and long-duration evidence remain open in [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md). Existing focused tests cover per-flow backpressure, pending-dial admission, queue rejection and ownership release.
 
 ## Default selection
 

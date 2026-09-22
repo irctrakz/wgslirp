@@ -81,3 +81,12 @@ completion; memory acceptance is unresolved. The separately tagged diagnostic ma
 force one collection after traffic stops to measure live retention. It does not
 satisfy natural-GC soak acceptance. Ordinary CI excludes the `soak` tag, and F10e
 remains open, including the concrete encrypted-memory follow-up in the plan.
+
+**A1 update (2026-09-22):** F10e.2's finite low-rate natural-GC baseline is now
+accepted under a separately declared criterion, with three fresh ordinary and
+three fresh race runs. The original 64 MiB guard and failures were preserved;
+the new profile observes natural collection, sampled heap/RSS limits, continued
+payload recovery and complete teardown without forced GC. Details and exact
+limits are in [ENCRYPTED_WORKLOADS.md](ENCRYPTED_WORKLOADS.md). This closes that
+memory-baseline investigation, not F10e's larger/higher-rate/long-duration work
+or F10d's release-image gate. No production runtime or server limits changed.

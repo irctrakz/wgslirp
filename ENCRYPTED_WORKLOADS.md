@@ -1,5 +1,124 @@
 # Finite encrypted WAN/soak fixture
 
+**Current status (2026-09-22):** the separately defined A1 natural-GC acceptance
+profile passed three fresh-process ordinary runs and three fresh-process race
+runs. The original tighter 64 MiB/30-second profile and its failures remain below
+as historical evidence; that old criterion was not made to pass. Higher-rate,
+larger and long-duration acceptance remain outside this result.
+
+## A1 natural-GC acceptance profile (criteria declared before execution)
+
+The original `TestEncryptedWANSoak` retains its 64 MiB/30-second guard and its
+failure history. A separate `TestEncryptedWANMemoryAcceptance` evaluates whether
+the initialized encrypted link can collect naturally while traffic stays bounded.
+This is an explicit change of acceptance criterion, not a production memory fix.
+
+The extended diagnostic measured initialized heap 51,266,392 bytes and a later
+`NextGC` target of 103,126,544 bytes. Sampled allocation stacks chiefly identify
+wireguard-go message-buffer pools. One live-link collection returned heap to
+51,365,512 bytes. Five seconds after device cleanup, RSS still measured about
+178 MB; a subsequent diagnostic collection left about 42.8 MB heap. These
+measurements distinguish reclaimable allocation, pool retention and RSS; they
+do not establish immediate RSS recovery or identify every retained object.
+Profiles retain only eight sampled allocation stacks (function names and raw
+sampled bytes, not scaled totals or packet/key contents). Visibility may lag GC.
+
+Predeclared acceptance for the new finite profile:
+
+- Same one TCP/one UDP link, payloads, one-second pause, delay/reorder/drop policy;
+  at most 90 seconds of traffic and 96 rounds (480 KiB application payload per
+  direction maximum). At least 64 completed rounds; test deadline 120 seconds.
+- Initialized heap at most 64 MiB; sampled heap at most 128 MiB and process RSS
+  at most 256 MiB throughout completed-round and five-second post-cleanup samples.
+  The heap ceiling permits the observed roughly 98 MiB GC target plus bounded
+  headroom. The RSS ceiling includes both devices, peers and race instrumentation;
+  it is a test-process envelope, not a per-instance production memory guarantee.
+- Observe at least one additional natural GC; at each observed GC transition,
+  sampled heap must be within 8 MiB of initialization. Complete at least eight
+  additional rounds after the first observed collection. Sampling is not exact
+  live-heap measurement and does not detect arbitrary between-sample spikes.
+- No increase in forced-GC count; no runtime GC/memory-limit changes. Keep the
+  existing harness `GOMAXPROCS=1`, `GOMEMLIMIT=512MiB`, 1 CPU, 2 GiB/no swap,
+  128 PIDs, bounded tmpfs and 600-second outer deadline.
+- Existing exact payload, actual loss/reordering, duplicate ACK, zero relay
+  overflow and reservation checks remain. Shutdown must leave zero socket flows
+  and reservations. After child cleanup joins devices/relay/peers, sample for five
+  seconds; goroutines must return to the pre-link count plus at most four.
+- Require three separate fresh-process non-race runs and three fresh-process race
+  runs before accepting the profile. A run without an observed GC fails for
+  insufficient evidence. Do not use `-count=3` in one process as fresh-process evidence.
+
+```sh
+go test -v -tags=integration,soak -run='^TestEncryptedWANMemoryAcceptance$' -timeout=120s -count=1 -parallel=1 ./pkg/wireguard
+go test -v -race -tags=integration,soak -run='^TestEncryptedWANMemoryAcceptance$' -timeout=120s -count=1 -parallel=1 ./pkg/wireguard
+```
+
+The diagnostic still has explicit collections and remains separate from acceptance.
+Larger/higher-rate and long-duration workloads remain F10e follow-ups even if this
+finite baseline passes. No server limit was increased.
+
+### A1 repeat results (2026-09-21/22)
+
+All runs used the same Go 1.23.12 contained environment and profile, each in a
+fresh process/container. Values below are bytes; peaks are sampled process values,
+not container peaks or exact instantaneous maxima.
+
+| Mode/run | Rounds | Natural GCs after initialization | First observed GC round | Heap peak | RSS peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ordinary 1 | 87 | 1 | 60 | 64,132,936 | 21,991,424 |
+| Ordinary 2 | 87 | 1 | 61 | 64,262,320 | 22,315,008 |
+| Ordinary 3 | 87 | 1 | 60 | 64,074,496 | 21,893,120 |
+| Race 1 | 86 | 1 | 49 | 90,054,736 | 258,781,184 |
+| Race 2 | 86 | 2 | 11 | 91,545,376 | 255,025,152 |
+| Race 3 | 86 | 2 | 10 | 93,590,336 | 260,255,744 |
+
+Initialized heap was 51.25–51.32 MB. Samples immediately following observed
+natural collections were 51.60–52.25 MB, comfortably within the declared 8 MiB
+growth allowance. Every run verified 11 ciphertext drops, 96–97 reordered
+deliveries, duplicate ACK recovery, exact TCP/UDP payloads, zero relay overflow
+and zero final flows/reservations. RTO count was zero; recovery exercised the
+duplicate-ACK path. After device/relay/peer cleanup, the final goroutine sample
+was two. No forced GC occurred in any acceptance run.
+
+Race instrumentation materially changes this fixture's measured footprint:
+peak RSS was about 243–248 MiB with race detection versus about 21 MiB without.
+The race profile has limited RSS headroom below its 256 MiB ceiling. HeapAlloc
+and RSS measure different things and should not be equated; these totals include
+both WireGuard devices and fixture peers. No per-production-instance estimate
+or universal capacity claim follows from them.
+
+**Decision:** F10e.2's repeatable finite low-rate baseline is accepted under the
+explicitly revised natural-GC criterion. No production memory fix, GC tuning,
+server-limit increase or claim of immediate RSS reclamation is warranted by these
+results. The old 64 MiB guard was below the initialized link's later collection
+target and is not the current acceptance gate. Its opt-in test remains unchanged
+and can still fail; select the named acceptance test rather than running every
+`soak`-tagged experiment indiscriminately. Larger profiles must predeclare their
+own bounds and cannot inherit this pass.
+
+The additional diagnostic and all six acceptance stages recorded zero memory/
+OOM/PID-limit events and independently verified no owned container, network,
+workspace or lock residue. Acceptance-stage container peaks were 325,951,488–
+500,924,416 bytes, including build/cache/tmpfs overhead. Pause guards were restored
+after each stage; execution helpers and raw evidence remain private and ignored.
+
+### A1 final regression validation (2026-09-22)
+
+The full ordinary unit/tagged integration suite passed with the race detector
+(excluding opt-in `soak` experiments), followed by build/module tidy/verification
+with unchanged module files and vet including `integration,soak` code. Container
+peaks were 819,204,096, 437,231,616 and 376,377,344 bytes respectively. Formatting
+and diff whitespace checks passed. No parser/encoder changes required a new fuzz
+campaign; the existing parser/encoder regressions ran in the ordinary suite.
+
+Across all ten A1 stages (one diagnostic, six acceptance repeats and three final
+checks), there were zero memory/OOM/PID-limit events and independently verified
+zero owned remote residue. The largest container peak was 819,204,096 bytes.
+Remote pause guards are restored. Production code/defaults and server limits
+are unchanged; implementation and documentation are committed locally only.
+
+## Original tight-guard profile and historical findings
+
 `TestEncryptedWANSoak` is an initial low-rate workload, not a throughput or
 long-duration stability claim. It uses two real wireguard-go devices, in-memory
 TUNs, the production socket bridges and real loopback TCP/UDP peers. No kernel

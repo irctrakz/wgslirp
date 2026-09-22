@@ -1,5 +1,12 @@
 # Architectural reassessment — 2026-09-21
 
+**Implementation update (2026-09-22):** A1/F10e.2 is now accepted for its explicitly
+revised finite low-rate natural-GC profile: three fresh ordinary and three fresh
+race runs passed. See [ENCRYPTED_WORKLOADS.md](ENCRYPTED_WORKLOADS.md) for criteria,
+measurements and retained failed tight-guard evidence. A2/A3 are next; larger
+workloads and release-image validation remain open. The ratings and analysis
+below describe the assessed source revision, not a new blanket rating upgrade.
+
 ## Scope and conclusion
 
 Assessed source: `1ef5ca73142150e64603e9304f5e803f2bded959` on
