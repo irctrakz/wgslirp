@@ -1,0 +1,357 @@
+//go:build integration && releaseimage && linux
+
+package wireguard
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+// This fixture controls Docker on a disposable runner; the tested application
+// receives neither the Docker socket nor privileges. Select it explicitly.
+func TestReleaseImage(t *testing.T) {
+	image := os.Getenv("WGSLIRP_RELEASE_IMAGE")
+	if image == "" {
+		t.Skip("set WGSLIRP_RELEASE_IMAGE to an already-built release image")
+	}
+	run := os.Getenv("WGSLIRP_RELEASE_RUN")
+	if run == "" || strings.Trim(run, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != "" {
+		t.Fatal("a dedicated alphanumeric WGSLIRP_RELEASE_RUN is required")
+	}
+	name := "wgslirp-release-" + run
+	label := "wgslirp.release.run=" + run
+	docker := func(args ...string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("docker %s: %w: %s", args[0], err, out)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	mustDocker := func(args ...string) string {
+		t.Helper()
+		out, err := docker(args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	report := map[string]any{"image": image, "source_commit": os.Getenv("WGSLIRP_RELEASE_COMMIT"), "run": run}
+	t.Cleanup(func() {
+		report["passed"] = !t.Failed()
+		if dir := os.Getenv("WGSLIRP_RELEASE_REPORT"); dir != "" {
+			data, err := json.MarshalIndent(report, "", "  ")
+			if err == nil {
+				err = os.WriteFile(filepath.Join(dir, "runtime.json"), data, 0600)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	mustDocker("network", "create", "--internal", "--label", label, name)
+	t.Cleanup(func() {
+		if _, err := docker("network", "rm", name); err != nil {
+			t.Error(err)
+		}
+	})
+	gateway := net.ParseIP(mustDocker("network", "inspect", "--format", "{{(index .IPAM.Config 0).Gateway}}", name)).To4()
+	if gateway == nil {
+		t.Fatal("missing dedicated network IPv4 gateway")
+	}
+	serverPrivate, serverPublic := encryptedKey(t)
+	guestPrivate, guestPublic := encryptedKey(t)
+	config := strings.Join([]string{"WG_PRIVATE_KEY=" + serverPrivate, "WG_LISTEN_PORT=51820", "WG_MTU=1380", "WG_PEERS=0",
+		"WG_PEER_0_PUBLIC_KEY=" + guestPublic, "WG_PEER_0_ALLOWED_IPS=10.0.0.2/32"}, "\n") + "\n"
+	envFile := filepath.Join(t.TempDir(), "device.env")
+	if err := os.WriteFile(envFile, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mustDocker("create", "--name", name, "--label", label, "--network", name,
+		"--env-file", envFile,
+		"--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+		"--cpus=1", "--memory=256m", "--memory-swap=256m", "--pids-limit=128",
+		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m", "--restart=no",
+		"--log-driver=json-file", "--log-opt=max-size=1m", "--log-opt=max-file=1", image)
+	t.Cleanup(func() {
+		if t.Failed() {
+			out, _ := docker("logs", "--tail", "30", name)
+			t.Log(out)
+		}
+		if _, err := docker("rm", "-f", name); err != nil {
+			t.Error(err)
+		}
+	})
+	// Decode only nonsensitive fields; never persist inspect's environment/keys.
+	type inspection struct {
+		Image  string
+		Config struct{ User string }
+		State  struct {
+			Running, OOMKilled bool
+			ExitCode           int
+		}
+		HostConfig struct {
+			Memory, MemorySwap, NanoCpus, PidsLimit int64
+			ReadonlyRootfs                          bool
+			CapDrop, SecurityOpt                    []string
+		}
+	}
+	inspect := func() inspection {
+		t.Helper()
+		var result []inspection
+		if err := json.Unmarshal([]byte(mustDocker("inspect", name)), &result); err != nil || len(result) != 1 {
+			t.Fatal("invalid container inspection", err)
+		}
+		return result[0]
+	}
+	mustDocker("start", name)
+	i := inspect()
+	if !i.State.Running || i.Config.User == "" || i.Config.User == "root" || i.Config.User == "0" ||
+		i.HostConfig.Memory != 256<<20 || i.HostConfig.MemorySwap != 256<<20 || i.HostConfig.NanoCpus != 1e9 ||
+		i.HostConfig.PidsLimit != 128 || !i.HostConfig.ReadonlyRootfs ||
+		strings.Join(i.HostConfig.CapDrop, ",") != "ALL" || !strings.Contains(strings.Join(i.HostConfig.SecurityOpt, ","), "no-new-privileges") {
+		t.Fatalf("runtime restrictions not applied: %+v", i)
+	}
+	report["initial"] = i
+	uid := mustDocker("exec", name, "id", "-u")
+	if uid == "0" {
+		t.Fatal("container process is root")
+	}
+	status := mustDocker("exec", name, "cat", "/proc/1/status")
+	if !strings.Contains(status, "CapEff:\t0000000000000000") || !strings.Contains(status, "NoNewPrivs:\t1") {
+		t.Fatal("PID 1 capabilities or no-new-privileges mismatch")
+	}
+	report["uid"] = uid
+	for file, want := range map[string]string{"memory.max": "268435456", "memory.swap.max": "0", "pids.max": "128", "cpu.max": "100000 100000"} {
+		if got := mustDocker("exec", name, "cat", "/sys/fs/cgroup/"+file); got != want {
+			t.Fatalf("cgroup %s=%q, want %q", file, got, want)
+		}
+	}
+	serverIP := mustDocker("inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name)
+	if net.ParseIP(serverIP).To4() == nil {
+		t.Fatal("missing container IPv4 address")
+	}
+	endpoint := net.JoinHostPort(serverIP, "51820")
+	responses := make(encryptedGuestSink, 32)
+	guestTun, err := NewWGTunWithConfig("release-guest", 1380, responses, DefaultTunConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { guestTun.Close() })
+	guest, err := StartDevice(DeviceConfig{PrivateKey: guestPrivate, MTU: 1380,
+		Peers: []PeerConfig{{PublicKey: serverPublic, AllowedIPs: []string{"0.0.0.0/0"}, Endpoint: endpoint}}}, guestTun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { guest.Close() })
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { udp.Close() })
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	port := uint16(listener.Addr().(*net.TCPAddr).Port)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	send := func(proto byte, dstPort uint16, seq, ack uint32, flags byte, payload []byte) error {
+		p := encryptedPacket(proto, dstPort, seq, ack, flags, payload)
+		copy(p[16:20], gateway)
+		p[10], p[11] = 0, 0
+		binary.BigEndian.PutUint16(p[10:12], encryptedChecksum(p[:20]))
+		offset := 26
+		if proto == 6 {
+			offset = 36
+		}
+		p[offset], p[offset+1] = 0, 0
+		pseudo := append([]byte(nil), p[12:20]...)
+		pseudo = append(pseudo, 0, proto, byte((len(p)-20)>>8), byte(len(p)-20))
+		pseudo = append(pseudo, p[20:]...)
+		checksum := encryptedChecksum(pseudo)
+		if proto == 17 && checksum == 0 {
+			checksum = 0xffff
+		}
+		binary.BigEndian.PutUint16(p[offset:offset+2], checksum)
+		return guestTun.InjectToPeer(p)
+	}
+	receive := func(proto byte) ([]byte, error) {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case p := <-responses:
+				if len(p) >= 28 && p[9] == proto {
+					return p, nil
+				}
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-timer.C:
+				return nil, fmt.Errorf("encrypted reply deadline")
+			}
+		}
+	}
+	listener.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := send(6, port, 100, 0, 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := listener.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	syn, err := receive(6)
+	if err != nil || len(syn) < 40 || syn[33]&0x12 != 0x12 {
+		t.Fatal("missing SYN ACK", err)
+	}
+	seq, ack := uint32(101), binary.BigEndian.Uint32(syn[24:28])+1
+	if err := send(6, port, seq, ack, 0x10, nil); err != nil {
+		t.Fatal(err)
+	}
+	exchange := func(round int) error {
+		payload := bytes.Repeat([]byte{byte(round)}, 1024)
+		udp.SetDeadline(time.Now().Add(5 * time.Second))
+		if err := send(17, uint16(udp.LocalAddr().(*net.UDPAddr).Port), 0, 0, 0, payload); err != nil {
+			return err
+		}
+		var buf [1024]byte
+		n, from, err := udp.ReadFromUDP(buf[:])
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(buf[:n], payload) {
+			return fmt.Errorf("UDP host mismatch")
+		}
+		if _, err := udp.WriteToUDP(buf[:n], from); err != nil {
+			return err
+		}
+		p, err := receive(17)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(p[28:], payload) {
+			return fmt.Errorf("UDP guest mismatch")
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		if err := send(6, port, seq, ack, 0x18, payload); err != nil {
+			return err
+		}
+		seq += uint32(len(payload))
+		// A full request must arrive at the host before echoing it.
+		for used := 0; used < len(buf); {
+			n, err := conn.Read(buf[used:])
+			if err != nil {
+				return err
+			}
+			used += n
+		}
+		if !bytes.Equal(buf[:], payload) {
+			return fmt.Errorf("TCP host mismatch")
+		}
+		if _, err := conn.Write(payload); err != nil {
+			return err
+		}
+		var got []byte
+		for attempts := 0; attempts < 32 && len(got) < len(payload); attempts++ {
+			p, err := receive(6)
+			if err != nil {
+				return err
+			}
+			if len(p) < 40 || p[33]&4 != 0 {
+				return fmt.Errorf("invalid TCP reply")
+			}
+			h := 20 + int(p[32]>>4)*4
+			if h > len(p) {
+				return fmt.Errorf("invalid TCP header")
+			}
+			if binary.BigEndian.Uint32(p[24:28]) == ack {
+				got = append(got, p[h:]...)
+				ack += uint32(len(p) - h)
+			}
+			if err := send(6, port, seq, ack, 0x10, nil); err != nil {
+				return err
+			}
+		}
+		if !bytes.Equal(got, payload) {
+			return fmt.Errorf("TCP guest mismatch")
+		}
+		return nil
+	}
+	for round := 0; round < 8; round++ {
+		if err := exchange(round); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report["verified_tcp_udp_rounds"] = 8
+	for _, file := range []string{"memory.events", "pids.events"} {
+		value := mustDocker("exec", name, "cat", "/sys/fs/cgroup/"+file)
+		report[file] = value
+		fields := strings.Fields(value)
+		if len(fields) == 0 || len(fields)%2 != 0 {
+			t.Fatalf("invalid %s", file)
+		}
+		for index := 1; index < len(fields); index += 2 {
+			if fields[index] != "0" {
+				t.Fatalf("resource event in %s: %s", file, value)
+			}
+		}
+	}
+	report["memory_peak_after_eight_rounds"] = mustDocker("exec", name, "cat", "/sys/fs/cgroup/memory.peak")
+	ready, done := make(chan struct{}), make(chan error, 1)
+	go func() {
+		for round := 8; round < 256; round++ {
+			if err := exchange(round); err != nil {
+				done <- err
+				return
+			}
+			if round == 8 {
+				close(ready)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		done <- fmt.Errorf("traffic exhausted before termination")
+	}()
+	// Always join traffic before closing its peer device and test resources.
+	t.Cleanup(func() { cancel(); udp.Close(); conn.Close(); <-done })
+	select {
+	case <-ready:
+	case err := <-done:
+		done <- err
+		t.Fatal("traffic stopped before SIGTERM", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("traffic start deadline")
+	}
+	start := time.Now()
+	select {
+	case err := <-done:
+		done <- err
+		t.Fatal("traffic stopped before SIGTERM", err)
+	default:
+	}
+	mustDocker("kill", "--signal=TERM", name)
+	code := mustDocker("wait", name)
+	if code != strconv.Itoa(0) || time.Since(start) > 10*time.Second {
+		t.Fatalf("SIGTERM exit=%s duration=%s", code, time.Since(start))
+	}
+	i = inspect()
+	if i.State.Running || i.State.OOMKilled || i.State.ExitCode != 0 {
+		t.Fatalf("unclean termination: %+v", i.State)
+	}
+	report["final"] = i
+	report["sigterm_ms"] = time.Since(start).Milliseconds()
+	t.Logf("RELEASE_IMAGE_OK image=%s uid=%s rounds>=9 sigterm=%s", i.Image, uid, time.Since(start))
+}

@@ -1,8 +1,12 @@
 # Release validation and remaining gates
 
-F10 remains open. Local evidence does not establish repository enforcement,
-independent approval or the behavior of a published image. No upstream push,
-workflow dispatch, publication or repository-setting change was performed.
+F10 remains open. The development branch and source prerelease
+`v0.1.0-dev.20260922` are published at `3e38464`; main/master remain unchanged.
+Local evidence and a source prerelease do not establish release-image behavior.
+The bounded image build/runtime path in [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md)
+is prepared; actual image execution is still pending. Historical verification
+records below are distinct from the assessment's user-supplied review/protection
+assumptions. No repository protection settings were changed.
 
 ## Completed bounded coverage
 
@@ -32,7 +36,7 @@ workflow dispatch, publication or repository-setting change was performed.
 | --- | --- | --- |
 | Branch enforcement | Actual default-branch protection/rulesets: required checks, independent approving review, stale-approval handling and bypass permissions | Read-only GitHub protection request returned HTTP 401 on 2026-09-18. Settings are **unknown**, not assumed enabled or absent. No authenticated GitHub connector/CLI was available. |
 | Independent review | Another reviewer assesses this branch, especially ownership, TCP protocol behavior and containment changes; record review URL and reviewed commit | Pending. Author self-review and automated tests do not satisfy this gate. |
-| Workflow execution | Successful Go and image-build runs for the exact reviewed candidate SHA, with links and logs; failed checks must block merge | Pending upstream authorization. Local runs do not execute GitHub workflow semantics. |
+| Workflow execution | Successful Go and image-build runs for the exact reviewed candidate SHA, with links and logs; failed checks must block merge | Development-branch image-validation dispatch is prepared; first run pending. Local runs do not execute GitHub workflow semantics. |
 | Release image | Build the actual Dockerfile, record digest/toolchain, run it as non-root with all capabilities dropped, readonly root, no-new-privileges and bounded CPU/memory/PIDs; verify startup, encrypted forwarding and SIGTERM shutdown | Not run. The approved remote harness uses a cached test image and does not permit host image builds, pulls or Docker socket access. The in-process encrypted fixture is not a release-image check. |
 | Publication and rollback | Publish only the tested/reviewed image, verify commit-addressed digest and non-mutating rollback selection | Pending explicit upstream authorization. Current workflow builds for PRs and publishes only on master; its publish job currently rebuilds the image. Candidate/runtime equivalence still needs evidence or a reviewed promotion change. |
 

@@ -1,7 +1,13 @@
 name: Docker build & push to GHCR
 
 on:
-  workflow_dispatch:            # manual runs allowed
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: 'Existing source tag/commit to build and test (development branch only)'
+        required: true
+        default: 'v0.1.0-dev.20260922'
+        type: string
   push:
     branches: [master]          # after merge to master
   pull_request:                 # PRs = build-only
@@ -12,6 +18,99 @@ permissions:
 jobs:
   test:
     uses: ./.github/workflows/go.yml
+
+  release-image-test:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/architecture-hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RELEASE_RUN: '${{ github.run_id }}-${{ github.run_attempt }}'
+      RELEASE_REF: '${{ inputs.release_ref }}'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref }}
+          path: release-source
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.12'
+      - name: Build the release Dockerfile with a bounded builder
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          git -C release-source rev-parse HEAD > release-evidence/source-commit.txt
+          git rev-parse HEAD > release-evidence/fixture-commit.txt
+          docker buildx create --name "wgslirp-$RELEASE_RUN" --driver docker-container \
+            --driver-opt memory=2g,memory-swap=2g,cpu-period=100000,cpu-quota=100000,restart-policy=no --use --bootstrap
+          builder="buildx_buildkit_wgslirp-${RELEASE_RUN}0"
+          docker update --pids-limit=128 "$builder"
+          docker inspect --format '{{json .HostConfig}}' "$builder" > release-evidence/builder-limits.json
+          python3 - <<'PY'
+          import json
+          c = json.load(open('release-evidence/builder-limits.json'))
+          assert (c['Memory'], c['MemorySwap'], c['CpuPeriod'], c['CpuQuota'], c['PidsLimit']) == (2147483648, 2147483648, 100000, 100000, 128)
+          PY
+          timeout --signal=TERM --kill-after=15s 600s docker buildx build \
+            --builder "wgslirp-$RELEASE_RUN" --load --provenance=false \
+            --metadata-file release-evidence/build.json \
+            --tag "wgslirp-release:$RELEASE_RUN" --file release-source/Dockerfile release-source
+          docker image inspect --format '{{.Id}}' "wgslirp-release:$RELEASE_RUN" > release-evidence/image-id.txt
+      - name: Test non-root encrypted forwarding and SIGTERM
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WGSLIRP_RELEASE_IMAGE="wgslirp-release:$RELEASE_RUN"
+          export WGSLIRP_RELEASE_RUN="$RELEASE_RUN"
+          export WGSLIRP_RELEASE_COMMIT="$(cat release-evidence/source-commit.txt)"
+          export WGSLIRP_RELEASE_REPORT="$PWD/release-evidence"
+          export GOMAXPROCS=1 GOMEMLIMIT=512MiB
+          timeout --signal=TERM --kill-after=10s 180s go test -v -tags=integration,releaseimage \
+            -run='^TestReleaseImage$' -timeout=120s -count=1 -parallel=1 ./pkg/wireguard \
+            2>&1 | tee release-evidence/runtime-test.log
+      - name: Export the tested image
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          docker save "wgslirp-release:$RELEASE_RUN" | gzip > release-evidence/release-image.tar.gz
+          sha256sum release-evidence/release-image.tar.gz > release-evidence/release-image.sha256
+      - name: Remove owned test resources
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          label="wgslirp.release.run=$RELEASE_RUN"
+          containers=$(docker ps -aq --filter "label=$label")
+          if [ -n "$containers" ]; then docker rm -f $containers; fi
+          networks=$(docker network ls -q --filter "label=$label")
+          if [ -n "$networks" ]; then docker network rm $networks; fi
+          if docker buildx inspect "wgslirp-$RELEASE_RUN" >/dev/null 2>&1; then
+            docker buildx rm "wgslirp-$RELEASE_RUN"
+          fi
+          if docker image inspect "wgslirp-release:$RELEASE_RUN" >/dev/null 2>&1; then
+            docker image rm "wgslirp-release:$RELEASE_RUN"
+          fi
+          containers=$(docker ps -aq --filter "label=$label")
+          networks=$(docker network ls -q --filter "label=$label")
+          builders=$(docker ps -aq --filter "name=^/buildx_buildkit_wgslirp-${RELEASE_RUN}0$")
+          volumes=$(docker volume ls -q --filter "name=^buildx_buildkit_wgslirp-${RELEASE_RUN}0_state$")
+          images=$(docker image ls -q "wgslirp-release:$RELEASE_RUN")
+          test -z "$containers$networks$builders$volumes$images"
+          mkdir -p release-evidence
+          printf 'No owned runtime containers, networks, builder, cache volume or image remain.\n' > release-evidence/cleanup.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 'release-image-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: release-evidence/
+          retention-days: 7
+          if-no-files-found: error
 
   docker:
     needs: test
