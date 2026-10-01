@@ -10,6 +10,14 @@ assumptions. No repository protection settings were changed.
 
 ## Completed bounded coverage
 
+- PR #4's library ICMP datagram fallback passed ordinary and race integration
+  checks as a non-root user with all capabilities dropped. Production startup,
+  guest reply identity/checksums, concurrent shutdown and zero final reservations
+  were checked with permission-related skips disabled. Focused negative cases
+  cover mismatched replies, full admission/buffer budgets, send/deadline/delivery
+  failures and I/O interrupted by shutdown. This is library-mode evidence;
+  the executable still selects TCP/UDP-only mode and the tagged release image
+  does not yet contain this merge.
 - `pkg/wireguard/encrypted_integration_test.go` creates two real wireguard-go
   devices with ephemeral keys and loopback UDP transport. Guest plaintext crosses
   encryption/decryption, the production WGTun, socket bridges and reply processor

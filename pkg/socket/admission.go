@@ -8,6 +8,7 @@ import "sync/atomic"
 type admissionCounters struct {
 	tcpFlows        atomic.Uint64
 	udpFlows        atomic.Uint64
+	icmpEchoes      atomic.Uint64
 	pendingDials    atomic.Uint64
 	pendingBytes    atomic.Uint64
 	reassemblyBytes atomic.Uint64
@@ -22,6 +23,7 @@ func (s *SocketInterface) admissionSnapshot() map[string]uint64 {
 	return map[string]uint64{
 		"tcp_flow_limit":         s.admission.tcpFlows.Load(),
 		"udp_flow_limit":         s.admission.udpFlows.Load(),
+		"icmp_echo_limit":        s.admission.icmpEchoes.Load(),
 		"pending_dial_limit":     s.admission.pendingDials.Load(),
 		"tcp_pending_limit":      s.admission.pendingBytes.Load(),
 		"tcp_reassembly_limit":   s.admission.reassemblyBytes.Load(),

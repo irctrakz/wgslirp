@@ -35,6 +35,8 @@ type SocketInterface struct {
 
 	// Raw socket connection
 	conn net.PacketConn
+	// Immutable after Start; Close interrupts I/O before Stop joins accepted work.
+	dgram *icmpDatagram
 
 	// Control
 	mu       sync.Mutex
@@ -108,10 +110,18 @@ func (s *SocketInterface) Start() error {
 
 	// Create the appropriate socket based on the protocol
 	if strings.Contains(protocol, "icmp") {
-		// For ICMP, use the icmp package. This works in privileged mode ("ip4:icmp").
-		s.conn, err = icmp.ListenPacket(protocol, "0.0.0.0") // Bind to all interfaces
+		var conn *icmp.PacketConn
+		conn, err = icmp.ListenPacket(protocol, "0.0.0.0")
 		if err != nil {
-			return fmt.Errorf("failed to create raw socket with protocol %s: %w", protocol, err)
+			// Linux ping sockets permit echo without CAP_NET_RAW when the
+			// process group is allowed by ping_group_range. Never change it here.
+			conn, err = icmp.ListenPacket("udp4", "0.0.0.0")
+			if err != nil {
+				return fmt.Errorf("no raw or datagram ICMP socket available: %w", err)
+			}
+			s.dgram = newICMPDatagram(conn)
+		} else {
+			s.conn = conn
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
 		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
@@ -135,11 +145,17 @@ func (s *SocketInterface) Start() error {
 	}
 
 	var releaseRead func()
-	if s.conn != nil {
+	if s.conn != nil || s.dgram != nil {
 		releaseRead, err = s.ReservePacketBuffer(65536)
 		if err != nil {
-			_ = s.conn.Close()
+			if s.conn != nil {
+				_ = s.conn.Close()
+			}
+			if s.dgram != nil {
+				_ = s.dgram.conn.Close()
+			}
 			s.conn = nil
+			s.dgram = nil
 			return err
 		}
 	}
@@ -147,6 +163,9 @@ func (s *SocketInterface) Start() error {
 	if s.conn != nil {
 		s.wg.Add(1)
 		go s.listenLoop(releaseRead)
+	} else if s.dgram != nil {
+		s.wg.Add(1)
+		go s.dgram.listen(s, releaseRead)
 	}
 
 	// SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
@@ -203,10 +222,13 @@ func (s *SocketInterface) RequestStop() <-chan struct{} {
 	if s.stopCh != nil {
 		close(s.stopCh)
 	}
-	conn, udp, tcp := s.conn, s.udp, s.tcp
+	conn, dgram, udp, tcp := s.conn, s.dgram, s.udp, s.tcp
 	go func() {
 		if conn != nil {
 			_ = conn.Close()
+		}
+		if dgram != nil {
+			_ = dgram.conn.Close()
 		}
 		// Signal both bridges before joining either callback domain.
 		if tcp != nil {
@@ -222,6 +244,9 @@ func (s *SocketInterface) RequestStop() <-chan struct{} {
 			udp.stop()
 		}
 		s.wg.Wait()
+		if dgram != nil {
+			dgram.clear()
+		}
 		close(s.stopDone)
 	}()
 	return s.stopDone

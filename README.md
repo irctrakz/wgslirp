@@ -24,7 +24,7 @@ A high-performance, user-space WireGuard router that forwards decrypted IPv4 tra
 
 ## Overview
 
-This router combines WireGuard VPN with a userspace networking implementation to provide efficient, secure, container-friendly routing. It uses a slirp-style approach to handle TCP, UDP, and ICMP (when running with CAP_NET_RAW) traffic between WireGuard tunnels and the host network.
+This router combines WireGuard VPN with a userspace networking implementation to provide efficient, secure, container-friendly TCP/UDP forwarding. Library consumers can also select ICMP mode: echo uses raw sockets when available, or Linux ping sockets when allowed by `net.ipv4.ping_group_range`. See [ICMP privileges and activation](#icmp-privileges) for the distinction from the executable's TCP/UDP-only mode.
 
 ### Key Features
 
@@ -177,11 +177,13 @@ Get up and running quickly with these steps:
    # Check router logs
    docker logs wgslirp
    
-   # From client, ping through the tunnel
-   ping 10.0.0.1
+   # From the connected full-tunnel client, make a bounded TCP request
+   curl --max-time 10 https://example.com
    ```
 
-  Note: If you're not running with CAP_NET_RAW you can't ping, try a tcp connection
+  Note: The executable currently forwards TCP/UDP only, so use a TCP or UDP
+  connection to check forwarding. Guest ping requires the library's explicit
+  [ICMP mode](#icmp-privileges).
 
 ## Configuration
 
@@ -419,7 +421,31 @@ Treat these values as examples. Size the active flow and buffer limits from meas
 
 ### ICMP Privileges
 
-ICMP echo and other raw ICMP operations require raw socket privileges (e.g., `CAP_NET_RAW`). In typical container environments without this capability, the router will silently drop ICMP packets from guests (logged at debug level) to avoid disrupting TCP/UDP traffic. If ICMP is required, grant the container appropriate capabilities or run outside a restricted environment.
+The executable currently selects TCP/UDP-only mode; adding `CAP_NET_RAW` does
+not enable guest ping in the executable. TCP/UDP forwarding needs neither raw
+sockets nor kernel TUN access.
+
+Library consumers can select `socket.Config.Protocol = "ip4:icmp"` (also the
+library default). This mode tries a raw ICMP socket, then a datagram ping socket
+on platforms that support it. Linux permits ping sockets when the process group
+is allowed by `net.ipv4.ping_group_range`; this fallback supports echo
+request/reply traffic only. Selecting ICMP mode fails startup if neither socket
+is available. Explicit TCP/UDP-only mode starts without either socket and drops
+guest ICMP. Broader host ICMP traffic requires a raw socket and its privileges.
+
+The Linux ICMP datagram integration test exercises production startup, echo
+identity restoration and concurrent shutdown. Run it inside an approved bounded
+Linux test container with all capabilities dropped and a non-root user whose
+group is already permitted by `net.ipv4.ping_group_range`:
+
+```bash
+WGSLIRP_REQUIRE_ICMP_DGRAM=1 go test -race -tags=integration -timeout=120s -count=1 -parallel=1 ./pkg/socket -run='^TestICMPDatagramIntegration_'
+```
+
+The environment flag makes unavailable ping sockets or an available raw socket
+a test failure instead of a skip. The application never changes the ping-group
+sysctl. Outstanding echo requests are capped at 1,024 per interface, expire
+after five seconds, and participate in the shared socket buffer budget.
 
 **Note**: To disable metrics, set `METRICS_LOG=false` or leave both `METRICS_LOG` and `METRICS_INTERVAL` unset. Empty values are invalid.
 

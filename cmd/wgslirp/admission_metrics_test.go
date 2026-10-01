@@ -47,7 +47,7 @@ func TestAdmissionMetricsReachBothReportFormats(t *testing.T) {
 	if snapshot.SchemaVersion != 1 || snapshot.WGAvailable {
 		t.Fatal("invalid schema/availability", snapshot)
 	}
-	if len(snapshot.Admission) != 8 || snapshot.Admission["aggregate_buffer_limit"] != 1 {
+	if len(snapshot.Admission) != 9 || snapshot.Admission["aggregate_buffer_limit"] != 1 {
 		t.Fatalf("JSON admission: %v", snapshot.Admission)
 	}
 	buffer.Reset()

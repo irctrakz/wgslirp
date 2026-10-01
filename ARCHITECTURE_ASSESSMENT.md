@@ -13,6 +13,14 @@ preserves the documented legacy opt-in. Release-image and optional ICMP
 deployment checks remain open. The snapshot findings below retain their original
 revision context; the default-policy portion of A3 is implemented.
 
+**A3 ICMP integration update (2026-09-30):** PR #4's ping-socket fallback is
+integrated into library ICMP mode with bounded request correlation, shared
+buffer accounting and joined shutdown. Ordinary and race integration tests
+verified echo forwarding without raw-socket privileges; permission-related
+skips were disabled for those checks. The executable still selects TCP/UDP-only
+mode. Its optional ICMP activation policy, privileged raw ICMP validation and
+the actual release-image check remain open; this does not close A2/A3 overall.
+
 ## Scope and conclusion
 
 Assessed source: `1ef5ca73142150e64603e9304f5e803f2bded959` on

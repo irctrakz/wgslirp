@@ -25,6 +25,49 @@ build, vet, ordinary tests, race tests, and explicitly tagged integration tests
 with and without race detection all pass. Environment-specific execution helpers are local tooling
 and are not part of the repository's supported development interface.
 
+### PR #4 integration — ICMP datagram fallback (2026-09-30)
+
+Merge source: `master` at `792d81c`, into `codex/architecture-hardening`.
+Conflict resolution retains the development branch's validated packet parsing,
+shared encoding, packet ownership, admission accounting, shutdown joins and
+synchronized TCP/UDP test captures. The incoming echo fallback is adapted to
+`net.PacketConn` so closing a ping socket interrupts I/O without raw file-descriptor
+reuse races. Correlation has a fixed 1,024-request cap, five-second expiry and
+shared-budget reservations; translated wire sequences distinguish simultaneous
+guest requests, with source/payload checks before restoring guest identity.
+
+The incoming unbounded Docker test script/image recipe is not retained. The live
+test runs through the existing approved bounded harness; machine-specific drivers
+remain private. Multi-architecture publication support is retained within the
+existing master-only, test-gated publication job; repository-derived image names
+avoid selecting an image namespace from the identity of the triggering actor.
+
+This is library ICMP-mode support. The executable still explicitly selects
+TCP/UDP-only mode. No ping-group or other kernel sysctl writes are introduced.
+**Remaining A3 work:** decide whether/how to expose optional ICMP in the
+executable and validate that deployment separately; raw-socket privilege testing
+and the actual release-image gate remain open. The published development tag
+is unchanged and does not contain this merge.
+
+**Validation:** four fresh bounded stages passed on 2026-09-30: ordinary unit
+and integration tests, the same suite with race detection, build/module
+tidy/verify (module files unchanged) plus Linux amd64/arm64 cross-compilation,
+and vet with integration/release-image tags plus workflow YAML/shell/guard
+checks. Both integration runs required live unprivileged ping-socket forwarding
+instead of allowing permission-related skips. Negative cases cover mismatched
+source/payload, duplicate replies, request/buffer saturation, expired entries,
+sequence wrap, short/failed sends, deadline/delivery failure and blocked I/O
+interrupted by shutdown. Final reservations were zero.
+
+The stages used one CPU, 2 GiB RAM with no swap, 128 PIDs, bounded tmpfs and the
+existing ten-minute container deadline. Peak container memory (including build
+caches) was 924,692,480 bytes; every stage recorded zero memory/OOM/PID-limit
+events. Container, network, dedicated `/tmp` workspace and admission-lock removal
+were independently verified after each stage, and pause guards were restored.
+The interrupted attempt's old local evidence was unavailable; it is not counted
+as a successful verification. Actual image builds and GitHub workflow execution
+were not performed for this merge.
+
 ### Rating definitions
 
 - **Strong:** relevant contracts are explicit, implementation follows them, meaningful regression checks pass, and ordinary failure paths are covered.

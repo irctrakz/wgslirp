@@ -13,6 +13,7 @@ bridge counters. There are no peer addresses, flow identifiers or dynamic labels
 |---|---|---|
 | `tcp_flow_limit` | A new TCP flow fails the active-flow cap, either before dialing or at the insertion recheck. | Inspect active flows, idle lifetime and `MAX_TCP_FLOWS`. |
 | `udp_flow_limit` | A new UDP flow fails the active-flow cap. | Inspect active flows, idle lifetime and `MAX_UDP_FLOWS`. |
+| `icmp_echo_limit` | A datagram echo request exceeds the fixed 1,024 pending-request cap. | Inspect echo rate and destination reachability; requests expire after five seconds. Existing requests are preserved. |
 | `pending_dial_limit` | A SYN cannot reserve a dial slot, before any host dial. | Inspect host reachability/latency and `MAX_PENDING_TCP_DIALS`; fast and async fallback share one reservation. |
 | `tcp_pending_limit` | Guest payload exceeds the flow's pre-connect pending-byte cap. | Inspect slow dials and `TCP_PEND_CAP_BYTES`. |
 | `tcp_reassembly_limit` | New/merged out-of-order guest data exceeds the flow's unique-byte reassembly cap. | Inspect packet loss/reordering and `TCP_REASSEMBLY_CAP_BYTES`. |
