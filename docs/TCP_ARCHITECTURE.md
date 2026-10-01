@@ -40,7 +40,7 @@ fixtures; do not replace them with tests that merely mirror extracted helpers.
   cross-flow diagnostic snapshots while holding one flow's state lock.
 - Workers and timers stay bridge-owned and join on shutdown. Lock extraction
   does not permit callbacks to synchronously re-enter locked flow operations;
-  the contract in [LIFECYCLE.md](../../LIFECYCLE.md) still applies.
+  the contract in [LIFECYCLE.md](LIFECYCLE.md) still applies.
 
 ## Bounded performance gate
 
@@ -53,7 +53,7 @@ the original handler to the final extraction; record both measurements here.
 This benchmark isolates established-flow ACK dispatch, locking, window/recovery
 and diagnostic decisions. It is not a host-dial benchmark or a forwarding
 throughput claim. The subsequent bounded throughput, latency-distribution, allocation and sampled
-memory comparison is recorded in [PERFORMANCE.md](../../PERFORMANCE.md). It passed
+memory comparison is recorded in [PERFORMANCE.md](PERFORMANCE.md). It passed
 the preselected loopback regression budgets; deployment-scale evidence remains F10.
 
 Baseline (original handler, Go 1.23.12, one CPU): five runs measured 646.7,

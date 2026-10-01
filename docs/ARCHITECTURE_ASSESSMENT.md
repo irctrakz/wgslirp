@@ -66,7 +66,7 @@ Remaining actions refer to the ordered backlog further down.
 
 | # | Principle | Rating | Evidence and remaining limit |
 |---|---|---|---|
-| 1 | Modularity | Strong | `internal/packetwire`, typed configuration, transport bridges and reporter boundaries have distinct owners. TCP connection, registry, receive, ACK/recovery and diagnostics are separated by responsibility; see `pkg/socket/TCP_ARCHITECTURE.md`. |
+| 1 | Modularity | Strong | `internal/packetwire`, typed configuration, transport bridges and reporter boundaries have distinct owners. TCP connection, registry, receive, ACK/recovery and diagnostics are separated by responsibility; see [TCP_ARCHITECTURE.md](TCP_ARCHITECTURE.md). |
 | 2 | DRY | Strong | Shared parsing/encoding, `internal/envconfig`, WireGuard state parsing and common reservation/delivery helpers replace duplicated production logic. Independent test wire oracles are useful redundancy. Legacy config is explicitly separate and deprecated. |
 | 3 | KISS | Strong | Inline forwarding, bounded queues and function collaborators avoid a generic packet framework. PR 4.4 removed verified unused helpers. Remaining protocol complexity corresponds to real TCP behavior. |
 | 4 | YAGNI | Strong | Unsupported incoming fragments are deliberately rejected; no speculative reassembly service, scheduler framework or health endpoint was introduced. Retaining public compatibility adapters is justified by unknown external consumers. |
