@@ -1,5 +1,10 @@
 # Architecture improvement plan
 
+**Current progress and remaining work (2026-09-30):** see
+[HARDENING_REVIEW.md](HARDENING_REVIEW.md) for the consolidated backlog,
+benchmark limitations and code-simplicity review. The checkpoints below retain
+their historical revision context; they are not a second current todo list.
+
 ## Objective and evidence
 
 **Current reassessment (2026-09-21):** see

@@ -1,5 +1,10 @@
 # Architectural reassessment — 2026-09-21
 
+**Latest review (2026-09-30):** [HARDENING_REVIEW.md](HARDENING_REVIEW.md)
+consolidates current progress and remaining work, and revises the earlier
+KISS/DRY/readability judgment following closer inspection of TCP code paths.
+The ratings below remain the historical assessment, with dated updates.
+
 **Implementation update (2026-09-22):** A1/F10e.2 is now accepted for its explicitly
 revised finite low-rate natural-GC profile: three fresh ordinary and three fresh
 race runs passed. See [ENCRYPTED_WORKLOADS.md](ENCRYPTED_WORKLOADS.md) for criteria,

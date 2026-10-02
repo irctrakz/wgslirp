@@ -1,9 +1,10 @@
 # Development release-image validation
 
-This path builds an existing source tag's actual Dockerfile and tests the image's
-normal entrypoint. The orchestration fixture comes from the development branch;
-the image source is checked out separately, so adding tests does not move a release
-tag. Source commit, fixture commit, build metadata and image ID are recorded.
+This path builds the development branch event's exact commit once and tests the
+image's normal entrypoint. Go checks, image source and runtime fixture use that
+same commit. The candidate is published to GHCR, pulled by immutable digest and
+tested. Only a successful validation job (including cleanup) permits promotion
+of that digest to a unique development tag. Promotion does not rebuild the image.
 
 ## Execution environment
 
@@ -11,17 +12,32 @@ Use an ephemeral GitHub-hosted Linux runner with Docker and cgroup v2. The priva
 SSH test server remains outside this image-build path: its existing cached-image
 harness does not authorize host image builds, pulls or Docker socket mounts.
 
-Dispatch `.github/workflows/docker.yml` on `codex/architecture-hardening` with
-`release_ref=v0.1.0-dev.20260922`. The development-only `release-image-test` job
-depends on the ordinary Go checks. Its job deadline is 20 minutes. It never runs
-the master-only publication job, moves the release tag or publishes a latest image.
+Push to `codex/architecture-hardening` to run `.github/workflows/docker.yml`.
+The development-only `release-image-test` job depends on the ordinary Go checks;
+`promote-development` depends on successful image validation. Publication is
+restricted to `irctrakz/wgslirp` and that exact branch on push/manual events;
+pull requests cannot enter these jobs. No default-branch change is required for
+the push trigger. Manual dispatch also selects this branch, but GitHub requires
+the workflow to exist on the default branch before dispatch is available. There
+is no longer a `release_ref` input: tests and image must cover the same revision.
+
+The validation job has a 20-minute deadline and promotion five minutes. This path
+does not run the master-only publisher, move source release tags or publish
+`latest`. It validates **linux/amd64 only**. Do not advertise its development tag
+as an arm64 or multi-platform release; each additional platform needs validation.
+
+Both publishing jobs use job-scoped `packages: write` and the automatic
+`GITHUB_TOKEN`. For an existing GHCR package, grant `irctrakz/wgslirp` Write access
+under Package settings → Manage Actions access if it does not already inherit
+access. No personal access token is required.
 
 The dedicated BuildKit container uses 1 CPU, 2 GiB memory/no swap and, after
 bootstrap, a 128-PID limit. Limits are inspected before the bounded ten-minute
 build. This is a Docker build on a disposable runner, not an extension of the
 private server's resource policy. Base image tags still float as specified in the
 release Dockerfile; metadata captures the actual build. Input pinning and artifact
-promotion/rollback remain separate release work.
+rollback remain separate release work. The existing master publisher is unchanged
+and still requires separate migration to tested-artifact promotion.
 
 ## Runtime checks
 
@@ -50,19 +66,36 @@ job; this is not a guarantee of user callbacks or arbitrary host filesystems.
 
 ## Evidence and image retrieval
 
-After runtime success, the workflow exports the **same tested image** as
-`release-image.tar.gz` with a SHA-256 checksum. The seven-day Actions artifact also
-contains sanitized runtime inspection, test logs, source/fixture commits, local
-image content ID, build metadata and cleanup status. It contains no configuration
-environment/private keys. No GHCR image or release asset is automatically published.
+Candidate: `ghcr.io/irctrakz/wgslirp:candidate-<run-id>-<attempt>`.
+Validated tag: `ghcr.io/irctrakz/wgslirp:dev-<full-commit>-<run-id>-<attempt>`.
+Unique run/attempt tags avoid competing runs moving a shared development alias.
+Registry tags are not inherently immutable: deployments should use the recorded
+`ghcr.io/irctrakz/wgslirp@sha256:…` reference.
 
-Load the archive using `docker load` in a suitable test environment. Verify its
-archive checksum first; the image ID in `image-id.txt` identifies the loaded
-content. This is a local image ID, not a published registry manifest digest.
+The workflow checks that the runtime report passed, names the expected digest
+reference and source commit, and records the pulled image's local content ID as
+the actual container image. A missing/skipped fixture report fails the job.
+Promotion copies the existing manifest with `imagetools create
+--prefer-index=false`, then checks that the development tag resolves to the
+tested digest. It has no checkout or build step.
+
+Seven-day Actions artifacts `release-image-<run-id>-<attempt>` and
+`promotion-<run-id>-<attempt>` contain sanitized runtime inspection, test logs,
+source/fixture commits, local image content ID, build metadata, registry digest,
+cleanup status and promotion identity. They exclude configuration/private keys.
+The successful promotion also writes the tag and digest to the Actions summary.
+Retrieve the tested image with `docker pull` using `image-reference.txt`.
+
+Candidate images remain in GHCR even when validation fails; a candidate tag is
+not evidence of acceptance. Runner cleanup removes local resources only, and
+seven-day Actions artifact expiry does not delete registry images. Registry
+retention/deletion remains an explicit maintenance decision; this workflow does
+not request package-administration privileges or delete published versions.
 
 ## Status
 
-Implementation is prepared; actual image validation remains pending until the
+Development publishing/promotion is implemented as of 2026-10-02; actual image
+validation remains pending until the
 workflow successfully runs and its evidence is inspected. The existing unit/race
 and component-level encrypted tests do not substitute for this runtime gate.
 
@@ -74,3 +107,13 @@ The workflow YAML parsed successfully and all embedded shell blocks passed
 independent cleanup; the largest container peak was 833,200,128 bytes. No Docker
 image was built/pulled on the private server. Runner selection/first dispatch
 remain pending, and main/master and the published source tag remain unchanged.
+Invalid-config image startup coverage, pinned build inputs and rollback evidence
+remain outstanding; the forwarding/SIGTERM fixture does not close those items.
+
+The 2026-10-02 workflow changes passed Actionlint 1.7.7, YAML parsing, `bash -n`
+for all 11 workflow shell blocks and compilation of embedded Python. Disposable
+local controls exercised the actual promotion shell with mocked registry calls:
+success passed; malformed digest, digest mismatch and failed manifest creation
+failed. Runtime-evidence checks accepted valid evidence and rejected failed,
+missing, wrong-image, wrong-source and wrong-container reports. These checks
+performed no registry writes or Docker execution and do not replace a CI run.
