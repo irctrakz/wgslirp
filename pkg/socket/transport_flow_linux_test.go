@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Exercise both SYN-ACK paths after changing the environment, and inspect the
+// Exercise both host-dial paths after changing the environment, and inspect the
 // actual host socket rather than only asserting that configuration was stored.
 func TestTransportFlowSnapshot(t *testing.T) {
 	for _, async := range []bool{false, true} {

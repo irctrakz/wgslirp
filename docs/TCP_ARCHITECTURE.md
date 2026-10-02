@@ -4,6 +4,32 @@ This refactoring preserves userspace TCP/UDP forwarding, admission policy,
 protocol behavior, public APIs and existing lock ownership. It adds no network
 privileges or runtime configuration.
 
+## Policy consolidation and establishment cleanup (2026-10-02)
+
+The hardcoded 30-second health monitor is removed. `tcp_stall.go` supplies one
+ACK-idle predicate for sender gating, metrics and the existing 15-second reaper.
+Failure uses the configured gate, in-flight threshold and failure deadline;
+zero gate disables ACK-idle handling, and zero failure timeout retains gating
+without ACK-idle closure. This intentionally corrects the old monitor overriding
+those settings. Advancing ACKs and opening windows count as progress; duplicate
+ACKs with an unchanged window do not. FIN/TIME-WAIT and ordinary idle expiry
+retain their separate policies. The maintenance pass only expires established
+flows and rechecks state under the flow lock.
+
+Establishment now has one initial SYN-ACK owner under the newly published
+candidate's state lock. Async completion must acquire that lock: it either sees
+successful delivery or a closed candidate, so its duplicate SYN-ACK branch and
+the `synAckSent` flag are removed. MSS derivation and fast/async failure signaling
+are shared helpers. Fast refusal, async timeout/cancellation, pending flushing,
+per-flow locking and reservation release retain their ordering.
+
+Focused local regressions pass for deadline/disabled/threshold behavior,
+zero-window and window-opening behavior, advancing ACKs, TIME-WAIT exclusion,
+sender/maintenance signaling, fast/async failure and exactly one SYN-ACK.
+Existing dial cancellation, duplicate-candidate and rejected-delivery tests also
+pass. Linux race/integration and actual-image CI validation are the next gate;
+the earlier performance measurements below are not reruns of this change.
+
 ## Extraction sequence
 
 1. Connection establishment and pending-write flushing (`tcp_connect.go`).

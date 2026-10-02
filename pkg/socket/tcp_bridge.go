@@ -220,7 +220,6 @@ type tcpFlow struct {
 	ackCh chan struct{}
 
 	// handshake state
-	synAckSent bool
 
 	// SACK loss recovery (RFC 6675 simplified)
 	sackRecovery bool

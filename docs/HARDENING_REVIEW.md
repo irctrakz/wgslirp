@@ -82,6 +82,13 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**TCP implementation update (2026-10-02):** R3 is implemented in two changes:
+one configured ACK-idle policy replaces the competing health monitor; one
+initial SYN-ACK owner replaces duplicated async establishment work. Focused
+local regressions pass; broader Linux/image CI remains the completion gate.
+See [TCP_ARCHITECTURE.md](TCP_ARCHITECTURE.md). Historical findings C1/C2 below
+describe the assessed revision, before these changes.
+
 **Implementation update (2026-10-02):** development-branch CI now builds once,
 pulls/tests the candidate by digest and promotes that same manifest in a dependent
 job. See [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md). Actual execution remains
