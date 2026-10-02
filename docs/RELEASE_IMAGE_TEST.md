@@ -94,10 +94,23 @@ not request package-administration privileges or delete published versions.
 
 ## Status
 
-Development publishing/promotion is implemented as of 2026-10-02; actual image
-validation remains pending until the
-workflow successfully runs and its evidence is inspected. The existing unit/race
-and component-level encrypted tests do not substitute for this runtime gate.
+Development publishing/promotion passed on 2026-10-02. The first successful run
+was [37045066315](https://github.com/irctrakz/wgslirp/actions/runs/37045066315)
+for `58318d9`. After TCP stall/establishment cleanup,
+[37050502529](https://github.com/irctrakz/wgslirp/actions/runs/37050502529)
+validated `fb18c23e31d9798a71c4c6ffe5c287b44269a392` and promoted:
+
+```text
+ghcr.io/irctrakz/wgslirp@sha256:afbdb1bc56392c0c80be8125c1568170ce613f8888a900d825836fe4b3354ae2
+```
+
+The latest runtime report records UID 100, dropped capabilities, read-only root,
+1 CPU, 256 MiB/no swap, 128 PIDs, encrypted TCP/UDP forwarding, zero memory/PID
+limit events, and SIGTERM exit zero in 76 ms. Sampled cgroup memory peak after
+eight rounds was 31,682,560 bytes; this is not a long-duration memory benchmark.
+Cleanup evidence confirms no owned runtime container/network/builder/cache
+volume/local image remained. The master publisher was skipped. These images
+validate linux/amd64 only; source release tags were not changed.
 
 Preparation checks passed on Linux Go 1.23.12: the full ordinary unit/integration
 suite with race detection, compilation of the new release-image fixture with
@@ -105,8 +118,8 @@ race instrumentation (no image test execution), and vet with `releaseimage` tags
 The workflow YAML parsed successfully and all embedded shell blocks passed
 `bash -n`. All three bounded stages recorded zero memory/OOM/PID-limit events and
 independent cleanup; the largest container peak was 833,200,128 bytes. No Docker
-image was built/pulled on the private server. Runner selection/first dispatch
-remain pending, and main/master and the published source tag remain unchanged.
+image was built/pulled on the private server. The later GitHub runs above supply actual image execution; main/master and the
+published source tag remain unchanged.
 Invalid-config image startup coverage, pinned build inputs and rollback evidence
 remain outstanding; the forwarding/SIGTERM fixture does not close those items.
 

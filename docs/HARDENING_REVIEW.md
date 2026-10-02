@@ -85,14 +85,16 @@ testing that tag would not validate all code reviewed here.
 **TCP implementation update (2026-10-02):** R3 is implemented in two changes:
 one configured ACK-idle policy replaces the competing health monitor; one
 initial SYN-ACK owner replaces duplicated async establishment work. Focused
-local regressions pass; broader Linux/image CI remains the completion gate.
+local regressions and Linux build/vet, race unit/integration, fuzz and image CI
+passed in [run 37050502529](https://github.com/irctrakz/wgslirp/actions/runs/37050502529).
+R3 is complete; this is not a new performance benchmark acceptance.
 See [TCP_ARCHITECTURE.md](TCP_ARCHITECTURE.md). Historical findings C1/C2 below
 describe the assessed revision, before these changes.
 
 **Implementation update (2026-10-02):** development-branch CI now builds once,
 pulls/tests the candidate by digest and promotes that same manifest in a dependent
-job. See [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md). Actual execution remains
-pending; R1/R2 are not closed. The master publisher, input pinning, invalid-config
+job. See [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md). Actual amd64 image execution and same-digest promotion passed in runs
+37045066315 and 37050502529. Broader R1/R2 acceptance is not fully closed. The master publisher, input pinning, invalid-config
 image coverage and rollback evidence remain separate work.
 
 Only unfinished work is listed. Each item should be a bounded, reviewable change;

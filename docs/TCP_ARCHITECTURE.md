@@ -27,8 +27,12 @@ Focused local regressions pass for deadline/disabled/threshold behavior,
 zero-window and window-opening behavior, advancing ACKs, TIME-WAIT exclusion,
 sender/maintenance signaling, fast/async failure and exactly one SYN-ACK.
 Existing dial cancellation, duplicate-candidate and rejected-delivery tests also
-pass. Linux race/integration and actual-image CI validation are the next gate;
-the earlier performance measurements below are not reruns of this change.
+pass. Linux build/vet, race unit/integration, fuzzing and actual-image validation
+passed in [CI run 37050502529](https://github.com/irctrakz/wgslirp/actions/runs/37050502529)
+for `fb18c23` (following policy commit `1084361`). The non-root, capability-free
+image forwarded encrypted TCP/UDP and exited zero on SIGTERM in 76 ms, with no
+OOM/PID-limit events and verified cleanup. The same tested digest was promoted.
+The earlier performance measurements below are not reruns of this change.
 
 ## Extraction sequence
 
