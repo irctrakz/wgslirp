@@ -87,15 +87,8 @@ func (tcp *tcpBridge) snapshotMetrics() (metrics BridgeMetrics, extended map[str
 	if tcp.ackIdleGate > 0 {
 		for _, f := range flows {
 			f.stateMu.Lock()
-			inFlight := int(f.serverNxt - f.sndUna)
-			minInflight := tcp.ackIdleMinInflight
-			if minInflight <= 0 {
-				minInflight = f.mss
-			}
-			if inFlight >= minInflight {
-				if time.Since(f.lastAckTime) >= tcp.ackIdleGate {
-					ackIdle++
-				}
+			if tcp.ackIdleGatedLocked(f, time.Now()) {
+				ackIdle++
 			}
 			f.stateMu.Unlock()
 		}

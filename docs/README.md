@@ -285,7 +285,7 @@ fallback. Booleans accept true/false, 1/0, yes/no and on/off (case-insensitive).
 
 | Setting | Default | Meaning |
 |---|---:|---|
-| `TCP_ACK_IDLE_GATE_MS` | 6000 | Gate host reads after this long without ACK progress; zero disables. |
+| `TCP_ACK_IDLE_GATE_MS` | 6000 | Gate host reads after this long without ACK/window progress; zero disables gating and ACK-idle failure. |
 | `TCP_ACK_IDLE_MIN_INFLIGHT` | 0 | Minimum bytes in flight for gating; zero uses one MSS. |
 | `TCP_ACK_IDLE_FAIL_SEC` | 120 | Reset an ACK-stalled flow after this interval; zero disables this check. |
 | `TCP_ACK_TRACE` | false | Log ACK classification. |
@@ -345,6 +345,7 @@ Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`
 - `TCP_FAST_DIAL_MS`: fast pre-dial timeout (ms) to map immediate refusals to ICMP/RST without sending SYN-ACK first (default ~5ms).
 - `TCP_SOCK_RCVBUF`, `TCP_SOCK_SNDBUF`: optional OS socket buffer sizes for host TCP connections.
 - `TCP_ACK_IDLE_GATE_MS`, `TCP_ACK_IDLE_MIN_INFLIGHT`, `TCP_ACK_IDLE_FAIL_SEC`: advanced gating of host reads when no guest ACK progress. Defaults: `TCP_ACK_IDLE_GATE_MS=6000`, `TCP_ACK_IDLE_FAIL_SEC=120`; `TCP_ACK_IDLE_MIN_INFLIGHT` defaults to ~1 MSS when unset.
+  The sender and 15-second maintenance pass share this policy; the former hardcoded 30-second closure is removed. A zero failure timeout disables ACK-idle closure while retaining gating. The failure deadline takes effect only after the gate and minimum in-flight threshold are met. Independent connection-lifetime, retransmission and close timers still apply.
 
 IP header synthesis
 

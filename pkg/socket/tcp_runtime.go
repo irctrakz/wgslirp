@@ -52,17 +52,9 @@ func (b *tcpBridge) sendAllowanceLocked(f *tcpFlow) int {
 	if f.ccEnabled && f.cc != nil {
 		allowed = minInt(allowed, f.cc.Cwnd()-inFlight)
 	}
-	minInflight := b.ackIdleMinInflight
-	if minInflight <= 0 {
-		minInflight = f.mss
-	}
-	if b.ackIdleGate > 0 && inFlight >= minInflight && time.Since(f.lastAckTime) >= b.ackIdleGate {
-		if b.ackIdleFail > 0 && time.Since(f.lastAckTime) >= b.ackIdleFail {
-			if b.errorSignal != "none" {
-				_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
-			}
-			b.removeFlowLocked(f)
-		}
+	now := time.Now()
+	if b.ackIdleGatedLocked(f, now) {
+		b.expireACKIdleLocked(f, now)
 		return 0
 	}
 	return allowed
