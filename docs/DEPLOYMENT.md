@@ -10,11 +10,11 @@ operation; the application receives no Docker socket or host network access.
 Use Linux/amd64 and a digest from a successful development CI run. Candidate tags
 are not validation evidence. See [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md)
 for the current tested source/digest and run reports. The example below uses the
-validated TCP-cleanup image; use the newly promoted digest after validating newer
+validated ownership/deployment image; use the newly promoted digest after validating newer
 code. Arm64 runtime validation remains separate.
 
 ```sh
-export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:afbdb1bc56392c0c80be8125c1568170ce613f8888a900d825836fe4b3354ae2
+export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:ee771013ad6c5384a1203aa00451f929c6cafb25bf40ddda8b4903fd7476166c
 ```
 
 ## Keep credentials in a private local file
@@ -33,7 +33,8 @@ WG_PEER_0_ALLOWED_IPS=10.77.0.2/32
 
 Generate keys with `wg genkey > private.key` under the same restrictive umask;
 derive the public key with `wg pubkey < private.key > public.key`. Share only the
-public key. Both `private.key` and the deployment env file are ignored by Git.
+public key. Both `private.key` and the deployment env file are excluded from Git and Docker
+build contexts.
 Private keys are not printed in setup commands or passed as literal command-line
 arguments. Environment configuration remains visible to Docker administrators;
 an env file is not a secret manager. Avoid posting rendered configuration or

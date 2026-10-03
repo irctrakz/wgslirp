@@ -92,7 +92,34 @@ seven-day Actions artifact expiry does not delete registry images. Registry
 retention/deletion remains an explicit maintenance decision; this workflow does
 not request package-administration privileges or delete published versions.
 
-## Status
+## Ownership/deployment validation — 2026-10-03
+
+[Run 37147533942](https://github.com/irctrakz/wgslirp/actions/runs/37147533942)
+passed for `415f520c9243e22832807fe08aa7666b897ec04b`: module/build/vet,
+unit/integration race tests, fuzzing and actual-image tests. Compose validation
+accepted the bounded configuration and rejected a missing image selection.
+This is configuration validation, not an external host deployment test.
+
+Tested and promoted image:
+
+```text
+ghcr.io/irctrakz/wgslirp@sha256:ee771013ad6c5384a1203aa00451f929c6cafb25bf40ddda8b4903fd7476166c
+```
+
+The runtime report records non-root UID 100, all capabilities dropped, read-only
+root, 1 CPU/256 MiB/no swap/128 PIDs, encrypted TCP/UDP forwarding and clean
+SIGTERM exit in 85 ms. Sampled peak after eight rounds was 30,941,184 bytes;
+memory and PID event counters were zero. Cleanup verified no owned runner
+resources remained. Promotion retained the tested digest. Master/main and
+stable/latest tags were untouched; the image is Linux/amd64 only.
+
+Earlier attempts correctly blocked image publication: an obsolete command import
+failed build; two pre-existing budget assertions observed delayed ACK packets
+mid-delivery. The import was removed and assertions now synchronize with the
+ACK worker. The three affected fixture tests passed 100 local repetitions before
+the successful full Linux run. No budget assertion was relaxed.
+
+## Previous validation — 2026-10-02
 
 Development publishing/promotion passed on 2026-10-02. The first successful run
 was [37045066315](https://github.com/irctrakz/wgslirp/actions/runs/37045066315)
@@ -104,7 +131,7 @@ validated `fb18c23e31d9798a71c4c6ffe5c287b44269a392` and promoted:
 ghcr.io/irctrakz/wgslirp@sha256:afbdb1bc56392c0c80be8125c1568170ce613f8888a900d825836fe4b3354ae2
 ```
 
-The latest runtime report records UID 100, dropped capabilities, read-only root,
+That runtime report records UID 100, dropped capabilities, read-only root,
 1 CPU, 256 MiB/no swap, 128 PIDs, encrypted TCP/UDP forwarding, zero memory/PID
 limit events, and SIGTERM exit zero in 76 ms. Sampled cgroup memory peak after
 eight rounds was 31,682,560 bytes; this is not a long-duration memory benchmark.

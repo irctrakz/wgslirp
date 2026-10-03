@@ -82,13 +82,18 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
-**Ownership/deployment update (2026-10-03):** R4/R5 are implemented pending CI:
+**Ownership/deployment update (2026-10-03):** R4/R5 are complete:
 explicit borrowed/copied construction and access are debug-independent; legacy
 adapters remain deprecated and compatible. Maintained callers are migrated,
 ICMP edits occur before packet publication, and health consumers release accepted
 input. See [PACKET_OWNERSHIP.md](PACKET_OWNERSHIP.md) and
 [DEPLOYMENT.md](DEPLOYMENT.md). Privileged raw-ICMP deployment is explicitly
 outside the validated non-root executable profile.
+Linux build/vet, unit/integration race tests, fuzzing, Compose validation and
+actual-image validation passed in [run 37147533942](https://github.com/irctrakz/wgslirp/actions/runs/37147533942)
+for `415f520`. The same digest was promoted after verified cleanup. CI exposed
+an unused import and timing-sensitive delayed-ACK budget assertions in existing
+fixtures; both were corrected before this successful run.
 
 **TCP implementation update (2026-10-02):** R3 is implemented in two changes:
 one configured ACK-idle policy replaces the competing health monitor; one
@@ -126,12 +131,12 @@ do not combine the list into a general rewrite.
   First resolve competing timeout semantics with focused tests; then remove
   duplicated SYN-ACK work while preserving fast-refusal/asynchronous-dial
   behavior. These are higher-value simplifications than further file splitting.
-- [ ] **R4 — Finish packet ownership semantics (A4; C4).**
+- [x] **R4 — Finish packet ownership semantics (A4; C4).**
   Correct the ICMP borrowed-data mutation, introduce explicit debug-independent
   copy/borrow paths where missing, migrate maintained callers, and preserve or
   deliberately deprecate the old public behavior. Verify aliasing, rejection,
   retention and exactly-once release at both debug settings.
-- [ ] **R5 — Complete deployment guidance and optional ICMP policy (A3).**
+- [x] **R5 — Complete deployment guidance and optional ICMP policy (A3).**
   Remove private-key echo from README; show the tested hardened deployment.
   Explain executable TCP/UDP selection versus library ICMP and ping-socket/raw
   socket requirements. Decide which optional raw mode is supported and validate
