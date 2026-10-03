@@ -82,6 +82,14 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Ownership/deployment update (2026-10-03):** R4/R5 are implemented pending CI:
+explicit borrowed/copied construction and access are debug-independent; legacy
+adapters remain deprecated and compatible. Maintained callers are migrated,
+ICMP edits occur before packet publication, and health consumers release accepted
+input. See [PACKET_OWNERSHIP.md](PACKET_OWNERSHIP.md) and
+[DEPLOYMENT.md](DEPLOYMENT.md). Privileged raw-ICMP deployment is explicitly
+outside the validated non-root executable profile.
+
 **TCP implementation update (2026-10-02):** R3 is implemented in two changes:
 one configured ACK-idle policy replaces the competing health monitor; one
 initial SYN-ACK owner replaces duplicated async establishment work. Focused
@@ -97,7 +105,7 @@ job. See [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md). Actual amd64 image exec
 37045066315 and 37050502529. Broader R1/R2 acceptance is not fully closed. The master publisher, input pinning, invalid-config
 image coverage and rollback evidence remain separate work.
 
-Only unfinished work is listed. Each item should be a bounded, reviewable change;
+Completed items are checked below. Each remaining item should be a bounded, reviewable change;
 do not combine the list into a general rewrite.
 
 - [ ] **R1 — Close actual release-image assurance (A2; runtime part of A3).**
@@ -114,7 +122,7 @@ do not combine the list into a general rewrite.
   policy, and retain/test a bounded rollback path. Development pushes currently
   do not trigger the master-only push workflow; make the intended validation
   path explicit. Assumed branch protections do not supply artifact testing.
-- [ ] **R3 — Unify TCP stall policy and simplify establishment (C1/C2 below).**
+- [x] **R3 — Unify TCP stall policy and simplify establishment (C1/C2 below).**
   First resolve competing timeout semantics with focused tests; then remove
   duplicated SYN-ACK work while preserving fast-refusal/asynchronous-dial
   behavior. These are higher-value simplifications than further file splitting.

@@ -49,6 +49,10 @@ socket receive simulation transfers to its processor on success and leaves
 ownership with its caller on rejection. A WireGuard processor without a TUN
 rejects rather than silently accepting ownership.
 
+Use the [explicit packet APIs](PACKET_OWNERSHIP.md) to choose borrowing or copying
+independently of debug mode. Legacy constructors retain their compatibility
+behavior; a borrowed view never permits mutation after packet publication.
+
 ## Adjacent lifecycle boundaries
 
 `SocketPacketProcessor.Stop` joins workers and drains accepted queue entries.

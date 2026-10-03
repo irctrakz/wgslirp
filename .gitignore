@@ -1,0 +1,3 @@
+# Local deployment credentials; never put private keys in tracked examples.
+/deploy/wgslirp.env
+/private.key

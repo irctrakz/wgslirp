@@ -54,7 +54,7 @@ func main() {
 	for i := 0; i < *flows; i++ {
 		for j := 0; j < *perFlow; j++ {
 			b := append([]byte(nil), payload...)
-			_ = proc.ProcessPacket(socket.WrapPacket(b))
+			_ = proc.ProcessPacket(core.NewCopiedPacket(b))
 		}
 	}
 	enqDur := time.Since(start)

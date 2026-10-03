@@ -84,6 +84,15 @@ func buildIPv4ICMP(src, dst net.IP, body []byte) []byte {
 }
 
 func TestICMPDatagramCorrelation(t *testing.T) {
+	original := core.IsDebugMode()
+	t.Cleanup(func() { core.SetDebugMode(original) })
+	for _, debug := range []bool{false, true} {
+		core.SetDebugMode(debug)
+		testICMPDatagramCorrelation(t)
+	}
+}
+
+func testICMPDatagramCorrelation(t *testing.T) {
 	s := NewSocketInterface(DefaultConfig())
 	capture := &captureProcessor{}
 	s.processor = capture

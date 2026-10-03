@@ -4,7 +4,7 @@
 
 # Userspace WireGuard slirp Router
 
-A high-performance, user-space WireGuard router that forwards decrypted IPv4 traffic via generic TCP/UDP/ICMP socket bridges (slirp-style), requiring zero kernel privileges or custom netstacks.
+A userspace WireGuard router that forwards decrypted IPv4 TCP/UDP through ordinary sockets (slirp-style), with no kernel TUN or elevated application privileges. Optional library ICMP has separate platform and permission requirements.
 
 ## Table of Contents
 
@@ -30,7 +30,7 @@ This router combines WireGuard VPN with a userspace networking implementation to
 
 - **WireGuard Integration**: Secure, modern VPN tunneling with WireGuard protocol
 - **User-space Networking**: TCP/UDP bridges implemented in userspace
-- **Protocol Support**: Handles TCP, UDP, and ICMP traffic with NAT capabilities
+- **Protocol Support**: Executable TCP/UDP forwarding; optional library ICMP mode
 - **Performance Monitoring**: Built-in metrics collection and reporting
 - **Health Checking**: Integrated health checks for monitoring system status
 - **Container Ready**: Designed to run in containerized environments
@@ -69,40 +69,10 @@ graph TD
 
 ### Using Docker
 
-The easiest way to run the router is using Docker:
-
-```yaml
-services:
-  wg-router:
-    image: ghcr.io/irctrakz/wgslirp:latest
-    container_name: wgslirp
-    ports:
-      - "51820:51820/udp"
-    environment:
-      
-      # Sensible defaults - probably 99% of configs would use this
-      - "POOLING=1"
-      - "WG_TUN_QUEUE_CAP=2048"
-      - "TCP_ACK_DELAY_MS=5"
-      - "TCP_ENABLE_SACK=1"
-      
-      #  If you want tcp / flow debugging enabled 
-      #- "METRICS_INTERVAL=60s"
-      #- "METRICS_FORMAT=text"
-
-      # If you want to fill up your logs fast
-      #- "DEBUG=1"
-
-      # WG config - this MUST be set
-      - "WG_PRIVATE_KEY=<server-private-key>"
-      - "WG_LISTEN_PORT=51820"
-      - "WG_MTU=1200"
-      
-      - "WG_PEERS=0"
-      - "WG_PEER_0_PUBLIC_KEY=<client-public-key>"
-      - "WG_PEER_0_ALLOWED_IPS=10.77.0.2/32"
-    restart: "no"
-```
+Use the [bounded non-root deployment guide](DEPLOYMENT.md) and versioned
+[Compose configuration](../deploy/compose.yaml). They use a validated image digest,
+private env file, dropped capabilities, read-only root and finite CPU/memory/PID
+limits. The validated development profile is Linux/amd64 TCP/UDP.
 
 ### Building from Source 
 #### Container is at ghcr.io/irctrakz/wgslirp:latest
@@ -127,34 +97,20 @@ Get up and running quickly with these steps:
 
 1. **Generate WireGuard Keys**:
    ```bash
+   umask 077
    # Generate private key
    wg genkey > private.key
    
    # Generate public key from private key
    cat private.key | wg pubkey > public.key
    
-   # View your keys
-   echo "Private key: $(cat private.key)"
+   # Share only the public key
    echo "Public key: $(cat public.key)"
    ```
 
 2. **Start the Router**:
-   ```bash
-    docker run --name wgslirp \
-      -p 51820:51820/udp \
-      -e POOLING=1 \
-      -e WG_TUN_QUEUE_CAP=2048 \
-      -e TCP_ACK_DELAY_MS=5 \
-      -e TCP_ENABLE_SACK=1 \
-      -e WG_PRIVATE_KEY=<private_key> \
-      -e WG_LISTEN_PORT=51820 \
-      -e WG_MTU=1200 \
-      -e WG_PEERS=0 \
-      -e WG_PEER_0_PUBLIC_KEY=<public_key> \
-      -e WG_PEER_0_ALLOWED_IPS=10.77.0.2/32 \
-      --restart=no \
-      ghcr.io/irctrakz/wgslirp:latest
-   ```
+   Follow [deployment setup](DEPLOYMENT.md) to create the private env file and
+   select a validated digest, then run `docker compose -f deploy/compose.yaml up -d`.
 
 3. **Configure Client**:
    Create a WireGuard client configuration:
@@ -230,7 +186,7 @@ Overlay routing (optional)
 
 Logging and diagnostics
 
-- `DEBUG`: enable verbose logging and disable packet copy-elision in wrappers.
+- `DEBUG`: enable verbose logging. Explicit packet ownership is unchanged; only legacy packet APIs retain debug-dependent copies.
 - `WG_DEBUG`: verbose wireguard-go logging (chatty).
 - `WG_PCAP`: file path to write plaintext IPv4 frames (DLT_RAW) captured by the userspace TUN.
 - `WG_PCAP_MAX_BYTES`: capture file size limit, including headers; defaults to 67108864 (64 MiB). Must be an integer of at least 24. Capture stops before a complete record would exceed the limit and stays stopped until process restart. Invalid values fail startup without touching the file; capture is opened at startup and cannot follow later environment changes. Forwarding continues when capture stops. Capture files use private permissions (0600).
@@ -325,7 +281,7 @@ The shared buffer budget reserves capacity before allocating TCP pending, reasse
 
 WireGuard output and socket processor queues also share this budget when constructed with the socket writer. WireGuard reserves before copying and rejects a full queue before allocation. Processor entries charge the retained slice capacity (including unused capacity), and remain charged while a worker is writing. Reservations release after TUN reads (including undersized-read failures), worker completion, rejection or shutdown drain. An in-flight TUN read retains its reservation until that read returns. Processor admission transfers packet ownership only on success; callers retain rejected packets. The WireGuard processor consumes pooled input after synchronous capture/injection, including failed injection, and makes only the TUN's required queue copy.
 
-Synthesized packets carry their reservation through downstream ownership; accepted pooled packets must eventually be released with `core.ReleasePacket`. UDP fragmentation reserves the full datagram and constructs one separately reserved fragment at a time; refusal drops the remaining datagram without allocating all its fragments. Socket writers borrow packets synchronously and must copy data they retain after returning. Internal read-only packet access avoids debug-mode copies while preserving the public `Data()` behavior. Custom packet implementations must expose retained slice storage through `Data` for accounting.
+Synthesized packets carry their reservation through downstream ownership; accepted pooled packets must eventually be released with `core.ReleasePacket`. UDP fragmentation reserves the full datagram and constructs one separately reserved fragment at a time; refusal drops the remaining datagram without allocating all its fragments. Socket writers borrow packets synchronously and must copy data they retain after returning. [Explicit packet constructors and accessors](PACKET_OWNERSHIP.md) provide debug-independent copying/borrowing; legacy `NewPacket`/`SimplePacket.Data` behavior is preserved. Custom packet implementations must expose retained slice storage through `Data` for accounting.
 
 With `POOLING=1`, live synthesized buffers are charged at their full pool-class capacity. Idle buffers have a separate fixed process-wide ceiling of 960 KiB (32 buffers each of 2, 4, 8 and 16 KiB); excess returns are discarded and reused buffers are cleared before synthesis. Production synthesis always uses releasable packets, independent of `POOL_WRAP`; that legacy flag still controls the public `WrapPacket` helper. Custom consumers that previously relied on garbage collection must release accepted pooled packets to return their reservations.
 
@@ -393,32 +349,11 @@ Selected counters (subset):
 - WG plaintext: `plaintext_from_wg`, `plaintext_to_wg`, `queue_drops`.
 
 
-#### Tuning Example (docker-compose) with metrics enabled
+#### Enable metrics in the bounded deployment
 
-```yaml
-services:
-  wg-router:
-    image: wgserver:latest
-    container_name: wgserver
-    ports:
-      - "51820:51820/udp"
-    environment:
-      - "POOLING=1"
-      - "WG_TUN_QUEUE_CAP=2048"
-      - "TCP_ACK_DELAY_MS=5"
-      - "METRICS_INTERVAL=15s"
-      - "METRICS_FORMAT=json"
-      - "DEBUG=0"
-      - "WG_PRIVATE_KEY=<base64-private-key>"
-      - "WG_LISTEN_PORT=51820"
-      - "WG_MTU=1380"
-      - "WG_PEERS=0"
-      - "WG_PEER_0_PUBLIC_KEY=<base64-peer-public>"
-      - "WG_PEER_0_ALLOWED_IPS=0.0.0.0/0"
-    restart: "no"
-```
-
-Treat these values as examples. Size the active flow and buffer limits from measurements of your workload; monitor WG queue drops and available memory/CPU.
+Add `METRICS_LOG=true`, `METRICS_INTERVAL=15s` and `METRICS_FORMAT=json` to the
+private env file described in [DEPLOYMENT.md](DEPLOYMENT.md). Keep the Compose
+resource/security settings and size application limits using workload measurements.
 
 ### ICMP Privileges
 
@@ -432,7 +367,7 @@ on platforms that support it. Linux permits ping sockets when the process group
 is allowed by `net.ipv4.ping_group_range`; this fallback supports echo
 request/reply traffic only. Selecting ICMP mode fails startup if neither socket
 is available. Explicit TCP/UDP-only mode starts without either socket and drops
-guest ICMP. Broader host ICMP traffic requires a raw socket and its privileges.
+guest ICMP. Broader host ICMP traffic requires a raw socket and its privileges; privileged raw-ICMP deployment is outside the [validated deployment profile](DEPLOYMENT.md#optional-icmp-scope).
 
 The Linux ICMP datagram integration test exercises production startup, echo
 identity restoration and concurrent shutdown. Run it inside an approved bounded
@@ -452,49 +387,9 @@ after five seconds, and participate in the shared socket buffer budget.
 
 ## Usage Examples
 
-### Basic WireGuard Router
-
-```bash
-docker run --name wgslirp \
-  -p 51820:51820/udp \
-  -e POOLING=1 \
-  -e WG_TUN_QUEUE_CAP=2048 \
-  -e TCP_ACK_DELAY_MS=5 \
-  -e TCP_ENABLE_SACK=1 \
-  -e WG_PRIVATE_KEY=<private_key> \
-  -e WG_LISTEN_PORT=51820 \
-  -e WG_MTU=1200 \
-  -e WG_PEERS=0 \
-  -e WG_PEER_0_PUBLIC_KEY=<public_key> \
-  -e WG_PEER_0_ALLOWED_IPS=10.77.0.2/32 \
-  --restart=no \
-  ghcr.io/irctrakz/wgslirp:latest
-```
-
-### Docker Compose full example
-
-```
-version: "2.4"
-
-services:
-  wg-router:
-    image: ghcr.io/irctrakz/wgslirp:latest
-    container_name: wgslirp
-    ports:
-      - "51820:51820/udp"
-    environment:
-      - "POOLING=1"
-      - "WG_TUN_QUEUE_CAP=2048"
-      - "TCP_ACK_DELAY_MS=5"
-      - "TCP_ENABLE_SACK=1"
-      - "WG_PRIVATE_KEY=<private_key>"
-      - "WG_LISTEN_PORT=51820"
-      - "WG_MTU=1200"
-      - "WG_PEERS=0"
-      - "WG_PEER_0_PUBLIC_KEY=<public_key>"
-      - "WG_PEER_0_ALLOWED_IPS=10.77.0.2/32"
-    restart: "no"
-```
+Use the [deployment guide](DEPLOYMENT.md) for one maintained Docker Compose
+example, credentials, shutdown and optional ICMP scope. Do not add capabilities
+or kernel TUN devices to enable TCP/UDP forwarding.
 
 ## Troubleshooting
 

@@ -14,8 +14,9 @@ protections are satisfied assumptions for that analysis, as requested by the
 user; historical verification records below remain unchanged. Immediate priority
 was F10e.2 encrypted memory acceptance, now accepted for the finite low-rate
 profile below. Next are release-artifact validation and PR 2.3 privilege defaults.
-PR 4.1 still has a public debug-dependent packet API
-remainder; the completed internal ownership work does not close that criterion.
+The public ownership remainder of PR 4.1 now has explicit APIs and compatibility
+adapters; deployment guidance is consolidated. See the dated implementation and
+validation updates in [HARDENING_REVIEW.md](HARDENING_REVIEW.md).
 
 Bring all 30 reviewed principles to **Strong**, with **Excellent** reserved for areas supported by sustained operational evidence. Prioritize preventable crashes, secret exposure, unsafe releases, and ineffective limits before refactoring.
 

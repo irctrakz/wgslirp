@@ -8,8 +8,8 @@ import (
 var debugMode uint32
 
 // SetDebugMode sets the global debug mode flag
-// When debug mode is enabled, packet data is copied for safety
-// When disabled, packet data is not copied for performance
+// It affects only legacy NewPacket/SimplePacket copying. Explicit constructors,
+// borrowed access and pooled packets have debug-independent ownership semantics.
 func SetDebugMode(enabled bool) {
 	if enabled {
 		atomic.StoreUint32(&debugMode, 1)
@@ -25,18 +25,47 @@ func IsDebugMode() bool {
 
 // Packet represents a network packet
 type Packet interface {
-	// Data returns the packet data
-	// In debug mode, this returns a copy of the data
-	// In non-debug mode, this returns the internal data directly for performance
+	// Data is the compatibility accessor; aliasing depends on the implementation.
+	// Use BorrowPacketData for read-only access or CopyPacketData for owned bytes.
 	Data() []byte
 
 	// Length returns the packet length
 	Length() int
 }
 
+// NewBorrowedPacket wraps data without copying, independently of debug mode.
+// The caller must keep the backing storage valid and unmodified until every
+// consumer finishes. Use NewCopiedPacket when retaining or reusing caller data.
+func NewBorrowedPacket(data []byte) Packet {
+	return &readOnlyPacket{data: data}
+}
+
+// NewCopiedPacket snapshots data into independent storage, regardless of debug
+// mode. Packet access remains read-only; use CopyPacketData for mutable bytes.
+func NewCopiedPacket(data []byte) Packet {
+	copyOfData := make([]byte, len(data))
+	copy(copyOfData, data)
+	return &readOnlyPacket{data: copyOfData}
+}
+
+type readOnlyPacket struct{ data []byte }
+
+func (p *readOnlyPacket) Data() []byte { return p.data }
+func (p *readOnlyPacket) Length() int  { return len(p.data) }
+
+// CopyPacketData returns independent, mutable bytes that remain valid after
+// the packet is released. It does not transfer or release packet ownership.
+func CopyPacketData(packet Packet) []byte {
+	data := BorrowPacketData(packet)
+	result := make([]byte, len(data))
+	copy(result, data)
+	return result
+}
+
 // BorrowPacketData returns a read-only view valid until the packet is released.
 // It avoids diagnostic copies for built-in packets. Callers must neither mutate
-// nor retain the view beyond the packet's ownership lifetime.
+// nor retain the view beyond the packet's ownership lifetime. For custom Packet
+// implementations it uses Data(), whose allocation behavior is implementation-specific.
 func BorrowPacketData(packet Packet) []byte {
 	switch p := packet.(type) {
 	case *SimplePacket:
@@ -109,6 +138,9 @@ type SimplePacket struct {
 }
 
 // NewPacket creates a new packet
+//
+// Deprecated: use NewBorrowedPacket or NewCopiedPacket for explicit ownership
+// independent of debug mode. Legacy copy/alias behavior is preserved.
 func NewPacket(data []byte) Packet {
 	if data == nil {
 		data = make([]byte, 0)

@@ -84,9 +84,21 @@ func (d *icmpDatagram) send(s *SocketInterface, guest, peer net.IP, body []byte)
 	if err != nil {
 		return err
 	}
+	var seq uint16
 	packet := s.buffers().buildPacket(len(body), false, func() []byte {
+		// Finish mutation while storage is owned here, before publishing a packet.
+		for {
+			d.next++
+			if _, exists := d.pending[d.next]; !exists {
+				break
+			}
+		}
+		seq = d.next
 		out := make([]byte, len(body))
 		copy(out, body)
+		binary.BigEndian.PutUint16(out[6:8], seq)
+		out[2], out[3] = 0, 0
+		binary.BigEndian.PutUint16(out[2:4], calculateChecksum(out))
 		return out
 	})
 	if packet == nil {
@@ -94,13 +106,6 @@ func (d *icmpDatagram) send(s *SocketInterface, guest, peer net.IP, body []byte)
 		return ErrBufferLimit
 	}
 	defer core.ReleasePacket(packet)
-	for {
-		d.next++
-		if _, exists := d.pending[d.next]; !exists {
-			break
-		}
-	}
-	seq := d.next
 	p := pendingDgramEcho{
 		id: binary.BigEndian.Uint16(body[4:6]), seq: binary.BigEndian.Uint16(body[6:8]),
 		payload: sha256.Sum256(body[8:]), expiry: time.Now().Add(icmpEchoLifetime), release: release,
@@ -108,9 +113,6 @@ func (d *icmpDatagram) send(s *SocketInterface, guest, peer net.IP, body []byte)
 	copy(p.guest[:], guest.To4())
 	copy(p.peer[:], peer.To4())
 	wire := core.BorrowPacketData(packet)
-	binary.BigEndian.PutUint16(wire[6:8], seq)
-	wire[2], wire[3] = 0, 0
-	binary.BigEndian.PutUint16(wire[2:4], calculateChecksum(wire))
 	if err := d.conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
 		release()
 		return err
