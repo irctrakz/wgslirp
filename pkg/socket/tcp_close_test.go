@@ -188,6 +188,8 @@ func TestTCPFINBeforeDialFlushesPendingBeforeCloseWrite(t *testing.T) {
 	if err != nil || string(got) != "pending" || !closedWrite {
 		t.Fatalf("pending drain: %q %v", got, err)
 	}
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
 	assertBudget(t, b.buffers, 0)
 }
 
@@ -208,6 +210,9 @@ func TestTCPOutOfOrderFINWaitsForMissingBytes(t *testing.T) {
 	closeOutbound(t, b, f, 103, 1000, 0x11, []byte("DEF"))
 	closeOutbound(t, b, f, 103, 1000, 0x11, []byte("DEF"))
 	got, err := io.ReadAll(peer)
+	// Exclude temporary delayed-ACK reservations from the final snapshot.
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
 	if err != nil || string(got) != "ABCDEF" || f.clientNxt != 107 {
 		t.Fatalf("reordered close: %q %v next=%d", got, err, f.clientNxt)
 	}
