@@ -295,6 +295,10 @@ func TestTCPWrapReassemblyRefusalAndInOrderRecovery(t *testing.T) {
 	if _, err := io.ReadFull(peer, got); err != nil || string(got) != "abcdefghij" {
 		t.Fatalf("delivered %q: %v", got, err)
 	}
+	// A delayed ACK temporarily reserves its synthesized packet. Observe state
+	// and accounting under the same lock as that worker, not mid-delivery.
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
 	if f.clientNxt != 6 {
 		t.Fatal("wrong final ACK")
 	}
