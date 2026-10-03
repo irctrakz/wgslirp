@@ -1,0 +1,81 @@
+# Bounded encrypted churn and default-capacity profile
+
+## Acceptance declared before execution — 2026-10-03
+
+This profile exercises real wireguard-go encryption, the production userspace TCP
+bridge and ordinary loopback host sockets. No kernel TUN, raw sockets or added
+capabilities are used. It does not introduce WAN impairment, change production
+TIME-WAIT/idle timers, force GC or claim production throughput capacity.
+
+Run one fresh ordinary process and one fresh race process, sequentially, on
+GitHub-hosted Linux runners. The private server remains unused. Each container
+has 1 CPU, 2 GiB RAM/no swap, 128 PIDs, read-only root, no capabilities, bounded
+768 MiB work and 64 MiB temporary filesystems, and bounded logs. Module download
+and compilation occur inside those bounds. The container has a 600-second
+deadline, the test 420 seconds and workload checks a six-minute ceiling.
+
+Workload and pass criteria:
+
+1. Eight warmups followed by **256 measured TCP connections** through one
+   encrypted link. Each connection exchanges an exact 1 KiB payload in both
+   directions, then guest RST releases its slot. Use distinct guest ports.
+2. Measure guest SYN injection to decrypted SYN-ACK arrival using a monotonic
+   clock. Report first/cold observation separately; report warm p50/p95/p99/max.
+   Require warm p95 <=250 ms and max <=1 second; individual I/O deadlines are
+   three seconds. These generous loopback liveness ceilings are declared in
+   advance, not a comparative performance-improvement target. Sampled percentiles
+   are not statistically established production latency guarantees.
+3. Admit **64 simultaneous connections**, using the unchanged default flow cap.
+   Exchange exact payloads on every connection. The 65th attempt must receive
+   RST/ACK and increment the flow-limit counter without increasing flow count.
+   An existing connection must still exchange exact payloads after refusal.
+4. Close all 64 connections host-first, complete guest FIN/ACK and host EOF,
+   and verify the slots remain occupied. Another attempted connection must be
+   refused. Wait through the **actual four-minute TIME-WAIT interval**, including
+   the normal two-minute idle-reaper boundary. Do not inject expiry or reset
+   these flows to recover capacity. All slots must expire within five seconds
+   of the last flow's four-minute deadline, then a new connection must succeed.
+5. Final created/closed totals must both be 329, with exactly two capacity
+   refusals, zero flows, zero pending-dial reservations, zero socket buffer
+   reservations and zero downstream delivery refusals. Device cleanup must
+   return goroutines to the pre-link count plus at most four within five seconds.
+6. Sample after each connection and during the TIME-WAIT wait: heap <=192 MiB,
+   RSS <=384 MiB, goroutines <=512. These are new capacity-profile ceilings,
+   including race instrumentation; they do not revise the earlier A1 profile.
+   Keep GOMAXPROCS=1 and GOMEMLIMIT=512MiB. Record sampled heap/RSS peaks separately
+   from cgroup peak (which includes build/cache/tmpfs). Require zero cgroup
+   memory/PID-limit events, no OOM kill, exit zero and verified container removal.
+
+At most 330 KiB of application payload is exchanged in each direction: 329
+successful connections plus one progress check on an already admitted flow.
+The 256 timed warm handshakes substantially improve sample count over the earlier
+eight-handshakes-per-sample baseline, but the encrypted workload is different:
+do not compare those percentiles as an apples-to-apples regression measurement.
+
+## CI and interpretation
+
+The dedicated `capacity` build tag keeps the multi-minute profile out of ordinary
+unit/integration invocations. `.github/workflows/capacity.yml` runs ordinary and
+race variants with max parallelism one, retains 14-day evidence, and stops on a
+failure. Development image validation/promotion depends on successful completion
+of both variants. The unchanged stable/master publication path is outside this
+development gate.
+
+```sh
+go test -v -tags=integration,capacity -run='^TestEncryptedChurnCapacity$' -timeout=420s -count=1 -parallel=1 ./pkg/wireguard
+go test -v -race -tags=integration,capacity -run='^TestEncryptedChurnCapacity$' -timeout=420s -count=1 -parallel=1 ./pkg/wireguard
+```
+
+RST churn measures rapid establishment/release; it must not be described as
+graceful-close throughput. The separate host-first batch demonstrates that
+TIME-WAIT consumes the same finite slots, making roughly 16 host-first closes
+per minute the default 64-slot/four-minute steady-state ceiling without headroom.
+No capacity default is raised by this work. Calibrated WAN delay/loss/reordering,
+encrypted RTO recovery, receiver reneging and larger sustained profiles remain
+separate follow-ups. Existing UDP/image coverage does not turn this TCP churn
+profile into a UDP capacity measurement.
+
+## Results
+
+Pending execution. Record both process variants and failures; do not adjust
+acceptance thresholds to make a failed run pass.

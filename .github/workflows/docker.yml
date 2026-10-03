@@ -13,8 +13,13 @@ jobs:
   test:
     uses: ./.github/workflows/go.yml
 
-  release-image-test:
+  encrypted-capacity:
     needs: test
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    uses: ./.github/workflows/capacity.yml
+
+  release-image-test:
+    needs: [test, encrypted-capacity]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -1,0 +1,90 @@
+name: Bounded encrypted capacity
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  capacity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        mode: [ordinary, race]
+    env:
+      MODE: ${{ matrix.mode }}
+      CONTAINER: wgslirp-capacity-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run a fresh bounded workload
+        timeout-minutes: 11
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          docker pull golang:1.23.12-bookworm
+          docker image inspect golang:1.23.12-bookworm --format '{{json .RepoDigests}}' > evidence/toolchain-image.json
+          docker create --name "$CONTAINER" --user "$(id -u):$(id -g)" \
+            --cpus=1 --memory=2g --memory-swap=2g --pids-limit=128 \
+            --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /work:rw,exec,nosuid,nodev,size=768m,mode=1777 \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
+            --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
+            -e MODE -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
+            -e GOCACHE=/work/cache -e GOPATH=/work/gopath \
+            golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 600s bash -c '
+              set -eu
+              cp -a /src/. /work/source
+              cd /work/source
+              race_flag=""
+              if [ "$MODE" = race ]; then race_flag=-race; fi
+              set +e
+              go test $race_flag -v -tags=integration,capacity -run="^TestEncryptedChurnCapacity$" -timeout=420s -count=1 -parallel=1 ./pkg/wireguard
+              result=$?
+              set -e
+              echo CGROUP_MEMORY_PEAK
+              cat /sys/fs/cgroup/memory.peak
+              cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/pids.events
+              if grep -Eq "^(max|oom|oom_kill|oom_group_kill) [1-9]" /sys/fs/cgroup/memory.events /sys/fs/cgroup/pids.events; then exit 1; fi
+              exit "$result"
+            '
+          docker inspect "$CONTAINER" --format '{{json .HostConfig}}' > evidence/limits.json
+          python3 - <<'PY'
+          import json
+          c = json.load(open('evidence/limits.json'))
+          assert c['Memory'] == c['MemorySwap'] == 2147483648
+          assert c['NanoCpus'] == 1000000000 and c['PidsLimit'] == 128
+          assert c['ReadonlyRootfs'] and c['CapDrop'] == ['ALL']
+          assert 'no-new-privileges' in c['SecurityOpt']
+          PY
+          timeout --signal=TERM --kill-after=15s 620s docker start --attach "$CONTAINER" 2>&1 | tee evidence/test.log
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER")" = 0
+          test "$(docker inspect --format '{{.State.OOMKilled}}' "$CONTAINER")" = false
+          grep -q 'CAPACITY_ACCEPTED' evidence/test.log
+      - name: Remove owned container
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+            docker logs "$CONTAINER" > evidence/container.log 2>&1
+            docker inspect "$CONTAINER" --format '{{json .State}}' > evidence/final-state.json
+            docker rm -f "$CONTAINER"
+          fi
+          test -z "$(docker ps -aq --filter "name=^/$CONTAINER$")"
+          echo 'Owned container and its tmpfs removed; no owned network or persistent volume created.' > evidence/cleanup.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capacity-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          retention-days: 14
+          if-no-files-found: error
