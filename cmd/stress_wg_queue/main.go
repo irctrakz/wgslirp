@@ -10,7 +10,6 @@ import (
 
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/logging"
-	"github.com/irctrakz/wgslirp/pkg/socket"
 	wg "github.com/irctrakz/wgslirp/pkg/wireguard"
 )
 
