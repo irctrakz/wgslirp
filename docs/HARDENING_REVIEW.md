@@ -82,6 +82,10 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Deferred research (2026-10-04):** the scoped
+[Lean verification proposal](LEAN_VERIFICATION_PROPOSAL.md) is captured for later.
+No formal-verification work is active and no Go implementation proof is claimed.
+
 **Ownership/deployment update (2026-10-03):** R4/R5 are complete:
 explicit borrowed/copied construction and access are debug-independent; legacy
 adapters remain deprecated and compatible. Maintained callers are migrated,
