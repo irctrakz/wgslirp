@@ -68,7 +68,50 @@ segment under existing state/queue locks. A focused socket regression covers
 reneging both normally and across sequence-number wrap. The encrypted guest now
 sends each discarded block's SACK once, avoiding artificial repeated SACK storms;
 failure diagnostics include byte counts and recovery state. Payload/resource/time
-criteria remain unchanged. Successful execution is pending.
+criteria remain unchanged.
+
+### Accepted recovery profiles — 2026-10-03
+
+[Run 37172091744](https://github.com/irctrakz/wgslirp/actions/runs/37172091744),
+source `36da09c`, passed the ordinary and race WAN gates sequentially. Each
+profile observed exactly three drops and one ciphertext reordering event,
+two RTOs in consecutive-loss recovery, and three RTOs while recovering all three
+discarded SACKed segments. All TCP/UDP payloads matched exactly.
+
+| Mode / one-way delay | Warm UDP RTT min–max (ms) | Guest→server relay median (ms) | Server→guest relay median / max (ms) | Heap peak (bytes) | RSS peak (bytes) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ordinary / 20 ms | 40.554–40.745 | 20.295 | 20.264 / 170.840 | 52,491,896 | 28,741,632 |
+| Ordinary / 60 ms | 121.393–121.864 | 60.734 | 60.715 / 210.472 | 103,690,680 | 46,051,328 |
+| Race / 20 ms | 41.703–41.806 | 20.615 | 20.689 / 170.350 | 55,719,304 | 168,419,328 |
+| Race / 60 ms | 121.258–122.116 | 60.464 | 60.415 / 210.293 | 95,155,016 | 290,496,512 |
+
+Per-direction relay samples were 42/30 in ordinary and 40/30 under race for
+20/60 ms respectively. The maxima include the deliberately delayed packet.
+The two profiles share one process per mode; heap/RSS observations include
+allocator retention from the first profile, not independent per-device cost.
+Combined test times were 12.32 s ordinary and 13.44 s race. Cgroup peaks including
+compilation/tmpfs were 341,381,120 and 540,700,672 bytes respectively.
+
+Both runs had zero relay overflow, final flows/reservations, downstream TCP
+refusals, resource-limit events and OOM kills; worker cleanup passed. Both
+verified container/tmpfs/toolchain-image removal. Build/vet, race unit and
+integration regressions, module verification, Compose validation and both
+10-second fuzz targets passed in the same run.
+
+**Final pipeline verification (2026-10-04):** both downstream capacity variants
+also passed real four-minute TIME-WAIT retention and recovery. Their cgroup
+peaks were 340,729,856 bytes ordinary and 584,306,688 bytes race, with zero limit
+events/OOM and verified container/tmpfs/toolchain-image cleanup. Actual-image
+validation passed non-root encrypted TCP/UDP forwarding and SIGTERM under
+traffic (81.4 ms), followed by same-digest development promotion. See
+[release-image evidence](RELEASE_IMAGE_TEST.md#wan-recovery-release-verification--2026-10-04).
+No owned runtime containers, networks, builder, cache volume or image remained
+on the runner; published GHCR versions are retained. The private server was unused.
+
+The preceding source `3afb045` also passed both WAN variants in run
+37171867135. Its downstream capacity run was cancelled to validate the final
+wrap-safe guest comparison; cleanup was verified. That interrupted capacity
+stage is not acceptance evidence.
 
 Preserve failures and do not relax criteria to obtain a pass.
 The existing soak relay is shared without changing its original impairment policy.

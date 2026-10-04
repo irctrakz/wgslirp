@@ -145,9 +145,13 @@ do not combine the list into a general rewrite.
   Encrypted churn/default-capacity coverage passed ordinary and race runs on
   2026-10-03: 256 measured handshakes, 64 simultaneous flows, refusal/progress
   checks, actual four-minute TIME-WAIT expiry and capacity recovery. See
-  [acceptance and failure evidence](ENCRYPTED_CAPACITY.md). Remaining: calibrated
-  delay/loss/reordering with actual RTO and receiver-reneging cases; run
-  full-sequence scenarios only when
+  [acceptance and failure evidence](ENCRYPTED_CAPACITY.md). Calibrated 20/60 ms
+  each-way encrypted profiles also passed ordinary/race checks for consecutive
+  loss, reordering, actual RTO and receiver reneging. The new gate exposed and
+  fixed stale SACK state preventing timeout recovery; see
+  [WAN evidence](ENCRYPTED_WAN_RECOVERY.md). Remaining: larger sustained/mixed
+  workloads and workload-driven impairment distributions (including ACK/uplink
+  loss); run full-sequence scenarios only when
   justified by supported workload claims. Declare duration/load/memory/failure
   criteria before each stage and stop on failure. No overnight tests. Recheck
   representative performance after the TCP simplifications.

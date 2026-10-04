@@ -1,5 +1,12 @@
 # Finite encrypted WAN/soak fixture
 
+**Broader evidence update (2026-10-03):** bounded encrypted
+[churn/default capacity](ENCRYPTED_CAPACITY.md) and
+[calibrated WAN recovery](ENCRYPTED_WAN_RECOVERY.md) now pass ordinary/race gates.
+The latter verifies actual RTO recovery, reordering and receiver reneging at
+20/60 ms each-way delay. These separate profiles do not revise A1's limits or
+erase the historical failures below.
+
 **Current status (2026-09-22):** the separately defined A1 natural-GC acceptance
 profile passed three fresh-process ordinary runs and three fresh-process race
 runs. The original tighter 64 MiB/30-second profile and its failures remain below
@@ -178,11 +185,15 @@ claim natural recovery without measuring it.
 
 ## Remaining F10e coverage
 
-Higher-rate and larger encrypted profiles, long-duration steady-state/idle/close
-expiry, mixed high churn, calibrated WAN loss/latency distributions, SACK/receiver
-reneging and full-sequence transfers remain open. Actual release-image execution
-and external review/enforcement remain F10d. Environment-specific launchers and
-raw manifests stay private and ignored; no upstream action is needed.
+Higher-rate/larger sustained encrypted workloads, long-idle behavior beyond the
+accepted TIME-WAIT profile, mixed high churn, measured workload-driven WAN
+distributions and full-sequence transfers remain open where supported workload
+claims justify them. Default encrypted capacity, wall-clock TIME-WAIT, fixed
+20/60 ms delay, targeted consecutive loss, reordering, RTO and receiver reneging
+have separate passing evidence linked above. Actual release-image validation
+and same-digest promotion are recorded in [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md).
+Independent review/enforcement remain satisfied assumptions. Private-server
+launchers stay outside version control; CI evidence has bounded retention.
 
 Run the diagnostic separately in a fresh process:
 

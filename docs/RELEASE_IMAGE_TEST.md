@@ -13,7 +13,8 @@ SSH test server remains outside this image-build path: its existing cached-image
 harness does not authorize host image builds, pulls or Docker socket mounts.
 
 Push to `codex/architecture-hardening` to run `.github/workflows/docker.yml`.
-The development-only `release-image-test` job depends on the ordinary Go checks;
+The development-only `release-image-test` job depends on the ordinary Go checks
+and sequential ordinary/race WAN and capacity gates;
 `promote-development` depends on successful image validation. Publication is
 restricted to `irctrakz/wgslirp` and that exact branch on push/manual events;
 pull requests cannot enter these jobs. No default-branch change is required for
@@ -92,7 +93,31 @@ seven-day Actions artifact expiry does not delete registry images. Registry
 retention/deletion remains an explicit maintenance decision; this workflow does
 not request package-administration privileges or delete published versions.
 
-## Ownership/deployment validation — 2026-10-03
+## WAN recovery release verification â€” 2026-10-04
+
+[Run 37172091744](https://github.com/irctrakz/wgslirp/actions/runs/37172091744)
+passed for `36da09c2c00c9b58030c2c8d9f1f20a5c99ad8cb`: standard regressions,
+ordinary/race calibrated encrypted WAN recovery, ordinary/race capacity and
+actual-image validation. The WAN fixture exposed a receiver-reneging recovery
+bug; timeout retransmission now invalidates advisory SACK state and retries the
+oldest cumulatively unacknowledged data. Detailed bounds and failures are in
+[ENCRYPTED_WAN_RECOVERY.md](ENCRYPTED_WAN_RECOVERY.md).
+
+The actual Linux/amd64 image passed non-root startup (UID 100), encrypted TCP/UDP
+forwarding and SIGTERM under traffic in 81.4 ms, using the existing dropped-capability,
+read-only, 1 CPU/256 MiB/no-swap/128-PID profile. Promotion preserved this digest:
+
+```text
+ghcr.io/irctrakz/wgslirp@sha256:bc326f2fea2bc869dc080c3f5408d0a3511a0c482a2e89f400879c336c664ef6
+```
+
+Development tag:
+`dev-36da09c2c00c9b58030c2c8d9f1f20a5c99ad8cb-37172091744-1`.
+Cleanup verified no owned runtime container, network, builder, cache volume or
+image remained locally. Published GHCR versions are retained. Main/master and
+stable/latest tags were untouched; the private server was unused.
+
+## Ownership/deployment validation â€” 2026-10-03
 
 [Run 37147533942](https://github.com/irctrakz/wgslirp/actions/runs/37147533942)
 passed for `415f520c9243e22832807fe08aa7666b897ec04b`: module/build/vet,
@@ -119,7 +144,7 @@ mid-delivery. The import was removed and assertions now synchronize with the
 ACK worker. The three affected fixture tests passed 100 local repetitions before
 the successful full Linux run. No budget assertion was relaxed.
 
-## Previous validation — 2026-10-02
+## Previous validation â€” 2026-10-02
 
 Development publishing/promotion passed on 2026-10-02. The first successful run
 was [37045066315](https://github.com/irctrakz/wgslirp/actions/runs/37045066315)
