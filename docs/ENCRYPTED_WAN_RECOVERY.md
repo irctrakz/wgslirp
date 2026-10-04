@@ -33,7 +33,7 @@ uplink-loss, jitter-distribution, congestion or full-sequence-space coverage.
 Each profile allows 45 seconds; the combined test has a 120-second timeout.
 Each I/O has a five-second deadline, each reply at most 64 received packets,
 guest reassembly at most eight pieces, and relay storage at most 64 datagrams of
-2,048 bytes. Application payload per profile is at most 12.5 KiB excluding
+2,048 bytes. Application payload per profile totals 14.5 KiB excluding
 headers, handshakes and retransmissions. Require zero relay/sample overflow,
 heap <=192 MiB, RSS <=384 MiB and <=512 goroutines at samples. These bounds match
 the capacity profile, not the older A1 memory criterion. No forced GC is used.

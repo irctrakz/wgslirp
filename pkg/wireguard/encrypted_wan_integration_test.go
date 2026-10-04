@@ -224,7 +224,7 @@ func runEncryptedRecovery(t *testing.T, delay time.Duration) {
 				reneged[position] = len(data)
 				continue
 			}
-			if position >= ack {
+			if int32(position-ack) >= 0 {
 				if len(pending) >= 8 {
 					t.Fatal("guest reassembly bound")
 				}
