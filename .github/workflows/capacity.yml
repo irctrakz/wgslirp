@@ -55,6 +55,7 @@ jobs:
               case "$WORKLOAD" in
                 capacity) test_name=TestEncryptedChurnCapacity; test_timeout=420s ;;
                 wan) test_name=TestEncryptedWANRecovery; test_timeout=120s ;;
+                sustained) test_name=TestEncryptedSustainedLoss; test_timeout=330s ;;
                 *) echo "Unknown workload" >&2; exit 1 ;;
               esac
               set +e
@@ -82,6 +83,7 @@ jobs:
           case "$WORKLOAD" in
             capacity) grep -q 'CAPACITY_ACCEPTED' evidence/test.log ;;
             wan) grep -q 'WAN_ACCEPTED' evidence/test.log ;;
+            sustained) grep -q 'SUSTAINED_ACCEPTED' evidence/test.log ;;
             *) exit 1 ;;
           esac
       - name: Remove owned container and toolchain image

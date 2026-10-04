@@ -95,6 +95,11 @@ func encryptedChecksum(p []byte) uint16 {
 }
 
 func encryptedTestLink(t *testing.T, endpoint func(int) string) (*socket.SocketInterface, *WGTun, encryptedGuestSink) {
+	return encryptedTestLinkWithIngress(t, endpoint, nil)
+}
+
+// Optional test-only ingress wrapping keeps loss classification after decryption.
+func encryptedTestLinkWithIngress(t *testing.T, endpoint func(int) string, ingress func(*socket.SocketInterface) core.PacketWriter) (*socket.SocketInterface, *WGTun, encryptedGuestSink) {
 	t.Helper()
 	serverPrivate, serverPublic := encryptedKey(t)
 	guestPrivate, guestPublic := encryptedKey(t)
@@ -103,7 +108,11 @@ func encryptedTestLink(t *testing.T, endpoint func(int) string) (*socket.SocketI
 	cfg.MTU = 1380
 	cfg.TCPAckDelayMs = 0
 	s := socket.NewSocketInterface(cfg)
-	serverTun, err := NewWGTunWithConfig("encrypted-server", 1380, s, DefaultTunConfig())
+	var writer core.PacketWriter = s
+	if ingress != nil {
+		writer = ingress(s)
+	}
+	serverTun, err := NewWGTunWithConfig("encrypted-server", 1380, writer, DefaultTunConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
