@@ -213,6 +213,9 @@ func runEncryptedRecovery(t *testing.T, delay time.Duration) {
 				t.Fatal("TCP response outside bounded reply")
 			}
 			if phase == "renege" && ack == base && position != base {
+				if _, seen := reneged[position]; seen {
+					continue
+				}
 				// Report receipt, then deliberately discard: cumulative ACK is unchanged.
 				opts := []byte{1, 1, 5, 10, 0, 0, 0, 0, 0, 0, 0, 0}
 				binary.BigEndian.PutUint32(opts[4:8], position)
@@ -244,7 +247,7 @@ func runEncryptedRecovery(t *testing.T, delay time.Duration) {
 			sample()
 		}
 		if !bytes.Equal(got, payload) {
-			t.Fatal("TCP exact payload mismatch")
+			t.Fatalf("TCP exact payload mismatch: phase=%s received=%d want=%d pending=%d reneged=%d rto=%d", phase, len(got), size, len(pending), len(reneged), s.DetailedMetrics().TCPExt["rto"]-beforeRTO)
 		}
 		rto := s.DetailedMetrics().TCPExt["rto"] - beforeRTO
 		if phase == "burst-loss" && (rto < 2 || wan.dropped.Load() != 2) {

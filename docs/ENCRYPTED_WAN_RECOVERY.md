@@ -55,5 +55,20 @@ go test -v -race -tags=integration,wan -run='^TestEncryptedWANRecovery$' -timeou
 
 ## Results
 
-Pending execution. Preserve failures and do not relax criteria to obtain a pass.
+Run [37171673559](https://github.com/irctrakz/wgslirp/actions/runs/37171673559)
+(`e59d7ef`) passed the 20 ms consecutive-loss phase with two RTO events and
+reordering with exact payloads, then failed the reneging reply assertion. Race,
+capacity and image publication were skipped. Cgroup peak was 342,839,296 bytes,
+with zero memory/PID-limit events or OOM kill; container/tmpfs/image removal
+was verified.
+
+The timeout loop skipped selectively acknowledged data indefinitely. The fix
+invalidates advisory SACK state on timeout and retransmits the oldest outstanding
+segment under existing state/queue locks. A focused socket regression covers
+reneging both normally and across sequence-number wrap. The encrypted guest now
+sends each discarded block's SACK once, avoiding artificial repeated SACK storms;
+failure diagnostics include byte counts and recovery state. Payload/resource/time
+criteria remain unchanged. Successful execution is pending.
+
+Preserve failures and do not relax criteria to obtain a pass.
 The existing soak relay is shared without changing its original impairment policy.

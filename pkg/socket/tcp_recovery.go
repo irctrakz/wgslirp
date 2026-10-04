@@ -199,12 +199,21 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 		var packet core.Packet
 		for i := range f.txQueue {
 			seg := &f.txQueue[i]
-			if !seqAfter(seg.seq+uint32(len(seg.data)), f.sndUna) || isSACKed(f, seg.seq, seg.seq+uint32(len(seg.data))) {
+			if !seqAfter(seg.seq+uint32(len(seg.data)), f.sndUna) {
 				continue
 			}
 			if !seg.sentAt.IsZero() && now.Sub(seg.sentAt) < f.rto {
-				continue
+				break
 			}
+			// SACK is advisory: the receiver can discard those bytes. On RTO,
+			// invalidate the scoreboard and retry the oldest cumulatively
+			// unacknowledged segment, even if it was selectively acknowledged.
+			f.sackMu.Lock()
+			f.sackList = nil
+			f.sackMu.Unlock()
+			f.sackRecovery = false
+			f.dupAckCnt = 0
+			f.pipeBytes = 0
 			seg.sentAt = now
 			seg.retries++
 			seg.rtx = true
