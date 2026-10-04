@@ -30,6 +30,7 @@ jobs:
           mkdir -p evidence
           docker pull golang:1.23.12-bookworm
           docker image inspect golang:1.23.12-bookworm --format '{{json .RepoDigests}}' > evidence/toolchain-image.json
+          docker image inspect golang:1.23.12-bookworm --format '{{.Id}}' > evidence/toolchain-image-id.txt
           docker create --name "$CONTAINER" --user "$(id -u):$(id -g)" \
             --cpus=1 --memory=2g --memory-swap=2g --pids-limit=128 \
             --read-only --cap-drop=ALL --security-opt=no-new-privileges \
@@ -38,9 +39,10 @@ jobs:
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
             --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
             -e MODE -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
-            -e GOCACHE=/work/cache -e GOPATH=/work/gopath \
+            -e GOCACHE=/work/cache -e GOPATH=/work/gopath -e GOTMPDIR=/work/build \
             golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 600s bash -c '
               set -eu
+              mkdir -p "$GOTMPDIR"
               cp -a /src/. /work/source
               cd /work/source
               race_flag=""
@@ -68,7 +70,7 @@ jobs:
           test "$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER")" = 0
           test "$(docker inspect --format '{{.State.OOMKilled}}' "$CONTAINER")" = false
           grep -q 'CAPACITY_ACCEPTED' evidence/test.log
-      - name: Remove owned container
+      - name: Remove owned container and toolchain image
         if: always()
         shell: bash
         run: |
@@ -80,7 +82,15 @@ jobs:
             docker rm -f "$CONTAINER"
           fi
           test -z "$(docker ps -aq --filter "name=^/$CONTAINER$")"
-          echo 'Owned container and its tmpfs removed; no owned network or persistent volume created.' > evidence/cleanup.txt
+          if docker image inspect golang:1.23.12-bookworm >/dev/null 2>&1; then
+            image_id=$(docker image inspect golang:1.23.12-bookworm --format '{{.Id}}')
+            docker image rm golang:1.23.12-bookworm
+            if docker image inspect "$image_id" >/dev/null 2>&1; then
+              echo 'Toolchain image remains after removal' >&2
+              exit 1
+            fi
+          fi
+          echo 'Owned container, tmpfs and toolchain image removed; no owned network or persistent volume created.' > evidence/cleanup.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:

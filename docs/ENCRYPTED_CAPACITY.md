@@ -11,7 +11,10 @@ Run one fresh ordinary process and one fresh race process, sequentially, on
 GitHub-hosted Linux runners. The private server remains unused. Each container
 has 1 CPU, 2 GiB RAM/no swap, 128 PIDs, read-only root, no capabilities, bounded
 768 MiB work and 64 MiB temporary filesystems, and bounded logs. Module download
-and compilation occur inside those bounds. The container has a 600-second
+and compilation occur inside those bounds, with Go build scratch space explicitly
+under `/work/build`. Cleanup removes the container, its tmpfs and the downloaded
+toolchain image; evidence is retained for 14 days. Published GHCR application
+images are retained separately. The container has a 600-second
 deadline, the test 420 seconds and workload checks a six-minute ceiling.
 
 Workload and pass criteria:
@@ -77,5 +80,14 @@ profile into a UDP capacity measurement.
 
 ## Results
 
-Pending execution. Record both process variants and failures; do not adjust
-acceptance thresholds to make a failed run pass.
+Run [37149852601](https://github.com/irctrakz/wgslirp/actions/runs/37149852601)
+failed during compilation, before the capacity workload: Go used the 64 MiB
+`/tmp` for build scratch space and exhausted it. Cgroup peak was 324,509,696 bytes,
+with zero memory/PID-limit events and no OOM kill. Container/tmpfs cleanup was
+verified; the toolchain image was left for disposable-runner teardown. Race and
+application-image publication did not run. The harness now places build scratch
+space in the existing 768 MiB `/work` and explicitly removes its toolchain image.
+Resource and workload acceptance ceilings are unchanged.
+
+Successful execution remains pending. Record both process variants and failures;
+do not adjust acceptance thresholds to make a failed run pass.
