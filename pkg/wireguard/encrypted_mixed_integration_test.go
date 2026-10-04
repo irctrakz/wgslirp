@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,12 +145,23 @@ func runEncryptedMixed(t *testing.T) {
 		go func() { defer workers.Done(); results <- f() }()
 	}
 	t.Cleanup(func() { cancel(); listener.Close(); udp.Close(); workers.Wait() })
+	hostStop := make(chan struct{})
+	var accepted, empty atomic.Uint64
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("MIXED_FAILURE accepted=%d empty=%d metrics=%+v", accepted.Load(), empty.Load(), s.DetailedMetrics())
+		}
+	})
 	launch(func() error {
 		var handlers sync.WaitGroup
 		defer handlers.Wait()
 		limit := make(chan struct{}, 6)
-		errors := make(chan error, 130)
-		for i := 0; i < 130; i++ {
+		errors := make(chan error, 260)
+		// A timed-out fast dial can be accepted before cancellation reaches the
+		// host. Its asynchronous replacement is a second socket for one request.
+		// Serve until clients finish, with at most two accepts per intended flow.
+	acceptLoop:
+		for accepted.Load() < 260 {
 			select {
 			case limit <- struct{}{}:
 			case <-ctx.Done():
@@ -158,8 +170,14 @@ func runEncryptedMixed(t *testing.T) {
 			c, err := listener.AcceptTCP()
 			if err != nil {
 				<-limit
-				return fmt.Errorf("host accept: %w", err)
+				select {
+				case <-hostStop:
+					break acceptLoop
+				default:
+					return fmt.Errorf("host accept: %w", err)
+				}
 			}
+			accepted.Add(1)
 			handlers.Add(1)
 			go func() {
 				defer handlers.Done()
@@ -169,12 +187,20 @@ func runEncryptedMixed(t *testing.T) {
 					errors <- err
 					return
 				}
-				_, err := io.Copy(c, c)
+				n, err := io.Copy(c, c)
+				if n == 0 {
+					empty.Add(1)
+				}
 				errors <- err
 			}()
 		}
+		select {
+		case <-hostStop:
+		case <-ctx.Done():
+			return fmt.Errorf("host accept limit: %w", ctx.Err())
+		}
 		handlers.Wait()
-		for i := 0; i < 130; i++ {
+		for i := uint64(0); i < accepted.Load(); i++ {
 			if err := <-errors; err != nil {
 				return fmt.Errorf("host echo: %w", err)
 			}
@@ -296,7 +322,7 @@ func runEncryptedMixed(t *testing.T) {
 	})
 	started := time.Now()
 	close(start)
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 8; i++ {
 		select {
 		case err := <-results:
 			if err != nil {
@@ -306,7 +332,15 @@ func runEncryptedMixed(t *testing.T) {
 			t.Fatal("mixed workload deadline")
 		}
 	}
+	close(hostStop)
+	listener.Close()
+	if err := <-results; err != nil {
+		t.Fatal(err)
+	}
 	workers.Wait()
+	if accepted.Load()-empty.Load() != 130 {
+		t.Fatalf("host payload connection count: accepted=%d empty=%d", accepted.Load(), empty.Load())
+	}
 	sort.Slice(handshakes, func(i, j int) bool { return handshakes[i] < handshakes[j] })
 	if len(handshakes) != 130 || handshakes[129] > 5*time.Second {
 		t.Fatalf("handshake bound/count: %v", handshakes)
@@ -318,5 +352,5 @@ func runEncryptedMixed(t *testing.T) {
 	if m.TCP.ActiveFlows != 0 || m.UDP.ActiveFlows != 0 || m.TCPExt["socket_buffer_bytes"] != 0 || m.TCPExt["dial_reserved"] != 0 || m.TCP.DeliveryRefused != 0 {
 		t.Fatalf("unclean metrics: %+v", m)
 	}
-	t.Logf("MIXED_RESULTS elapsed_ms=%d handshakes=130 handshake_p50_us=%d handshake_p95_us=%d handshake_max_us=%d buffer_peak=%d", time.Since(started).Milliseconds(), handshakes[64].Microseconds(), handshakes[123].Microseconds(), handshakes[129].Microseconds(), m.TCPExt["socket_buffer_peak"])
+	t.Logf("MIXED_RESULTS elapsed_ms=%d handshakes=130 handshake_p50_us=%d handshake_p95_us=%d handshake_max_us=%d buffer_peak=%d host_accepted=%d host_empty=%d async_dials=%d", time.Since(started).Milliseconds(), handshakes[64].Microseconds(), handshakes[123].Microseconds(), handshakes[129].Microseconds(), m.TCPExt["socket_buffer_peak"], accepted.Load(), empty.Load(), m.TCPExt["dial_start"])
 }
