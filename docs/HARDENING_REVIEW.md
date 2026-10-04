@@ -82,6 +82,16 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Mixed workload and TCP simplicity (2026-10-04):** the next independent-peer
+gate and its predeclared limits are in [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md).
+The first private cleanup removes write-only `rtx`/`pipeBytes` state and the
+sole no-op `OnSent` callback; retransmission counts, decisions and lock ownership
+are preserved. Linux cross-compilation and socket vet passed; runtime CI is
+pending. Further candidates require separate review: redundant congestion-control
+enable state, duplicate MSS state, and repeated async-dial completion accounting.
+Do not combine these with a lock rewrite or replace protocol tests with line-count
+claims. Independent-peer WAN, failure and saturation stages remain follow-ups.
+
 **Deferred research (2026-10-04):** the scoped
 [Lean verification proposal](LEAN_VERIFICATION_PROPOSAL.md) is captured for later.
 No formal-verification work is active and no Go implementation proof is claimed.

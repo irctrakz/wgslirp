@@ -26,11 +26,18 @@ jobs:
       workload: wan
 
   encrypted-sustained:
-    needs: test
+    needs: [test, encrypted-mixed]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/capacity.yml
     with:
       workload: sustained
+
+  encrypted-mixed:
+    needs: test
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    uses: ./.github/workflows/capacity.yml
+    with:
+      workload: mixed
 
   release-image-test:
     needs: [test, encrypted-capacity]
