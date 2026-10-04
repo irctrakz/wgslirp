@@ -1,6 +1,6 @@
 # Architecture improvement plan
 
-**Current progress and remaining work (updated 2026-10-03):** see
+**Current progress and remaining work (updated 2026-10-04):** see
 [HARDENING_REVIEW.md](HARDENING_REVIEW.md) for the consolidated backlog,
 benchmark limitations and code-simplicity review. The checkpoints below retain
 their historical revision context; they are not a second current todo list.
@@ -9,8 +9,12 @@ RTO/receiver-reneging gates now have ordinary and race evidence in
 [ENCRYPTED_CAPACITY.md](ENCRYPTED_CAPACITY.md) and
 [ENCRYPTED_WAN_RECOVERY.md](ENCRYPTED_WAN_RECOVERY.md). The WAN gate exposed and
 fixed stale SACK state suppressing retransmission after receiver reneging.
-Larger sustained/mixed profiles and workload-specific impairment distributions
-remain scoped follow-ups; F10 is not universally complete. Release-image
+A paced 15.75 MiB persistent TCP/UDP profile with seeded and burst ACK/uplink
+loss also passed ordinary/race checks; see [ENCRYPTED_SUSTAINED.md](ENCRYPTED_SUSTAINED.md).
+Higher concurrent/saturation profiles and deployment-specific impairment
+distributions remain scope decisions; F10 is not universally complete. The
+[Lean verification proposal](LEAN_VERIFICATION_PROPOSAL.md) is deferred, with no
+formal verification implementation active. Release-image
 validation/promotion is documented in [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md).
 
 ## Objective and evidence

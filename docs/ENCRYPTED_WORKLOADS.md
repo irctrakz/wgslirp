@@ -7,6 +7,13 @@ The latter verifies actual RTO recovery, reordering and receiver reneging at
 20/60 ms each-way delay. These separate profiles do not revise A1's limits or
 erase the historical failures below.
 
+**Sustained evidence update (2026-10-04):** a separate
+[15.75 MiB paced TCP/UDP profile](ENCRYPTED_SUSTAINED.md) passed ordinary/race
+checks for baseline, seeded and burst ACK/uplink loss, including real server RTO,
+guest retransmission, exact bytes and natural GC. Loss is classified after
+decryption at bridge ingress; this does not replace ciphertext WAN-loss coverage
+or establish production saturation/long-duration capacity.
+
 **Current status (2026-09-22):** the separately defined A1 natural-GC acceptance
 profile passed three fresh-process ordinary runs and three fresh-process race
 runs. The original tighter 64 MiB/30-second profile and its failures remain below

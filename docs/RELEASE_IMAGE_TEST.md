@@ -14,7 +14,7 @@ harness does not authorize host image builds, pulls or Docker socket mounts.
 
 Push to `codex/architecture-hardening` to run `.github/workflows/docker.yml`.
 The development-only `release-image-test` job depends on the ordinary Go checks
-and sequential ordinary/race WAN and capacity gates;
+and sequential ordinary/race sustained-loss, WAN and capacity gates;
 `promote-development` depends on successful image validation. Publication is
 restricted to `irctrakz/wgslirp` and that exact branch on push/manual events;
 pull requests cannot enter these jobs. No default-branch change is required for
@@ -92,6 +92,28 @@ not evidence of acceptance. Runner cleanup removes local resources only, and
 seven-day Actions artifact expiry does not delete registry images. Registry
 retention/deletion remains an explicit maintenance decision; this workflow does
 not request package-administration privileges or delete published versions.
+
+## Sustained-loss release verification — 2026-10-04
+
+[Run 37222442219](https://github.com/irctrakz/wgslirp/actions/runs/37222442219)
+passed for `672a852986c54a13c8bfbdbcfa2540df9370301e`: standard regression and
+fuzz checks, both sustained-loss modes, both WAN modes, both capacity modes and
+actual-image validation. The ordinary/race sustained profiles each checked
+15.75 MiB with seeded and burst ACK/uplink loss; see
+[ENCRYPTED_SUSTAINED.md](ENCRYPTED_SUSTAINED.md).
+
+The non-root UID-100 image passed encrypted TCP/UDP forwarding and SIGTERM under
+traffic in 153.8 ms, under the unchanged dropped-capability, read-only,
+1 CPU/256 MiB/no-swap/128-PID profile. The tested and promoted digest is:
+
+```text
+ghcr.io/irctrakz/wgslirp@sha256:8d1031fd3208cd233f3411652d5735963355ecc87e5cc73e644b2731c63b3c65
+```
+
+Tag: `dev-672a852986c54a13c8bfbdbcfa2540df9370301e-37222442219-1`.
+Cleanup verified no owned container, network, builder, cache volume or local
+image remained. GHCR versions are retained. Main/master, latest and the private
+server were untouched; validation covers Linux/amd64 only.
 
 ## WAN recovery release verification — 2026-10-04
 

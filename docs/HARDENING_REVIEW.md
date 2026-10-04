@@ -153,9 +153,12 @@ do not combine the list into a general rewrite.
   each-way encrypted profiles also passed ordinary/race checks for consecutive
   loss, reordering, actual RTO and receiver reneging. The new gate exposed and
   fixed stale SACK state preventing timeout recovery; see
-  [WAN evidence](ENCRYPTED_WAN_RECOVERY.md). Remaining: larger sustained/mixed
-  workloads and workload-driven impairment distributions (including ACK/uplink
-  loss); run full-sequence scenarios only when
+  [WAN evidence](ENCRYPTED_WAN_RECOVERY.md). A larger paced TCP/UDP workload now
+  passes ordinary/race gates: 384 rounds, 15.75 MiB, baseline/seeded/burst
+  ACK and uplink loss, real timeout recovery and natural GC. See
+  [sustained acceptance and failed trace](ENCRYPTED_SUSTAINED.md).
+  Remaining scope decisions: higher concurrent/saturation workloads and
+  deployment-derived impairment distributions; run full-sequence scenarios only when
   justified by supported workload claims. Declare duration/load/memory/failure
   criteria before each stage and stop on failure. No overnight tests. Recheck
   representative performance after the TCP simplifications.

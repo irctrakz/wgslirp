@@ -91,5 +91,59 @@ not a production recovery fix. Cgroup peak was 340,750,336 bytes, with zero
 memory/PID limit events or OOM; container/tmpfs/image cleanup was verified.
 Race and downstream gates were skipped.
 
-Acceptance remains pending. Larger concurrent/saturation, full-sequence and
-deployment-specific traffic distributions remain separate scope decisions.
+### Accepted finite profile — 2026-10-04
+
+[Run 37222442219](https://github.com/irctrakz/wgslirp/actions/runs/37222442219),
+source `672a852`, passed both fresh-process variants sequentially. Each checked
+384 rounds and exactly 16,515,072 application bytes, including all UDP echoes.
+Only the ACK burst period changed after the first failure; acceptance thresholds
+and production code are unchanged.
+
+| Mode / phase | Data attempts / drops | ACK attempts / drops | Guest retries | Server RTOs | Duration (s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ordinary / baseline | 1,024 / 0 | 4,097 / 0 | 0 | 0 | 51.265 |
+| Ordinary / seeded | 1,113 / 89 | 4,102 / 329 | 89 | 19 | 57.211 |
+| Ordinary / bursts | 1,094 / 70 | 4,106 / 266 | 70 | 10 | 57.897 |
+| Race / baseline | 1,024 / 0 | 4,097 / 0 | 0 | 0 | 51.270 |
+| Race / seeded | 1,113 / 89 | 4,099 / 329 | 89 | 17 | 57.175 |
+| Race / bursts | 1,094 / 70 | 4,106 / 266 | 70 | 10 | 58.681 |
+
+Both observed longest seeded drop runs of three packets and burst runs of two,
+for both data and ACKs. Actual attempt counts can depend on scheduling and
+retransmission timing even with the same seeds. The initial rejected trace
+demonstrates why observed recovery counters matter in addition to byte equality.
+
+| Resource | Ordinary | Race |
+| --- | ---: | ---: |
+| Sampled heap peak (bytes) | 93,140,704 | 101,014,960 |
+| Sampled RSS peak (bytes) | 70,033,408 | 339,423,232 |
+| Natural GCs after initialization | 10 | 37 |
+| Socket buffer peak (bytes) | 80,439 | 80,439 |
+| Cgroup peak including compilation/tmpfs (bytes) | 338,817,024 | 590,196,736 |
+| Whole Go test (s) | 166.436 | 168.250 |
+
+There were no forced collections, memory/PID limit events, OOM kills or race
+reports. Final flows, dial/buffer reservations and TCP delivery refusals were
+zero, and worker cleanup passed. Both artifacts verify container/tmpfs/toolchain
+image removal. Race teardown logged one late guest reset rejected after socket
+Stop; injection is asynchronous and this control packet raced shutdown. It did
+not affect application delivery or the independently checked cleanup invariants.
+
+These results establish this paced one-pair profile, not saturation throughput,
+per-instance memory cost or immediate return to cold RSS. Larger concurrent/
+saturation, full-sequence and deployment-specific traffic distributions remain
+separate scope decisions.
+
+The same run also passed standard build/vet, module verification, race unit and
+integration tests, both fuzz targets, ordinary/race WAN and real TIME-WAIT capacity
+gates, and actual-image forwarding/SIGTERM validation. The tested Linux/amd64
+image was promoted without rebuilding:
+
+```text
+ghcr.io/irctrakz/wgslirp@sha256:8d1031fd3208cd233f3411652d5735963355ecc87e5cc73e644b2731c63b3c65
+```
+
+Non-root image shutdown under traffic completed in 153.8 ms. Release cleanup
+verified no owned containers, network, builder, cache volume or local image
+remained. GHCR versions are retained; the private server was unused. All work
+remains on the development branch, with main/master and latest untouched.
