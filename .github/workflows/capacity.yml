@@ -1,7 +1,11 @@
-name: Bounded encrypted capacity
+name: Bounded encrypted workloads
 
 on:
   workflow_call:
+    inputs:
+      workload:
+        type: string
+        default: capacity
 
 permissions:
   contents: read
@@ -17,7 +21,8 @@ jobs:
         mode: [ordinary, race]
     env:
       MODE: ${{ matrix.mode }}
-      CONTAINER: wgslirp-capacity-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
+      WORKLOAD: ${{ inputs.workload }}
+      CONTAINER: wgslirp-${{ inputs.workload }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,7 +43,7 @@ jobs:
             --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777 \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
             --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
-            -e MODE -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
+            -e MODE -e WORKLOAD -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
             -e GOCACHE=/work/cache -e GOPATH=/work/gopath -e GOTMPDIR=/work/build \
             golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 600s bash -c '
               set -eu
@@ -47,8 +52,13 @@ jobs:
               cd /work/source
               race_flag=""
               if [ "$MODE" = race ]; then race_flag=-race; fi
+              case "$WORKLOAD" in
+                capacity) test_name=TestEncryptedChurnCapacity; test_timeout=420s ;;
+                wan) test_name=TestEncryptedWANRecovery; test_timeout=120s ;;
+                *) echo "Unknown workload" >&2; exit 1 ;;
+              esac
               set +e
-              go test $race_flag -v -tags=integration,capacity -run="^TestEncryptedChurnCapacity$" -timeout=420s -count=1 -parallel=1 ./pkg/wireguard
+              go test $race_flag -v -tags="integration,$WORKLOAD" -run="^${test_name}$" -timeout="$test_timeout" -count=1 -parallel=1 ./pkg/wireguard
               result=$?
               set -e
               echo CGROUP_MEMORY_PEAK
@@ -69,7 +79,11 @@ jobs:
           timeout --signal=TERM --kill-after=15s 620s docker start --attach "$CONTAINER" 2>&1 | tee evidence/test.log
           test "$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER")" = 0
           test "$(docker inspect --format '{{.State.OOMKilled}}' "$CONTAINER")" = false
-          grep -q 'CAPACITY_ACCEPTED' evidence/test.log
+          case "$WORKLOAD" in
+            capacity) grep -q 'CAPACITY_ACCEPTED' evidence/test.log ;;
+            wan) grep -q 'WAN_ACCEPTED' evidence/test.log ;;
+            *) exit 1 ;;
+          esac
       - name: Remove owned container and toolchain image
         if: always()
         shell: bash
@@ -94,7 +108,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: capacity-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.workload }}-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/
           retention-days: 14
           if-no-files-found: error

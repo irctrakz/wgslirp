@@ -14,9 +14,16 @@ jobs:
     uses: ./.github/workflows/go.yml
 
   encrypted-capacity:
+    needs: [test, encrypted-wan]
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    uses: ./.github/workflows/capacity.yml
+
+  encrypted-wan:
     needs: test
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/capacity.yml
+    with:
+      workload: wan
 
   release-image-test:
     needs: [test, encrypted-capacity]
