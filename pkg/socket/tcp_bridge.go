@@ -27,10 +27,8 @@ import (
 //   * Fast retransmit on 3 duplicate ACKs.
 //   * Simple RTO with exponential backoff and a retransmission queue.
 // - Applies backpressure end-to-end:
-//   * Reader pauses when per-flow queues exceed a high watermark and resumes
-//     on a low watermark.
-//   * Scheduler cooperates with downstream (e.g., WG TUN) backpressure by
-//     requeueing and yielding briefly instead of dropping.
+//   * Reader waits for ACK/window progress when send allowances are exhausted.
+//   * Retained payloads are charged to per-flow and aggregate buffer limits.
 //
 // The goal is a robust, generic TCP bridge that relies on TCP flow control and
 // retransmission rather than protocol-specific tweaks.
@@ -207,7 +205,6 @@ type tcpFlow struct {
 		data    []byte
 		sentAt  time.Time
 		retries int
-		rtx     bool
 	}
 	dupAckCnt int
 	// RTT/RTO estimation (RFC 6298)
@@ -219,12 +216,9 @@ type tcpFlow struct {
 	// Notify sender when ACK/window updates arrive.
 	ackCh chan struct{}
 
-	// handshake state
-
 	// SACK loss recovery (RFC 6675 simplified)
 	sackRecovery bool
 	recover      uint32
-	pipeBytes    int
 
 	// SACK support
 	sackPermitted bool

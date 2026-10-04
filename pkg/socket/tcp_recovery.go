@@ -113,7 +113,6 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 		}
 		inFlight += len(s.data)
 	}
-	f.pipeBytes = inFlight
 	cw := b.cwndBytes(f)
 	budget := cw - inFlight
 	if budget < 1 {
@@ -141,7 +140,6 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 	// Mark retransmit
 	f.txQueue[idx].sentAt = time.Now()
 	f.txQueue[idx].retries++
-	f.txQueue[idx].rtx = true
 	f.txMu.Unlock()
 
 	tosOut, ttlOut := f.tos, f.ttl
@@ -213,10 +211,8 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 			f.sackMu.Unlock()
 			f.sackRecovery = false
 			f.dupAckCnt = 0
-			f.pipeBytes = 0
 			seg.sentAt = now
 			seg.retries++
-			seg.rtx = true
 			f.rto = minDur(2*f.rto, 2*time.Second)
 			tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
 			packet = b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seg.seq, f.clientNxt, 0x18, seg.data, tos, ttl)

@@ -175,7 +175,6 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 			data    []byte
 			sentAt  time.Time
 			retries int
-			rtx     bool
 		}{seq: seq, data: data, sentAt: time.Now()})
 		f.txMu.Unlock()
 		tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
@@ -183,9 +182,6 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 		if b.sendToGuest(f, pkt) {
 			f.toCliBytes += uint64(size)
 			f.toCliPkts++
-		}
-		if f.ccEnabled && f.cc != nil {
-			f.cc.OnSent(size)
 		}
 		f.stateMu.Unlock()
 		offset += size
