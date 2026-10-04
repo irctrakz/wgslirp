@@ -142,9 +142,12 @@ do not combine the list into a general rewrite.
   socket requirements. Decide which optional raw mode is supported and validate
   that scope, or explicitly exclude it. Do not reopen completed sysctl work.
 - [ ] **R6 — Expand bounded workload evidence (A5 / remaining F10e).**
-  Prioritize encrypted churn/cap sizing and meaningful handshake samples, then
-  calibrated delay/loss/reordering with actual RTO and receiver-reneging cases.
-  Include elapsed-wall-clock expiry; run full-sequence scenarios only when
+  Encrypted churn/default-capacity coverage passed ordinary and race runs on
+  2026-10-03: 256 measured handshakes, 64 simultaneous flows, refusal/progress
+  checks, actual four-minute TIME-WAIT expiry and capacity recovery. See
+  [acceptance and failure evidence](ENCRYPTED_CAPACITY.md). Remaining: calibrated
+  delay/loss/reordering with actual RTO and receiver-reneging cases; run
+  full-sequence scenarios only when
   justified by supported workload claims. Declare duration/load/memory/failure
   criteria before each stage and stop on failure. No overnight tests. Recheck
   representative performance after the TCP simplifications.

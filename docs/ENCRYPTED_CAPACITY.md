@@ -89,5 +89,33 @@ application-image publication did not run. The harness now places build scratch
 space in the existing 768 MiB `/work` and explicitly removes its toolchain image.
 Resource and workload acceptance ceilings are unchanged.
 
-Successful execution remains pending. Record both process variants and failures;
-do not adjust acceptance thresholds to make a failed run pass.
+### Accepted ordinary and race profile — 2026-10-03
+
+[Run 37165341911](https://github.com/irctrakz/wgslirp/actions/runs/37165341911),
+source `fc0a4ba`, passed both fresh-process variants sequentially. The workload
+and resource ceilings above were unchanged after correcting build scratch space.
+
+| Measurement | Ordinary | Race |
+| --- | ---: | ---: |
+| Warm samples | 256 | 256 |
+| Cold SYN-ACK (µs) | 4,060 | 52,293 |
+| Warm p50 / p95 / p99 / max (µs) | 68 / 81 / 105 / 192 | 542 / 646 / 1,062 / 8,169 |
+| TIME-WAIT through recovery (ms) | 240,073 | 240,141 |
+| Sampled heap peak (bytes) | 63,478,160 | 94,905,440 |
+| Sampled RSS peak (bytes) | 37,511,168 | 337,002,496 |
+| Cgroup peak including compilation/tmpfs (bytes) | 344,289,280 | 585,740,288 |
+| Socket buffer peak (bytes) | 201,168 | 201,168 |
+| Workload elapsed (ms) | 240,457 | 241,152 |
+
+Both verified 64 simultaneous flows, two signaled/accounted refusals, progress
+on an admitted flow after refusal, actual four-minute TIME-WAIT retention and
+successful admission after expiry. Both finished with 329 created/closed flows,
+zero active flows, pending dials and reserved socket buffers, no downstream
+delivery refusals, and worker cleanup within the declared allowance. The two
+`flow limit reached` log entries per run are the expected negative controls.
+There were no race reports, OOM kills or cgroup memory/PID-limit events.
+
+Both artifacts verify removal of the container, tmpfs and downloaded toolchain
+image. No dedicated network or persistent volume was created. This is one
+ordinary/race pair, not a statistical production-capacity guarantee. Calibrated
+WAN and recovery workloads remain outstanding as described above.
