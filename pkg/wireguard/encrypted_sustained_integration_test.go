@@ -68,7 +68,12 @@ func (w *sustainedIngress) WritePacket(packet core.Packet) error {
 				w.rng[class] = x
 				drop = x%100 < 8
 			case "bursts":
-				drop = (w.seen[class]-1)%32 < 2
+				period := uint64(32)
+				if class == 1 {
+					// Do not align ACK loss with the 32-segment reply window pattern.
+					period = 31
+				}
+				drop = (w.seen[class]-1)%period < 2
 			}
 			if drop {
 				w.dropped[class]++

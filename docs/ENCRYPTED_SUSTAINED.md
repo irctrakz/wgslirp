@@ -30,8 +30,9 @@ delay. The sustained profile adds no artificial latency, downlink loss or UDP lo
   `0x12345678` and `0x87654321`, dropping when `value % 100 < 8`. This is a
   reproducible synthetic packet-attempt distribution, not a measured network
   distribution or an exact 8% quota. Report observed counts and burst lengths.
-- Burst loss drops the first two of each 32 eligible attempts separately for
-  data and pure ACKs. Require observed maximum runs of exactly two drops.
+- Burst loss drops the first two of each 32 eligible data attempts and each 31
+  pure ACK attempts. The unequal periods avoid aliasing ACK loss with the
+  32-segment reply pattern. Require observed maximum runs of exactly two drops.
 - SYN/FIN/RST, UDP and other protocols are excluded. ACKs piggybacked on data
   follow the data policy. TCP downstream payloads are not deliberately dropped.
 - The fixture guest retransmits an uplink segment after 250 ms, with at most four
@@ -72,6 +73,23 @@ go test -v -race -tags=integration,sustained -run='^TestEncryptedSustainedLoss$'
 
 ## Results
 
-Pending execution. Preserve failures and record measurements before claiming
-acceptance. Larger concurrent/saturation, full-sequence and deployment-specific
-traffic distributions remain separate scope decisions.
+### Initial trace failure — 2026-10-04
+
+[Run 37221997690](https://github.com/irctrakz/wgslirp/actions/runs/37221997690)
+(`f0e7e41`) completed all 384 rounds with exact payloads. Baseline took 51.271 s
+with zero loss/retries/RTO. Seeded loss took 57.104 s, recording 89 data drops,
+329 ACK drops, 89 guest retries and 19 server RTOs. Burst loss took 55.786 s,
+recording 70 data drops, 256 ACK drops and 70 guest retries, but **zero server
+RTOs**; the gate correctly rejected insufficient ACK-timeout evidence.
+
+The initial trace dropped the first two of every 32 ACK attempts, which aligned
+with exactly 32 ACKs per reply. Later cumulative ACKs covered every loss.
+The revised ACK burst period is 31 (data remains 32), exercising different
+positions without weakening the positive-RTO criterion. Payload, duration and
+resource thresholds are unchanged. This is a fixture distribution correction,
+not a production recovery fix. Cgroup peak was 340,750,336 bytes, with zero
+memory/PID limit events or OOM; container/tmpfs/image cleanup was verified.
+Race and downstream gates were skipped.
+
+Acceptance remains pending. Larger concurrent/saturation, full-sequence and
+deployment-specific traffic distributions remain separate scope decisions.
