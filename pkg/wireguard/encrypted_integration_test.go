@@ -100,6 +100,10 @@ func encryptedTestLink(t *testing.T, endpoint func(int) string) (*socket.SocketI
 
 // Optional test-only ingress wrapping keeps loss classification after decryption.
 func encryptedTestLinkWithIngress(t *testing.T, endpoint func(int) string, ingress func(*socket.SocketInterface) core.PacketWriter) (*socket.SocketInterface, *WGTun, encryptedGuestSink) {
+	return encryptedTestLinkWithConfig(t, endpoint, ingress, nil)
+}
+
+func encryptedTestLinkWithConfig(t *testing.T, endpoint func(int) string, ingress func(*socket.SocketInterface) core.PacketWriter, configure func(*socket.Config)) (*socket.SocketInterface, *WGTun, encryptedGuestSink) {
 	t.Helper()
 	serverPrivate, serverPublic := encryptedKey(t)
 	guestPrivate, guestPublic := encryptedKey(t)
@@ -107,6 +111,9 @@ func encryptedTestLinkWithIngress(t *testing.T, endpoint func(int) string, ingre
 	cfg.Protocol = "ip4:tcp"
 	cfg.MTU = 1380
 	cfg.TCPAckDelayMs = 0
+	if configure != nil {
+		configure(&cfg)
+	}
 	s := socket.NewSocketInterface(cfg)
 	var writer core.PacketWriter = s
 	if ingress != nil {
@@ -157,11 +164,24 @@ func encryptedTestLinkWithIngress(t *testing.T, endpoint func(int) string, ingre
 }
 
 func TestEncryptedWireGuardTCPUDP(t *testing.T) {
-	_, guestTun, responses := encryptedTestLink(t, func(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) })
+	t.Run("ordinary", func(t *testing.T) { testEncryptedWireGuardTCPUDP(t, false) })
+	t.Run("fragments", func(t *testing.T) { testEncryptedWireGuardTCPUDP(t, true) })
+}
+
+func testEncryptedWireGuardTCPUDP(t *testing.T, fragments bool) {
+	s, guestTun, responses := encryptedTestLinkWithConfig(t, func(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }, nil, func(cfg *socket.Config) { cfg.IPv4Reassembly = fragments })
+	var id uint16
 	send := func(p []byte) {
 		t.Helper()
-		if err := guestTun.InjectToPeer(p); err != nil {
-			t.Fatal(err)
+		packets := [][]byte{p}
+		if fragments {
+			id++
+			packets = encryptedFragments(p, id, 8)
+		}
+		for _, packet := range packets {
+			if err := guestTun.InjectToPeer(packet); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	receive := func(proto byte) []byte {
@@ -252,4 +272,40 @@ func TestEncryptedWireGuardTCPUDP(t *testing.T) {
 	}
 	// Exercise encrypted guest reset and join all production workers on cleanup.
 	send(encryptedPacket(6, tcpPort, 101+uint32(len(payload)), ack, 0x14, nil))
+	if fragments {
+		metrics := s.DetailedMetrics().IPv4Fragments
+		if metrics["completed"] < 3 || metrics["duplicates"] < 3 {
+			t.Fatal("encrypted fragments did not reach reassembly", metrics)
+		}
+	}
+}
+
+// Independent wire encoder: duplicate fragment zero before completion, then
+// deliver the remaining disjoint ranges in reverse order. chunk must be aligned.
+func encryptedFragments(packet []byte, id uint16, chunk int) [][]byte {
+	var ordered [][]byte
+	body := packet[20:]
+	for offset := 0; offset < len(body); offset += chunk {
+		end := offset + chunk
+		if end > len(body) {
+			end = len(body)
+		}
+		p := append([]byte(nil), packet[:20]...)
+		p = append(p, body[offset:end]...)
+		binary.BigEndian.PutUint16(p[2:4], uint16(len(p)))
+		binary.BigEndian.PutUint16(p[4:6], id)
+		flags := uint16(offset / 8)
+		if end < len(body) {
+			flags |= 0x2000
+		}
+		binary.BigEndian.PutUint16(p[6:8], flags)
+		p[10], p[11] = 0, 0
+		binary.BigEndian.PutUint16(p[10:12], encryptedChecksum(p[:20]))
+		ordered = append(ordered, p)
+	}
+	result := [][]byte{ordered[0], ordered[0]}
+	for i := len(ordered) - 1; i > 0; i-- {
+		result = append(result, ordered[i])
+	}
+	return result
 }

@@ -21,6 +21,11 @@ import (
 // This fixture controls Docker on a disposable runner; the tested application
 // receives neither the Docker socket nor privileges. Select it explicitly.
 func TestReleaseImage(t *testing.T) {
+	t.Run("default", func(t *testing.T) { testReleaseImage(t, false) })
+	t.Run("fragments", func(t *testing.T) { testReleaseImage(t, true) })
+}
+
+func testReleaseImage(t *testing.T, reassembly bool) {
 	image := os.Getenv("WGSLIRP_RELEASE_IMAGE")
 	if image == "" {
 		t.Skip("set WGSLIRP_RELEASE_IMAGE to an already-built release image")
@@ -30,6 +35,9 @@ func TestReleaseImage(t *testing.T) {
 		t.Fatal("a dedicated alphanumeric WGSLIRP_RELEASE_RUN is required")
 	}
 	name := "wgslirp-release-" + run
+	if reassembly {
+		name += "-fragments"
+	}
 	label := "wgslirp.release.run=" + run
 	docker := func(args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -48,13 +56,17 @@ func TestReleaseImage(t *testing.T) {
 		}
 		return out
 	}
-	report := map[string]any{"image": image, "source_commit": os.Getenv("WGSLIRP_RELEASE_COMMIT"), "run": run}
+	report := map[string]any{"image": image, "source_commit": os.Getenv("WGSLIRP_RELEASE_COMMIT"), "run": run, "ipv4_reassembly": reassembly}
 	t.Cleanup(func() {
 		report["passed"] = !t.Failed()
 		if dir := os.Getenv("WGSLIRP_RELEASE_REPORT"); dir != "" {
 			data, err := json.MarshalIndent(report, "", "  ")
 			if err == nil {
-				err = os.WriteFile(filepath.Join(dir, "runtime.json"), data, 0600)
+				file := "runtime-default.json"
+				if reassembly {
+					file = "runtime.json"
+				}
+				err = os.WriteFile(filepath.Join(dir, file), data, 0600)
 			}
 			if err != nil {
 				t.Error(err)
@@ -76,6 +88,9 @@ func TestReleaseImage(t *testing.T) {
 	config := strings.Join([]string{"WG_PRIVATE_KEY=" + serverPrivate, "WG_LISTEN_PORT=51820", "WG_MTU=1380",
 		"METRICS_INTERVAL=50ms", "METRICS_FORMAT=text",
 		"WG_PEER_0_PUBLIC_KEY=" + guestPublic, "WG_PEER_0_ALLOWED_IPS=10.0.0.2/32"}, "\n") + "\n"
+	if reassembly {
+		config += "IPV4_REASSEMBLY=true\n"
+	}
 	envFile := filepath.Join(t.TempDir(), "device.env")
 	if err := os.WriteFile(envFile, []byte(config), 0600); err != nil {
 		t.Fatal(err)
@@ -170,6 +185,8 @@ func TestReleaseImage(t *testing.T) {
 	port := uint16(listener.Addr().(*net.TCPAddr).Port)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	fragmentTraffic := reassembly
+	var datagramID uint16
 	send := func(proto byte, dstPort uint16, seq, ack uint32, flags byte, payload []byte) error {
 		p := encryptedPacket(proto, dstPort, seq, ack, flags, payload)
 		copy(p[16:20], gateway)
@@ -188,6 +205,15 @@ func TestReleaseImage(t *testing.T) {
 			checksum = 0xffff
 		}
 		binary.BigEndian.PutUint16(p[offset:offset+2], checksum)
+		if fragmentTraffic {
+			datagramID++
+			for _, fragment := range encryptedFragments(p, datagramID, 16) {
+				if err := guestTun.InjectToPeer(fragment); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		return guestTun.InjectToPeer(p)
 	}
 	receive := func(proto byte) ([]byte, error) {
@@ -299,19 +325,28 @@ func TestReleaseImage(t *testing.T) {
 	}
 	report["verified_tcp_udp_rounds"] = 8
 	// Exercise the actual wireguard-go error callback with a bounded encrypted
-	// fragment burst. Fragments remain rejected; subsequent traffic must progress.
+	// fragment burst. Default mode rejects fragments; enabled mode rejects a
+	// conflicting overlap and disposes its assembly. Later traffic must progress.
 	for fragment := 0; fragment < 16; fragment++ {
 		p := encryptedPacket(17, uint16(udp.LocalAddr().(*net.UDPAddr).Port), 0, 0, 0, make([]byte, 8))
 		copy(p[16:20], gateway)
 		binary.BigEndian.PutUint16(p[6:8], 0x2000) // more fragments
+		binary.BigEndian.PutUint16(p[4:6], uint16(1000+fragment))
 		p[10], p[11] = 0, 0
 		binary.BigEndian.PutUint16(p[10:12], encryptedChecksum(p[:20]))
 		if err := guestTun.InjectToPeer(p); err != nil {
 			t.Fatal(err)
 		}
+		if reassembly {
+			conflict := append([]byte(nil), p...)
+			conflict[20] ^= 1
+			if err := guestTun.InjectToPeer(conflict); err != nil {
+				t.Fatal(err)
+			}
+		}
 		// Injection is not a processing acknowledgement. WireGuard may batch
-		// packets, and WGTun currently returns at the first packet error. Wait
-		// for this rejection before injecting the next packet, so this fixture
+		// packets. Wait for this rejection before injecting the next packet, so
+		// this fixture
 		// produces exactly sixteen distinct error callbacks without changing
 		// production packet/error handling.
 		deadline := time.Now().Add(5 * time.Second)
@@ -343,6 +378,78 @@ func TestReleaseImage(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+	}
+	if reassembly {
+		fragmentTraffic = false
+		// Eight incomplete datagrams fill the per-source quota. Thirty-two more
+		// cannot allocate storage. Ordinary TCP/UDP must continue throughout the
+		// fixed 60-second lifetime, and expiry must restore fragment admission.
+		for id := 2000; id < 2040; id++ {
+			p := encryptedFragments(encryptedPacket(17, uint16(udp.LocalAddr().(*net.UDPAddr).Port), 0, 0, 0, make([]byte, 8)), uint16(id), 8)[0]
+			copy(p[16:20], gateway)
+			p[10], p[11] = 0, 0
+			binary.BigEndian.PutUint16(p[10:12], encryptedChecksum(p[:20]))
+			if err := guestTun.InjectToPeer(p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fragmentMetric := func(key string) uint64 {
+			var value uint64
+			for _, line := range strings.Split(mustDocker("logs", name), "\n") {
+				if !strings.Contains(line, "ipv4_fragments:") {
+					continue
+				}
+				for _, field := range strings.Fields(line) {
+					if text, ok := strings.CutPrefix(field, key+"="); ok {
+						text = strings.Trim(text, "\"")
+						parsed, err := strconv.ParseUint(text, 10, 64)
+						if err != nil {
+							t.Fatal("invalid fragment metric", field)
+						}
+						value = parsed
+					}
+				}
+			}
+			return value
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for fragmentMetric("rejected") < 48 {
+			if time.Now().After(deadline) {
+				t.Fatal("fragment flood admission deadline")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if fragmentMetric("cached") != 8 || fragmentMetric("reserved_bytes") != 8*(65535+4096) {
+			t.Fatal("fragment flood containment mismatch")
+		}
+		report["flood_cached"] = 8
+		report["flood_reserved_bytes"] = 8 * (65535 + 4096)
+		deadline = time.Now().Add(65 * time.Second)
+		ordinaryRounds := 0
+		for fragmentMetric("expired") < 8 {
+			if time.Now().After(deadline) {
+				t.Fatal("fragment expiry deadline")
+			}
+			if err := exchange(100); err != nil {
+				t.Fatal("ordinary traffic during fragment exhaustion", err)
+			}
+			ordinaryRounds++
+			time.Sleep(250 * time.Millisecond)
+		}
+		deadline = time.Now().Add(5 * time.Second)
+		for fragmentMetric("reserved_bytes") != 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("expiry retained fragment storage")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		report["ordinary_rounds_during_exhaustion"] = ordinaryRounds
+		report["expired_datagrams"] = 8
+		fragmentTraffic = true
+		if err := exchange(101); err != nil {
+			t.Fatal("fragment admission after expiry", err)
+		}
+		t.Log("RELEASE_IMAGE_FRAGMENT_REASSEMBLY_OK flood=40 cached=8 expired=8 restored=true")
 	}
 	for _, file := range []string{"memory.events", "pids.events"} {
 		value := mustDocker("exec", name, "cat", "/sys/fs/cgroup/"+file)
@@ -402,11 +509,13 @@ func TestReleaseImage(t *testing.T) {
 	report["final"] = i
 	report["sigterm_ms"] = shutdownDuration.Milliseconds()
 	logs := mustDocker("logs", name)
-	if strings.Count(logs, "incoming IPv4 fragments are unsupported") != 1 ||
-		strings.Count(logs, "Repeated TUN packet failures: reason=unsupported_ipv4_fragment suppressed=15") != 1 {
-		t.Fatal("fragment burst must log one immediate failure and one shutdown summary of 15 repeats")
+	if !reassembly {
+		if strings.Count(logs, "incoming IPv4 fragments are unsupported") != 1 ||
+			strings.Count(logs, "Repeated TUN packet failures: reason=unsupported_ipv4_fragment suppressed=15") != 1 {
+			t.Fatal("fragment burst must log one immediate failure and one shutdown summary of 15 repeats")
+		}
+		report["fragment_log_burst"] = map[string]int{"failures": 16, "immediate": 1, "suppressed": 15}
+		t.Log("RELEASE_IMAGE_FRAGMENT_LOG_OK failures=16 immediate=1 suppressed=15")
 	}
-	report["fragment_log_burst"] = map[string]int{"failures": 16, "immediate": 1, "suppressed": 15}
-	t.Log("RELEASE_IMAGE_FRAGMENT_LOG_OK failures=16 immediate=1 suppressed=15")
 	t.Logf("RELEASE_IMAGE_OK image=%s uid=%s rounds>=9 sigterm=%s", i.Image, uid, shutdownDuration)
 }
