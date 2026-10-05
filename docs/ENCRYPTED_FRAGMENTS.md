@@ -18,6 +18,10 @@ checks remain mandatory. The private SSH server is unused.
   duplicates the initial range, reverses subsequent ranges and deliberately
   drops one range from each of two packets. TCP must recover through its own
   retransmission behavior; exact host/guest payload checks remain unchanged.
+  The guest reader pauses one millisecond between original IP packets, bounding
+  its uplink at 1000 original packets/s (about 11 Mbit/s at MTU 1380); each packet's
+  reordered/duplicate fragment burst remains intact. This finite-rate profile
+  does not establish acceptance of an unpaced in-memory producer.
 - Raw guest datagrams cross actual WireGuard encryption/decryption and production
   reassembly. Check 48 UDP datagrams of 8192, 16384 and 65507 payload bytes, using
   legal aligned fragments at MTUs 1200 and 1380. Host checks the entire payload;
@@ -68,6 +72,21 @@ Expected quota totals on the datagram interface: `live_peak=32`, `source_peak=8`
 assemblies are released by joined shutdown and do not count as timeout expiry.
 
 ## Acceptance and default-policy decision
+
+The unpaced mixed profile failed the 192 MiB sampled heap gate in
+[run 37375012908](https://github.com/irctrakz/wgslirp/actions/runs/37375012908).
+The no-forced-GC breach profile in
+[run 37375909341](https://github.com/irctrakz/wgslirp/actions/runs/37375909341)
+attributed approximately 91 MiB (84% of sampled live space) to upstream
+WireGuard message buffers, versus 5.8 MiB to reassembly. Reassembly accounted for
+82 MiB (43%) of cumulative sampled allocation, so its allocation churn remains
+a separate optimization candidate; a profile is not proof of a leak. The
+diagnostic run also hit the unchanged mixed-traffic deadline. Profile sampling
+can lag recent allocations and perturbs execution; it is diagnostic evidence,
+not an acceptance run. Both failures had zero cgroup limit/OOM events and passed
+owned cleanup. The finite-rate candidate retains all original byte/loss/quota,
+memory/RSS, deadline and cleanup checks without changing production storage or
+forcing GC. Acceptance remains pending its ordinary/race and full-pipeline results.
 
 Native focused reassembly tests and Linux cross-vet including the new fixture
 passed. The baseline build, vet, unit/race, integration/race and fuzz stage passed

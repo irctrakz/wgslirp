@@ -37,6 +37,10 @@ type fragmentGuestTUN struct {
 
 func (f *fragmentGuestTUN) Read(buffers [][]byte, sizes []int, offset int) (int, error) {
 	for len(f.pending) == 0 {
+		// Model a finite uplink: at most 1000 original IP packets/s (about
+		// 11 Mbit/s at MTU 1380). Reordering/duplicates stay inside each burst.
+		// This reader owns pacing; no timer worker or runtime GC tuning is added.
+		time.Sleep(time.Millisecond)
 		n, err := f.Device.Read([][]byte{f.scratch[:]}, sizes[:1], 0)
 		if err != nil {
 			return 0, err
@@ -182,7 +186,7 @@ func TestEncryptedFragments(t *testing.T) {
 		if err := samples.sample(nil); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("FRAGMENT_MIXED_OK fragmented=%d dropped=2 short_requests=128 bulk_bytes_each_direction=8388608 udp_round_trips=512", wrapper.fragmented.Load())
+		t.Logf("FRAGMENT_MIXED_OK original_packet_rate_cap=1000 fragmented=%d dropped=2 short_requests=128 bulk_bytes_each_direction=8388608 udp_round_trips=512", wrapper.fragmented.Load())
 	}) {
 		return
 	}
