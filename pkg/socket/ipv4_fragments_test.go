@@ -217,6 +217,7 @@ func TestIPv4FragmentConfigurationAndShutdown(t *testing.T) {
 		t.Fatal("unusable fragment budget accepted")
 	}
 	base.IPv4FragmentBufferCapBytes = 0
+	base.Protocol = "ip4:tcp"
 	s := NewSocketInterface(base)
 	s.SetPacketProcessor(&captureProcessor{})
 	if err := s.Start(); err != nil {

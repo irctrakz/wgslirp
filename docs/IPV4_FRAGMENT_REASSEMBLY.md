@@ -71,6 +71,11 @@ metadata allowance and do not represent process RSS or garbage awaiting GC.
 
 ## Default-enablement gate
 
+Initial CI [run 37359016545](https://github.com/irctrakz/wgslirp/actions/runs/37359016545)
+stopped at a new lifecycle test's unintended default ICMP socket mode on the
+unprivileged Linux runner. Its fixture now selects ordinary TCP sockets, matching
+the existing lifecycle tests; image construction and promotion were skipped.
+
 Keep support off until the complete race/fuzz suite and both actual-image modes
 pass. The enabled image must forward reordered/duplicate encrypted TCP/UDP,
 reject overlaps, contain a forty-datagram flood at eight retained assemblies,
