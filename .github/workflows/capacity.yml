@@ -65,6 +65,13 @@ jobs:
               set +e
               test_tags="integration,$WORKLOAD"
               if [ "$WORKLOAD" = fragments ]; then test_tags="$test_tags,mixed"; fi
+              if [ "$WORKLOAD" = fragments ]; then
+                go test $race_flag -run="^$" -bench="^BenchmarkIPv4Fragments$" -benchmem \
+                  -benchtime=100ms -count=3 -timeout=60s -parallel=1 ./pkg/socket > /evidence/reassembly-allocations.txt
+                benchmark_result=$?
+                cat /evidence/reassembly-allocations.txt
+                if [ "$benchmark_result" != 0 ]; then exit "$benchmark_result"; fi
+              fi
               go test $race_flag -v -tags="$test_tags" -run="^${test_name}$" -timeout="$test_timeout" -count=1 -parallel=1 ./pkg/wireguard
               result=$?
               set -e

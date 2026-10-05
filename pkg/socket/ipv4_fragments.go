@@ -16,8 +16,10 @@ const (
 	ipv4FragmentSources          = 8 // live datagrams per source, including dispatch
 	ipv4FragmentRanges           = 128
 	ipv4FragmentLifetime         = 60 * time.Second
-	// Full wire allocation plus conservative metadata/range/map allowance.
-	// Fixed allocation avoids growing buffers and transient completion copies.
+	ipv4FragmentInline           = 2048
+	// Full wire allocation plus inline storage, compact ranges and map allowance.
+	// Reserve both tiers up front so promotion never needs new admission or an
+	// unaccounted transient copy. Completion reuses the active storage tier.
 	ipv4FragmentCharge = 65535 + 4096
 )
 
@@ -30,13 +32,14 @@ type fragmentKey struct {
 }
 
 type fragmentRange struct {
-	start, end int
+	start, end uint16
 	more       bool
 }
 
 type fragmentDatagram struct {
 	key                 fragmentKey
 	data                []byte
+	inline              [ipv4FragmentInline]byte
 	ranges              [ipv4FragmentRanges]fragmentRange
 	count, covered, end int
 	first               bool
@@ -128,7 +131,8 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 			r.rejected++
 			return nil, nil, ErrBufferLimit
 		}
-		d = &fragmentDatagram{key: k, data: make([]byte, 65535), end: -1, dscp: p[1] & 0xfc, deadline: now.Add(ipv4FragmentLifetime)}
+		d = &fragmentDatagram{key: k, end: -1, dscp: p[1] & 0xfc, deadline: now.Add(ipv4FragmentLifetime)}
+		d.data = d.inline[:]
 		r.entries[k] = d
 		r.live++
 		r.used += ipv4FragmentCharge
@@ -158,23 +162,31 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 	}
 	for i := 0; i < d.count; i++ {
 		span := d.ranges[i]
-		if span.start == start && span.end == end && span.more == more && bytes.Equal(d.data[20+start:20+end], p[20:]) {
+		spanStart, spanEnd := int(span.start), int(span.end)
+		if spanStart == start && spanEnd == end && span.more == more && bytes.Equal(d.data[20+start:20+end], p[20:]) {
 			d.ecn = ecn
 			r.duplicates++
 			return nil, nil, nil
 		}
-		if start < span.end && end > span.start {
+		if start < spanEnd && end > spanStart {
 			return fail("overlap")
 		}
-		if !more && span.end >= end {
+		if !more && spanEnd >= end {
 			return fail("conflicting final fragment")
 		}
 	}
 	if d.count == ipv4FragmentRanges {
 		return fail("range limit")
 	}
+	if 20+end > len(d.data) {
+		// At most one promotion. Both allocations remain covered by the fixed
+		// reservation, including while the old inline bytes are copied.
+		data := make([]byte, 65535)
+		copy(data, d.data)
+		d.data = data
+	}
 	copy(d.data[20+start:20+end], p[20:])
-	d.ranges[d.count] = fragmentRange{start, end, more}
+	d.ranges[d.count] = fragmentRange{uint16(start), uint16(end), more}
 	d.count++
 	d.covered += size
 	d.ecn = ecn

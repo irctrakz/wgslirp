@@ -725,6 +725,8 @@ Remaining sequence and acceptance criteria are tracked in the
 - [ ] Baseline isolated reassembly allocations, then reduce demonstrated churn
   while preserving reservation, dispatch, expiry and shutdown ownership; pass
   unchanged regression and full bounded image gates.
+  The [inline-storage implementation and before/after measurements](REASSEMBLY_ALLOCATION_CHURN.md)
+  are complete; full Linux pipeline/image acceptance is pending.
 - [ ] Establish separate, repeated unpaced ordinary/race acceptance with the
   original traffic and resource/deadline limits; preserve failure evidence and
   validate/promote the same tested image artifact.

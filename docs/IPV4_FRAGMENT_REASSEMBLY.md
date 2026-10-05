@@ -22,8 +22,10 @@ All forwarding remains in userspace with the existing privilege requirements.
 `IPV4_REASSEMBLY` defaults to false. A separate finite fragment storage ceiling
 shares the existing aggregate socket buffer budget. Bound live datagrams,
 datagrams per source and fragment ranges per datagram. Reserve the maximum
-datagram storage and metadata before copying the first received fragment;
-completion transfers that same allocation to synchronous transport dispatch.
+datagram storage and metadata before copying the first received fragment.
+Small assemblies use inline storage; a range beyond 2,048 wire bytes promotes
+once to full storage, with both tiers covered by that same reservation.
+Completion transfers the active storage tier to synchronous transport dispatch.
 Reservations include completed datagrams still being dispatched, and release
 exactly once after dispatch, rejection, expiry or shutdown.
 
@@ -131,6 +133,8 @@ and the default is false.
 - [ ] Complete the separately sequenced [reassembly allocation-churn and
   unpaced encrypted acceptance work](ENCRYPTED_FRAGMENTS.md#remaining-work-allocation-churn-and-unpaced-acceptance).
   Finite-rate acceptance above does not resolve the original unpaced failures.
+  [Allocation-churn implementation and measurements](REASSEMBLY_ALLOCATION_CHURN.md)
+  track the storage change and its separate acceptance gates.
 - [ ] Review deployment counters and per-source fairness, then make a separate
   default-policy change preserving an explicit `IPV4_REASSEMBLY=false` escape hatch.
 

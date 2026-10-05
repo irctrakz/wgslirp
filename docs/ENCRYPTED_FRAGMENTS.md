@@ -145,18 +145,21 @@ policy or establishes unlimited forwarding capacity.
 
 #### 1. Reassembly allocation churn
 
-- [ ] Establish an isolated reassembly allocation baseline, separate from
+Implementation, isolated before/after measurements and remaining pipeline gates
+are recorded in [reassembly allocation churn](REASSEMBLY_ALLOCATION_CHURN.md).
+
+- [x] Establish an isolated reassembly allocation baseline, separate from
   WireGuard/gVisor allocations. Cover small fragmented packets, MTU-sized
   fragments and maximum datagrams, including completion, reordered ranges,
   exact duplicates, missing ranges, late duplicates, expiry and quota saturation.
   Record bytes and allocation objects per completed datagram, retained bytes
   during incomplete assemblies, and recovery after expiry and shutdown.
-- [ ] Use that evidence to select the smallest worthwhile storage change.
+- [x] Use that evidence to select the smallest worthwhile storage change.
   Compare the same workload, runtime and measurement method before and after;
   report allocation savings and any throughput or retained-memory tradeoff.
   Do not infer a leak from cumulative allocations or optimize solely from a
   sampled heap profile.
-- [ ] Preserve reserve-before-retain, the aggregate/sub-budget boundaries,
+- [x] Preserve reserve-before-retain, the aggregate/sub-budget boundaries,
   global/source/range quotas, and the charge held through synchronous dispatch.
   Completion, rejection, expiry and joined shutdown must release ownership
   exactly once. Any retained pool/cache or transient old/new storage must have
