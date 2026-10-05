@@ -69,10 +69,11 @@ func (f *fragmentGuestTUN) Read(buffers [][]byte, sizes []int, offset int) (int,
 }
 
 type fragmentResourceSamples struct {
-	mu                sync.Mutex
-	initial           runtime.MemStats
-	heapPeak, rssPeak uint64
-	err               error
+	mu                  sync.Mutex
+	initial             runtime.MemStats
+	heapPeak, rssPeak   uint64
+	rssInitial, rssLast uint64
+	err                 error
 }
 
 func (m *fragmentResourceSamples) sample(s *socket.SocketInterface) error {
@@ -95,6 +96,10 @@ func (m *fragmentResourceSamples) sample(s *socket.SocketInterface) error {
 		return err
 	}
 	rss := pages * uint64(os.Getpagesize())
+	if m.rssInitial == 0 {
+		m.rssInitial = rss
+	}
+	m.rssLast = rss
 	if current.HeapAlloc > m.heapPeak {
 		m.heapPeak = current.HeapAlloc
 	}
@@ -122,6 +127,9 @@ func TestEncryptedFragments(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	samples := &fragmentResourceSamples{}
 	runtime.ReadMemStats(&samples.initial)
+	if err := samples.sample(nil); err != nil {
+		t.Fatal(err)
+	}
 	if !t.Run("mixed", func(t *testing.T) {
 		var wrapper *fragmentGuestTUN
 		stop, done := make(chan struct{}), make(chan struct{})
@@ -167,7 +175,7 @@ func TestEncryptedFragments(t *testing.T) {
 	}
 	var final runtime.MemStats
 	runtime.ReadMemStats(&final)
-	t.Logf("FRAGMENTS_ACCEPTED heap_peak=%d rss_peak=%d allocation_bytes=%d allocation_objects=%d natural_gc=%d forced_gc=%d", samples.heapPeak, samples.rssPeak, final.TotalAlloc-samples.initial.TotalAlloc, final.Mallocs-samples.initial.Mallocs, final.NumGC-samples.initial.NumGC, final.NumForcedGC-samples.initial.NumForcedGC)
+	t.Logf("FRAGMENTS_ACCEPTED heap_peak=%d rss_initial=%d rss_peak=%d rss_final=%d allocation_bytes=%d allocation_objects=%d natural_gc=%d forced_gc=%d", samples.heapPeak, samples.rssInitial, samples.rssPeak, samples.rssLast, final.TotalAlloc-samples.initial.TotalAlloc, final.Mallocs-samples.initial.Mallocs, final.NumGC-samples.initial.NumGC, final.NumForcedGC-samples.initial.NumForcedGC)
 }
 
 func fragmentUDP(port uint16, source byte, payload []byte) []byte {
@@ -331,9 +339,12 @@ func runFragmentDatagrams(t *testing.T, samples *fragmentResourceSamples) {
 			time.Sleep(250 * time.Millisecond)
 		}
 		wait(func(f map[string]uint64) bool { return f["live"] == 0 && f["reserved_bytes"] == 0 })
+		if err := samples.sample(s); err != nil {
+			t.Fatal(err)
+		}
 		var mem runtime.MemStats
 		runtime.ReadMemStats(&mem)
-		t.Logf("FRAGMENT_RECOVERY expired=%d ordinary_rounds=%d heap=%d total_alloc=%d natural_gc=%d", count, rounds, mem.HeapAlloc, mem.TotalAlloc-samples.initial.TotalAlloc, mem.NumGC-samples.initial.NumGC)
+		t.Logf("FRAGMENT_RECOVERY expired=%d ordinary_rounds=%d heap=%d rss=%d total_alloc=%d allocation_objects=%d natural_gc=%d", count, rounds, mem.HeapAlloc, samples.rssLast, mem.TotalAlloc-samples.initial.TotalAlloc, mem.Mallocs-samples.initial.Mallocs, mem.NumGC-samples.initial.NumGC)
 	}
 	var late [][]byte
 	for _, mtu := range []int{1200, 1380} {
@@ -432,7 +443,7 @@ func runFragmentDatagrams(t *testing.T, samples *fragmentResourceSamples) {
 		}
 		var mem runtime.MemStats
 		runtime.ReadMemStats(&mem)
-		t.Logf("FRAGMENT_IDLE second=%d heap=%d natural_gc=%d reservations=0", idle+1, mem.HeapAlloc, mem.NumGC-samples.initial.NumGC)
+		t.Logf("FRAGMENT_IDLE second=%d heap=%d rss=%d natural_gc=%d reservations=0", idle+1, mem.HeapAlloc, samples.rssLast, mem.NumGC-samples.initial.NumGC)
 	}
 	t.Logf("FRAGMENT_DATAGRAMS_OK mtu=1200,1380 sizes=8192,16384,65507 sources=7 expired=66 source_limit=2 global_limit=4 live_peak=32 source_peak=8 duplicates=%d", f["duplicates"])
 }
