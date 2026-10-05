@@ -24,7 +24,7 @@ jobs:
       WORKLOAD: ${{ inputs.workload }}
       CONTAINER: wgslirp-${{ inputs.workload }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Run a fresh bounded workload
@@ -109,7 +109,7 @@ jobs:
             fi
           fi
           echo 'Owned container, tmpfs and toolchain image removed; no owned network or persistent volume created.' > evidence/cleanup.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: ${{ inputs.workload }}-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}

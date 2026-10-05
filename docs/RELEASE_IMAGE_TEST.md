@@ -37,6 +37,24 @@ suppressed. The failed first fixture and batch follow-up remain recorded in
 
 ## Execution environment
 
+### CI action runtimes (2026-10-05)
+
+All three workflows select actions that declare `runs.using: node24`:
+`actions/checkout@v6`, `actions/setup-go@v6`, `actions/upload-artifact@v6`,
+`docker/login-action@v4`, `docker/setup-buildx-action@v4`,
+`docker/setup-qemu-action@v4` and `docker/build-push-action@v7`. This includes
+the reusable test/workload jobs, development image/promotion, PR build and
+master publisher. The Go version remains 1.23.12; `cache-dependency-path: go.sum`
+keeps the previous dependency-cache basis explicit after the setup-go upgrade.
+
+The selected actions require Actions Runner 2.327.1 or later; all workflows
+currently use GitHub-hosted `ubuntu-latest`. No Node runtime override is needed.
+Action metadata and configured inputs are checked with actionlint 1.7.12.
+Runtime acceptance on the development branch does not execute PR-only or
+master-only jobs; those references receive static validation. See the maintainers'
+[setup-go release notes](https://github.com/actions/setup-go#breaking-changes-in-v6)
+and [Docker Node 24 migration](https://github.com/docker/build-push-action/releases/tag/v7.0.0).
+
 Use an ephemeral GitHub-hosted Linux runner with Docker and cgroup v2. The private
 SSH test server remains outside this image-build path: its existing cached-image
 harness does not authorize host image builds, pulls or Docker socket mounts.
