@@ -47,12 +47,14 @@ type fragmentDatagram struct {
 // The mutex protects cache membership, live dispatch reservations and counters.
 // It may acquire the aggregate budget lock, never a flow lock or callback.
 type ipv4Fragments struct {
-	mu                                                 sync.Mutex
-	budget                                             *resourceBudget
-	limit, used, live                                  int
-	entries                                            map[fragmentKey]*fragmentDatagram
-	sources                                            map[[4]byte]int
-	received, completed, duplicates, rejected, expired uint64
+	mu                                                     sync.Mutex
+	budget                                                 *resourceBudget
+	limit, used, live                                      int
+	entries                                                map[fragmentKey]*fragmentDatagram
+	sources                                                map[[4]byte]int
+	received, completed, duplicates, rejected, expired     uint64
+	sourceLimit, globalLimit, storageLimit, aggregateLimit uint64
+	livePeak, sourcePeak                                   uint64
 }
 
 func newIPv4Fragments(budget *resourceBudget, limit int) *ipv4Fragments {
@@ -105,11 +107,24 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 		return nil, nil, fmt.Errorf("%w: expired IPv4 assembly", ErrMalformedPacket)
 	}
 	if d == nil {
-		if r.live >= ipv4FragmentDatagrams || r.sources[k.src] >= ipv4FragmentSources || ipv4FragmentCharge > r.limit-r.used {
+		limited := false
+		switch {
+		case r.sources[k.src] >= ipv4FragmentSources:
+			r.sourceLimit++
+			limited = true
+		case r.live >= ipv4FragmentDatagrams:
+			r.globalLimit++
+			limited = true
+		case ipv4FragmentCharge > r.limit-r.used:
+			r.storageLimit++
+			limited = true
+		}
+		if limited {
 			r.rejected++
 			return nil, nil, ErrIPv4FragmentLimit
 		}
 		if !r.budget.acquire(ipv4FragmentCharge) {
+			r.aggregateLimit++
 			r.rejected++
 			return nil, nil, ErrBufferLimit
 		}
@@ -118,6 +133,12 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 		r.live++
 		r.used += ipv4FragmentCharge
 		r.sources[k.src]++
+		if uint64(r.live) > r.livePeak {
+			r.livePeak = uint64(r.live)
+		}
+		if uint64(r.sources[k.src]) > r.sourcePeak {
+			r.sourcePeak = uint64(r.sources[k.src])
+		}
 	}
 	fail := func(reason string) ([]byte, func(), error) {
 		r.rejected++
@@ -225,5 +246,5 @@ func (r *ipv4Fragments) close() {
 func (r *ipv4Fragments) snapshot() map[string]uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return map[string]uint64{"received": r.received, "completed": r.completed, "duplicates": r.duplicates, "rejected": r.rejected, "expired": r.expired, "cached": uint64(len(r.entries)), "live": uint64(r.live), "reserved_bytes": uint64(r.used), "limit_bytes": uint64(r.limit)}
+	return map[string]uint64{"received": r.received, "completed": r.completed, "duplicates": r.duplicates, "rejected": r.rejected, "expired": r.expired, "cached": uint64(len(r.entries)), "live": uint64(r.live), "reserved_bytes": uint64(r.used), "limit_bytes": uint64(r.limit), "source_limit": r.sourceLimit, "global_limit": r.globalLimit, "storage_limit": r.storageLimit, "aggregate_limit": r.aggregateLimit, "live_peak": r.livePeak, "source_peak": r.sourcePeak}
 }

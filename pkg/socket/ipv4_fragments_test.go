@@ -162,6 +162,9 @@ func TestIPv4FragmentsBoundsAndAdmission(t *testing.T) {
 			if _, _, err := r.add(p, now); !errors.Is(err, want) {
 				t.Fatal(kind, err)
 			}
+			if metric := map[string]string{"source": "source_limit", "datagrams": "global_limit", "global": "storage_limit", "aggregate": "aggregate_limit"}[kind]; metric != "" && r.snapshot()[metric] != 1 {
+				t.Fatal("admission counter attribution", kind, r.snapshot())
+			}
 			r.close()
 			assertBudget(t, budget, 0)
 		})

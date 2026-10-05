@@ -226,7 +226,7 @@ func (r *metricsReporter) emit(snap metricsSnapshot, hstat map[string]uint64, fo
 		logging.Infof("admission: %s", admissionText(snap.Admission))
 		if snap.IPv4Fragments != nil {
 			f := snap.IPv4Fragments
-			logging.Infof("ipv4_fragments: received=%d completed=%d duplicates=%d rejected=%d expired=%d cached=%d live=%d reserved_bytes=%d limit_bytes=%d", f["received"], f["completed"], f["duplicates"], f["rejected"], f["expired"], f["cached"], f["live"], f["reserved_bytes"], f["limit_bytes"])
+			logging.Infof("ipv4_fragments: received=%d completed=%d duplicates=%d rejected=%d expired=%d cached=%d live=%d reserved_bytes=%d limit_bytes=%d source_limit=%d global_limit=%d storage_limit=%d aggregate_limit=%d live_peak=%d source_peak=%d", f["received"], f["completed"], f["duplicates"], f["rejected"], f["expired"], f["cached"], f["live"], f["reserved_bytes"], f["limit_bytes"], f["source_limit"], f["global_limit"], f["storage_limit"], f["aggregate_limit"], f["live_peak"], f["source_peak"])
 		}
 		qfd := uint64(0)
 		if v, ok := snap.Proc["queueFullDrops"]; ok {
