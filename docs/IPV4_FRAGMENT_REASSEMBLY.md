@@ -130,11 +130,11 @@ and the default is false.
   sources competing for the global quota.
 - [x] Measure sustained allocation/RSS and recovery across repeated expiry,
   late duplicates and quota saturation; retain the current resource/cleanup gates.
-- [ ] Complete the separately sequenced [reassembly allocation-churn and
-  unpaced encrypted acceptance work](ENCRYPTED_FRAGMENTS.md#remaining-work-allocation-churn-and-unpaced-acceptance).
-  Finite-rate acceptance above does not resolve the original unpaced failures.
-  [Allocation-churn implementation and measurements](REASSEMBLY_ALLOCATION_CHURN.md)
-  track the storage change and its separate acceptance gates.
+- [x] Reduce measured [reassembly allocation churn](REASSEMBLY_ALLOCATION_CHURN.md)
+  while preserving reservation, dispatch, expiry and shutdown ownership; pass
+  the full bounded pipeline and tested-image promotion.
+- [ ] Establish separate [unpaced encrypted acceptance](ENCRYPTED_FRAGMENTS.md#2-unpaced-encrypted-acceptance).
+  Finite-rate acceptance does not resolve the original unpaced failures.
 - [ ] Review deployment counters and per-source fairness, then make a separate
   default-policy change preserving an explicit `IPV4_REASSEMBLY=false` escape hatch.
 

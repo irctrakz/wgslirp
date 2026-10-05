@@ -145,7 +145,7 @@ policy or establishes unlimited forwarding capacity.
 
 #### 1. Reassembly allocation churn
 
-Implementation, isolated before/after measurements and remaining pipeline gates
+Implementation, isolated before/after measurements and completed pipeline gates
 are recorded in [reassembly allocation churn](REASSEMBLY_ALLOCATION_CHURN.md).
 
 - [x] Establish an isolated reassembly allocation baseline, separate from
@@ -165,7 +165,7 @@ are recorded in [reassembly allocation churn](REASSEMBLY_ALLOCATION_CHURN.md).
   exactly once. Any retained pool/cache or transient old/new storage must have
   explicit bounded accounting; moving allocations outside accounting is not a
   reduction in memory use.
-- [ ] Verify unchanged checksum, overlap, ECN, duplicate and expiry behavior,
+- [x] Verify unchanged checksum, overlap, ECN, duplicate and expiry behavior,
   exact-byte delivery, quota counters and recovery. Run focused regression,
   race and fuzz checks followed by the unchanged full bounded pipeline and
   actual-image validation/promotion for the tested commit. Accept the change

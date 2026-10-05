@@ -715,18 +715,20 @@ the largest sampled live allocation source in the unpaced fragment fixture.
 The declared finite-uplink profile passed ordinary/race fragment gates without
 raising memory/resource limits or forcing GC; full-chain acceptance is tracked
 in the linked evidence document and passed run 37376714607, including the actual
-image and same-digest development promotion. Production reassembly allocation churn and
-unpaced/high-rate acceptance remain explicit follow-ups there. This result does
-not authorize a default-policy change by itself.
+image and same-digest development promotion. The reassembly allocation-churn
+follow-up is now accepted as recorded below; unpaced/high-rate acceptance remains
+open. Neither result authorizes a default-policy change by itself.
 
 Remaining sequence and acceptance criteria are tracked in the
 [allocation-churn and unpaced acceptance checklist](ENCRYPTED_FRAGMENTS.md#remaining-work-allocation-churn-and-unpaced-acceptance):
 
-- [ ] Baseline isolated reassembly allocations, then reduce demonstrated churn
+- [x] Baseline isolated reassembly allocations, then reduce demonstrated churn
   while preserving reservation, dispatch, expiry and shutdown ownership; pass
   unchanged regression and full bounded image gates.
   The [inline-storage implementation and before/after measurements](REASSEMBLY_ALLOCATION_CHURN.md)
-  are complete; full Linux pipeline/image acceptance is pending.
+  passed all 13 applicable jobs in run 37382676625, including actual-image
+  validation and same-digest development promotion. Quotas/default policy remain
+  unchanged; unpaced acceptance below is still open.
 - [ ] Establish separate, repeated unpaced ordinary/race acceptance with the
   original traffic and resource/deadline limits; preserve failure evidence and
   validate/promote the same tested image artifact.
