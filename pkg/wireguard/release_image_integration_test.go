@@ -297,6 +297,18 @@ func TestReleaseImage(t *testing.T) {
 		}
 	}
 	report["verified_tcp_udp_rounds"] = 8
+	// Exercise the actual wireguard-go error callback with a bounded encrypted
+	// fragment burst. Fragments remain rejected; subsequent traffic must progress.
+	for fragment := 0; fragment < 16; fragment++ {
+		p := encryptedPacket(17, uint16(udp.LocalAddr().(*net.UDPAddr).Port), 0, 0, 0, make([]byte, 8))
+		copy(p[16:20], gateway)
+		binary.BigEndian.PutUint16(p[6:8], 0x2000) // more fragments
+		p[10], p[11] = 0, 0
+		binary.BigEndian.PutUint16(p[10:12], encryptedChecksum(p[:20]))
+		if err := guestTun.InjectToPeer(p); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, file := range []string{"memory.events", "pids.events"} {
 		value := mustDocker("exec", name, "cat", "/sys/fs/cgroup/"+file)
 		report[file] = value
@@ -344,14 +356,22 @@ func TestReleaseImage(t *testing.T) {
 	}
 	mustDocker("kill", "--signal=TERM", name)
 	code := mustDocker("wait", name)
-	if code != strconv.Itoa(0) || time.Since(start) > 10*time.Second {
-		t.Fatalf("SIGTERM exit=%s duration=%s", code, time.Since(start))
+	shutdownDuration := time.Since(start)
+	if code != strconv.Itoa(0) || shutdownDuration > 10*time.Second {
+		t.Fatalf("SIGTERM exit=%s duration=%s", code, shutdownDuration)
 	}
 	i = inspect()
 	if i.State.Running || i.State.OOMKilled || i.State.ExitCode != 0 {
 		t.Fatalf("unclean termination: %+v", i.State)
 	}
 	report["final"] = i
-	report["sigterm_ms"] = time.Since(start).Milliseconds()
-	t.Logf("RELEASE_IMAGE_OK image=%s uid=%s rounds>=9 sigterm=%s", i.Image, uid, time.Since(start))
+	report["sigterm_ms"] = shutdownDuration.Milliseconds()
+	logs := mustDocker("logs", name)
+	if strings.Count(logs, "incoming IPv4 fragments are unsupported") != 1 ||
+		strings.Count(logs, "Repeated TUN packet failures: reason=unsupported_ipv4_fragment suppressed=15") != 1 {
+		t.Fatal("fragment burst must log one immediate failure and one shutdown summary of 15 repeats")
+	}
+	report["fragment_log_burst"] = map[string]int{"failures": 16, "immediate": 1, "suppressed": 15}
+	t.Log("RELEASE_IMAGE_FRAGMENT_LOG_OK failures=16 immediate=1 suppressed=15")
+	t.Logf("RELEASE_IMAGE_OK image=%s uid=%s rounds>=9 sigterm=%s", i.Image, uid, shutdownDuration)
 }

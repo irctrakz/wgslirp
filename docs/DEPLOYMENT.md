@@ -66,6 +66,14 @@ restrictions. It used an internal test network and did not validate your host
 firewall, public UDP port reachability or production workload sizing. These
 resource limits are a tested small-workload baseline, not a capacity promise.
 
+Repeated known WireGuard TUN write failures (unsupported IPv4 fragments,
+flow/dial/buffer limits and queue saturation) log the first occurrence per category,
+then a suppressed-count summary every 30 seconds while failures occur. Quiet
+burst tails are flushed by that timer and at device shutdown. Categories are
+fixed per device; unexpected errors still log immediately. Packet errors, drop
+behavior and admission counters are unchanged. Aggregation does not enable
+incoming IPv4 fragment support.
+
 Capture is off by default. Enabling `WG_PCAP` requires an explicitly writable
 path with private permissions and an appropriate `WG_PCAP_MAX_BYTES` cap. The
 temporary filesystem is bounded and ephemeral; do not expect captures to persist.

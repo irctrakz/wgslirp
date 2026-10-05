@@ -17,10 +17,11 @@ import (
 )
 
 type wgHandle struct {
-	dev       *wgdev.Device
-	done      chan struct{}
-	closeOnce sync.Once
-	monitor   sync.WaitGroup
+	dev          *wgdev.Device
+	done         chan struct{}
+	closeOnce    sync.Once
+	monitor      sync.WaitGroup
+	packetErrors *packetErrorLog
 }
 
 func (h *wgHandle) Close() error {
@@ -31,6 +32,9 @@ func (h *wgHandle) Close() error {
 		h.monitor.Wait()
 		if h.dev != nil {
 			h.dev.Close()
+		}
+		if h.packetErrors != nil {
+			h.packetErrors.Flush()
 		}
 	})
 	return nil
@@ -159,7 +163,15 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 	}
 
 	logger := wgdev.NewLogger(wgLevel, "[wg]")
+	packetErrors := &packetErrorLog{emit: logger.Errorf}
+	logger.Errorf = packetErrors.Errorf
 	dev := wgdev.NewDevice(tun, bind, logger)
+	started := false
+	defer func() {
+		if !started {
+			packetErrors.Flush()
+		}
+	}()
 
 	// Compose peer sections (hex-encode public keys when possible)
 	peersHex := strings.Builder{}
@@ -250,11 +262,26 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 	logging.Debugf("WireGuard device started: listen_port=%d peers=%d", cfg.ListenPort, len(cfg.Peers))
 
 	// Start handshake monitoring if WG_DEBUG is enabled
-	handle := &wgHandle{dev: dev, done: make(chan struct{})}
+	handle := &wgHandle{dev: dev, done: make(chan struct{}), packetErrors: packetErrors}
+	handle.monitor.Add(1)
+	go func() {
+		defer handle.monitor.Done()
+		ticker := time.NewTicker(packetErrorLogInterval * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-handle.done:
+				return
+			case <-ticker.C:
+				packetErrors.Flush()
+			}
+		}
+	}()
 	if wgDebugOn {
 		handle.monitor.Add(1)
 		go monitorWireGuardHandshakes(handle)
 	}
+	started = true
 
 	return handle, nil
 }
