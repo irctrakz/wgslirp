@@ -74,6 +74,11 @@ fixed per device; unexpected errors still log immediately. Packet errors, drop
 behavior and admission counters are unchanged. Aggregation does not enable
 incoming IPv4 fragment support.
 
+Counts describe TUN write error callbacks, not necessarily individual packets:
+wireguard-go may batch packets, and the existing WGTun path returns at the first
+packet error. Continuing other packets within a failed batch requires a separate
+packet/error ownership review; log aggregation does not change that behavior.
+
 Capture is off by default. Enabling `WG_PCAP` requires an explicitly writable
 path with private permissions and an appropriate `WG_PCAP_MAX_BYTES` cap. The
 temporary filesystem is bounded and ephemeral; do not expect captures to persist.

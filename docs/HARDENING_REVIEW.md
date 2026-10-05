@@ -82,6 +82,17 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**TUN batch-error follow-up (2026-10-04):** review WGTun's existing early return
+on a packet failure within a wireguard-go batch. Later buffers in that batch may
+remain unprocessed. Any change must preserve packet error/counter semantics,
+byte ownership and shutdown behavior, with regressions for a rejected fragment
+followed by valid TCP/UDP in the same batch. This is separate from log aggregation
+and incoming IPv4 reassembly support. The first aggregation image fixture
+[run 37262532451](https://github.com/irctrakz/wgslirp/actions/runs/37262532451)
+failed its sixteen-callback expectation after injecting sixteen packets without
+processing synchronization (one immediate callback plus thirteen suppressed).
+Cleanup passed and promotion was skipped; the failure remains recorded.
+
 **Peer configuration (2026-10-04):** `1e0de5e` makes `WG_PEERS` optional for
 the executable and `LoadFromEnv`: peer settings are discovered from one startup
 environment snapshot in numeric order, including sparse indices. Incomplete

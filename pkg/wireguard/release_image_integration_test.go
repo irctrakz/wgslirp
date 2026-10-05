@@ -74,6 +74,7 @@ func TestReleaseImage(t *testing.T) {
 	serverPrivate, serverPublic := encryptedKey(t)
 	guestPrivate, guestPublic := encryptedKey(t)
 	config := strings.Join([]string{"WG_PRIVATE_KEY=" + serverPrivate, "WG_LISTEN_PORT=51820", "WG_MTU=1380",
+		"METRICS_INTERVAL=50ms", "METRICS_FORMAT=text",
 		"WG_PEER_0_PUBLIC_KEY=" + guestPublic, "WG_PEER_0_ALLOWED_IPS=10.0.0.2/32"}, "\n") + "\n"
 	envFile := filepath.Join(t.TempDir(), "device.env")
 	if err := os.WriteFile(envFile, []byte(config), 0600); err != nil {
@@ -307,6 +308,40 @@ func TestReleaseImage(t *testing.T) {
 		binary.BigEndian.PutUint16(p[10:12], encryptedChecksum(p[:20]))
 		if err := guestTun.InjectToPeer(p); err != nil {
 			t.Fatal(err)
+		}
+		// Injection is not a processing acknowledgement. WireGuard may batch
+		// packets, and WGTun currently returns at the first packet error. Wait
+		// for this rejection before injecting the next packet, so this fixture
+		// produces exactly sixteen distinct error callbacks without changing
+		// production packet/error handling.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			observed := 0
+			for _, line := range strings.Split(mustDocker("logs", name), "\n") {
+				if !strings.Contains(line, "metrics: ts=") {
+					continue
+				}
+				for _, field := range strings.Fields(line) {
+					if strings.HasPrefix(field, "err=") {
+						count, err := strconv.Atoi(strings.TrimPrefix(field, "err="))
+						if err != nil {
+							t.Fatal("invalid error counter")
+						}
+						observed = count
+						break
+					}
+				}
+			}
+			if observed > fragment+1 {
+				t.Fatal("unexpected packet errors during fragment fixture")
+			}
+			if observed == fragment+1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("fragment rejection counter deadline")
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
 	}
 	for _, file := range []string{"memory.events", "pids.events"} {
