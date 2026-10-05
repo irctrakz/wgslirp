@@ -138,10 +138,28 @@ fixtures. No generic scheduler or packet framework is introduced.
 
 `wireguard.ErrQueueFull` identifies queue-slot saturation with `errors.Is`;
 reservation failures remain distinct. Worker errors preserve the wrapped writer
-cause. Repetitive socket read/deadline/oversize, ICMP parse, processor write, TCP close-expiry and host
+cause. Repetitive socket read/deadline, ICMP parse, processor write, TCP close-expiry and host
 socket-option warnings are limited to one per 30 seconds per owning limiter;
 metrics continue counting every event. Existing periodic health/handshake logs and
 one-time capture/MTU warnings retain their existing bounds.
+
+Accepted guest frames above the configured `WG_MTU` produce no warning. The
+additive schema-1 `packet_size` map and text line expose cumulative
+`accepted_oversized` and `local_size_rejected` counters. Accepted size uses the
+original frame's declared IPv4 length, excludes padding, and counts fragments at
+their original sizes. Retention of an incomplete fragment is acceptance, not a
+completed datagram or proof of remote delivery. Malformed, unsupported and
+refused input does not increment the accepted counter. Debug logging optionally
+reports accepted oversize events.
+
+An actual local host size rejection (`EMSGSIZE`) increments
+`local_size_rejected`, preserves the operating-system cause and returns packet
+size context plus advice to reduce datagram size or check the host path MTU.
+The executable's existing TUN error logger emits that specific failure; no
+duplicate warning is emitted. Other errors retain their own reason without
+speculative MTU advice. The rejected counter applies regardless of configured
+MTU. Library callers remain responsible for logging returned errors. Neither
+counter detects silent drops elsewhere in the network.
 
 Startup health probes are one-shot diagnostics of direct host egress and slirp DNS.
 They are not a persistent liveness/readiness endpoint or a proof of sustained

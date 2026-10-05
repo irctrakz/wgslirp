@@ -20,8 +20,10 @@ import (
 // SocketInterface represents a socket interface for connecting to the host network
 // It implements the core.SocketInterface interface and the SocketWriter interface
 type SocketInterface struct {
-	failureLog logging.RateLimiter
-	admission  admissionCounters
+	failureLog        logging.RateLimiter
+	admission         admissionCounters
+	oversizedAccepted atomic.Uint64
+	localSizeRejected atomic.Uint64
 	// Configuration
 	config       Config
 	budgetOnce   sync.Once
@@ -292,7 +294,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	}
 
 	data := core.BorrowPacketData(packet)
-	wireSize := len(data)
+	original := data
 	var err error
 	if s.fragments != nil {
 		var release func()
@@ -301,6 +303,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 			defer release()
 		}
 		if err == nil && data == nil {
+			s.recordAcceptedPacketSize(int(original[2])<<8 | int(original[3]))
 			return nil
 		}
 	} else {
@@ -310,12 +313,8 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		atomic.AddUint64(&s.metrics.Errors, 1)
 		return err
 	}
-	// Check packet size against MTU
-	if wireSize > s.config.MTU {
-		if s.failureLog.Allow(time.Now()) {
-			logging.Warnf("Guest packet size %d exceeds configured MTU %d", wireSize, s.config.MTU)
-		}
-	}
+	// Validated original IP length excludes padding and reassembled size.
+	wireSize := int(original[2])<<8 | int(original[3])
 
 	// Extract IP header information for detailed logging
 	if len(data) >= 20 {
@@ -350,8 +349,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		// Route ICMP through a thin bridge so implementation is modular.
 
 		if err := s.icmp.HandleOutbound(data); err != nil {
-			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("ICMP slirp error: %w", err)
+			return s.outboundPacketError("ICMP", wireSize, err)
 		}
 	case 6: // TCP protocol
 		if s.tcp == nil {
@@ -359,8 +357,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 			return fmt.Errorf("TCP bridge not initialized")
 		}
 		if err := s.tcp.HandleOutbound(data); err != nil {
-			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("TCP slirp error: %w", err)
+			return s.outboundPacketError("TCP", wireSize, err)
 		}
 		break
 	case 17: // UDP protocol
@@ -370,8 +367,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 			return fmt.Errorf("UDP bridge not initialized")
 		}
 		if err := s.udp.HandleOutbound(data); err != nil {
-			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("UDP slirp error: %w", err)
+			return s.outboundPacketError("UDP", wireSize, err)
 		}
 		// Metrics count the original packet bytes
 		break
@@ -390,6 +386,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	}
 
 	// Update metrics
+	s.recordAcceptedPacketSize(wireSize)
 	atomic.AddUint64(&s.metrics.PacketsSent, 1)
 	atomic.AddUint64(&s.metrics.BytesSent, uint64(len(data)))
 
@@ -463,8 +460,9 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 	udp, tcp, processor, fragments := s.udp, s.tcp, s.processor, s.fragments
 	s.mu.Unlock()
 	dm := SocketDetailedMetrics{
-		Total:     loadSocketMetrics(&s.metrics),
-		Admission: s.admissionSnapshot(),
+		Total:      loadSocketMetrics(&s.metrics),
+		Admission:  s.admissionSnapshot(),
+		PacketSize: map[string]uint64{"accepted_oversized": s.oversizedAccepted.Load(), "local_size_rejected": s.localSizeRejected.Load()},
 	}
 	if fragments != nil {
 		dm.IPv4Fragments = fragments.snapshot()

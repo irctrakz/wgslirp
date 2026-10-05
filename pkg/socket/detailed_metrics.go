@@ -17,12 +17,15 @@ type BridgeMetrics struct {
 type SocketDetailedMetrics struct {
 	// Admission contains cumulative, fixed-reason counters; see docs/OBSERVABILITY.md.
 	Admission map[string]uint64
-	Total     core.SocketMetrics
-	UDP       BridgeMetrics
-	TCP       BridgeMetrics
-	Processor map[string]uint64
-	UDPExt    map[string]uint64
-	TCPExt    map[string]uint64
+	// PacketSize counts accepted input frames above configured MTU and local
+	// host size rejections. Acceptance is not proof of remote delivery.
+	PacketSize map[string]uint64
+	Total      core.SocketMetrics
+	UDP        BridgeMetrics
+	TCP        BridgeMetrics
+	Processor  map[string]uint64
+	UDPExt     map[string]uint64
+	TCPExt     map[string]uint64
 	// IPv4Fragments is nil when the experimental feature is disabled.
 	IPv4Fragments map[string]uint64
 }
