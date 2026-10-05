@@ -49,7 +49,7 @@ func (b *tcpBridge) sendAllowanceLocked(f *tcpFlow) int {
 	inFlight := int(f.serverNxt - f.sndUna)
 	allowed := int(f.advWnd) - inFlight
 	allowed = minInt(allowed, b.retransmitCap-f.txBytes)
-	if f.ccEnabled && f.cc != nil {
+	if f.cc != nil {
 		allowed = minInt(allowed, f.cc.Cwnd()-inFlight)
 	}
 	now := time.Now()

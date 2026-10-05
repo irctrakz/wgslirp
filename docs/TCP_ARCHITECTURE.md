@@ -6,6 +6,16 @@ privileges or runtime configuration.
 
 ## Further simplification (2026-10-04)
 
+### Congestion-control state
+
+The redundant `ccEnabled` flag is removed. Establishment is the sole production
+assignment of the congestion controller: enabled flows receive a non-nil NewReno
+instance before publication, and disabled flows retain nil. No later assignment
+toggles the controller. ACK handling, send allowance and recovery now use that
+single condition. The existing fast/async, enabled/off transport tests check the
+controller and configured initial window directly. Lock ownership, configuration
+and congestion-control algorithms are preserved. Runtime validation is pending.
+
 ### Single-dial handoff
 
 The fast wait and async completion now consume one unbuffered dial-result
@@ -52,12 +62,10 @@ the historical measurements remain in the workload document.
 
 Keep the next changes independently reviewable:
 
-1. Remove redundant `ccEnabled` state if non-nil `cc` fully represents the
-   existing enabled condition in all constructors and tests.
-2. Consolidate `clientMSS` and `mss` after distinguishing negotiated peer size
+1. Consolidate `clientMSS` and `mss` after distinguishing negotiated peer size
    from the dynamic bridge clamp and advertised SYN-ACK MSS. Preserve those
    distinct meanings and public diagnostics.
-3. Simplify repeated dial accounting and host-write error handling only where
+2. Simplify repeated dial accounting and host-write error handling only where
    metric timing, byte ownership and lock scope remain explicit.
 
 Retain the existing lock boundaries and independent protocol fixtures. A shorter

@@ -150,14 +150,14 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 		seg.seq, f.clientNxt, 0x18, seg.data, tosOut, ttlOut)
 	if pkt != nil {
 		_ = b.sendToGuest(f, pkt)
-		if f.ccEnabled && f.cc != nil {
+		if f.cc != nil {
 			f.cc.OnLoss(false)
 		}
 	}
 }
 
 func (b *tcpBridge) cwndBytes(f *tcpFlow) int {
-	if f.ccEnabled && f.cc != nil {
+	if f.cc != nil {
 		cw := f.cc.Cwnd()
 		if cw < f.mss {
 			cw = f.mss
@@ -221,7 +221,7 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 		f.txMu.Unlock()
 		if packet != nil {
 			_ = b.sendToGuest(f, packet)
-			if f.ccEnabled && f.cc != nil {
+			if f.cc != nil {
 				f.cc.OnLoss(true)
 			}
 			atomic.AddUint64(&b.rtoCount, 1)

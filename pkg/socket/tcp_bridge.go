@@ -230,9 +230,8 @@ type tcpFlow struct {
 	}
 
 	// Congestion control (server->guest)
-	cc        congestionControl
-	ccEnabled bool
-	mss       int
+	cc  congestionControl // nil when congestion control is disabled
+	mss int
 }
 
 // newTCPBridge constructs a TCP bridge instance and wires optional per-flow

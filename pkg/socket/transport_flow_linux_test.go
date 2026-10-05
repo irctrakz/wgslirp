@@ -92,7 +92,7 @@ func TestTransportFlowSnapshot(t *testing.T) {
 				}
 				f := flows[0]
 				f.stateMu.Lock()
-				if f.wsOut != 3 || f.ccEnabled == ccOff {
+				if f.wsOut != 3 || (f.cc == nil) != ccOff {
 					t.Error("flow ignored snapshot")
 				}
 				if !ccOff && f.cc.Cwnd() != 2*f.mss {

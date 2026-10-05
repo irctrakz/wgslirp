@@ -170,7 +170,6 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	candidate.touch()
 	candidate.lastAckTime = time.Now()
 	if b.tuning.CongestionControl != "off" {
-		candidate.ccEnabled = true
 		candidate.cc = newNewReno(candidate.mss, b.tuning.InitialCwndMSS)
 	}
 	// Preserve state-before-registry ordering through candidate publication.
