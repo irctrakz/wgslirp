@@ -14,7 +14,7 @@ validated automatic-peer-discovery and log-aggregation image. Arm64 runtime
 validation remains separate.
 
 ```sh
-export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:2d108a86d5ea3741d23e813bb2b435467c8f6d6aa296db46065b7183da04f233
+export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:8d5ce2a61a607c624300aabe090b92bf4dea2f903874f2e1194629f311fc181a
 ```
 
 ## Keep credentials in a private local file

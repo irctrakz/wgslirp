@@ -82,6 +82,18 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Negotiated MSS consolidation (2026-10-05):** `6126e42` removes duplicate
+`clientMSS` flow state and uses the existing integer `mss` for segmentation,
+congestion control, recovery and ACK-idle policy. Initial negotiation remains
+immutable after publication; runtime clamp/MTU bounds and the advertised SYN-ACK
+offer stay separate. Diagnostic labels, zero-offer behavior and all locks remain
+unchanged. [Run 37343127478](https://github.com/irctrakz/wgslirp/actions/runs/37343127478)
+passed focused negotiation/segmentation regressions, standard race/fuzz checks,
+every bounded workload in both modes, actual-image validation and same-digest
+promotion. All resource-event and owned-cleanup checks passed. The remaining TCP
+simplicity candidates are repeated dial accounting and host-write error handling;
+lock removal remains subject to the separate conservative audit.
+
 **Repeated packet diagnostics (2026-10-04):** `f6b65ea` aggregates known repeated
 TUN write errors into fixed per-device categories. The first error remains
 immediate; suppressed counts flush every thirty seconds and after joined device
@@ -123,7 +135,8 @@ ACK, send allowance and recovery retain their existing algorithms and locks.
 [Run 37252560572](https://github.com/irctrakz/wgslirp/actions/runs/37252560572)
 passed standard race/fuzz checks, both modes of every bounded workload,
 actual-image validation and same-digest promotion. Resource and cleanup checks
-passed. Duplicate MSS state and repeated accounting remain separate candidates.
+passed. MSS consolidation is completed above; repeated accounting remains a
+separate candidate.
 
 **Single-dial handoff (2026-10-04):** `6a2b78b` replaces fast-wait cancellation
 and redial with ownership transfer of one dial result. All existing locks remain.
@@ -144,8 +157,8 @@ are preserved. Linux cross-compilation, vet, standard race/fuzz CI and the new
 ordinary/race mixed gate passed at `740d0cd`. The same run passed sustained-loss,
 WAN and capacity ordinary/race checks, actual-image validation and same-digest
 development promotion, with verified owned-resource cleanup.
-Further candidates require separate review: duplicate MSS state and repeated
-async-dial completion accounting.
+Repeated async-dial completion accounting requires separate review. Duplicate
+MSS state is consolidated as recorded above.
 Do not combine these with a lock rewrite or replace protocol tests with line-count
 claims. Independent-peer WAN, failure and saturation stages remain follow-ups.
 

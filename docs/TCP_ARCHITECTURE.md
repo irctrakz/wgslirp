@@ -17,7 +17,14 @@ offer derived from the bridge MTU/clamp rather than the peer's smaller offer.
 The diagnostic `clientMSS` label and existing zero-offer failure behavior remain
 unchanged. NewReno retains its own private MSS scale; that is algorithm state,
 not a second mutable flow policy. No locks, ownership boundaries or public APIs
-change. Focused negotiation/segmentation tests passed locally; full CI is pending.
+change. At `6126e42`,
+[run 37343127478](https://github.com/irctrakz/wgslirp/actions/runs/37343127478)
+passed build/vet, unit/integration race, fuzz, both modes of all bounded workloads,
+actual-image validation and same-digest development promotion. Focused tests
+cover missing/small/large/zero peer offers, initial and runtime clamps, advertised
+MSS, initial congestion windows and exact segmented payloads. All resource-event
+and owned-cleanup checks passed. This is behavior-preserving cleanup, not a
+performance improvement claim.
 
 ### Congestion-control state
 

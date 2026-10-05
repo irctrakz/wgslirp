@@ -6,23 +6,23 @@ same commit. The candidate is published to GHCR, pulled by immutable digest and
 tested. Only a successful validation job (including cleanup) permits promotion
 of that digest to a unique development tag. Promotion does not rebuild the image.
 
-## Latest validation — 2026-10-04
+## Latest validation — 2026-10-05
 
-[Run 37264490586](https://github.com/irctrakz/wgslirp/actions/runs/37264490586)
+[Run 37343127478](https://github.com/irctrakz/wgslirp/actions/runs/37343127478)
 passed the standard checks and all sequential ordinary/race mixed, sustained,
-WAN and capacity gates for `e909a8bb1a83e8fa9c40daf5530f9a6a2a3337bb`.
+WAN and capacity gates for `6126e4202de7244624ea31e914a9dcb493300e68`.
 See [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md) for the new independent-peer evidence
 and retained initial fixture failure.
 
 The actual image passed UID 100 startup, encrypted TCP/UDP and SIGTERM under
-traffic (73.255002 ms), using the unchanged dropped-capability and resource
+traffic (70.192637 ms), using the unchanged dropped-capability and resource
 constraints. The fixture omits `WG_PEERS`, verifying automatic discovery through
 the image's normal startup path. Cleanup verified no owned runtime containers, networks, builder,
 cache volume or local image remained. CI promoted the same immutable artifact:
 
-`ghcr.io/irctrakz/wgslirp@sha256:2d108a86d5ea3741d23e813bb2b435467c8f6d6aa296db46065b7183da04f233`
+`ghcr.io/irctrakz/wgslirp@sha256:8d5ce2a61a607c624300aabe090b92bf4dea2f903874f2e1194629f311fc181a`
 
-as `dev-e909a8bb1a83e8fa9c40daf5530f9a6a2a3337bb-37264490586-1`.
+as `dev-6126e4202de7244624ea31e914a9dcb493300e68-37343127478-1`.
 This covers linux/amd64; main/master and `latest` were untouched.
 
 The actual-image log regression injected sixteen encrypted IPv4 fragments,
