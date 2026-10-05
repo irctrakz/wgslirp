@@ -137,12 +137,69 @@ All runtime resource events were zero. Owned runtime containers/networks,
 builder/cache volume and local tested image were removed; GHCR artifacts are
 deliberately retained. Promotion preserved the tested digest, without rebuilding.
 
-### Follow-up limits
+### Remaining work: allocation churn and unpaced acceptance
 
-- [ ] Profile and reduce reassembly's full-datagram allocation churn for small
-  fragmented traffic while preserving reservation, dispatch and expiry ownership.
-- [ ] Establish a separate unpaced/high-rate acceptance profile before claiming
-  that the original producer's heap/deadline failures have been resolved.
+Implement these as separate reviewable changes, in the order below. The accepted
+finite-rate profile remains a regression gate; neither item changes the default
+policy or establishes unlimited forwarding capacity.
+
+#### 1. Reassembly allocation churn
+
+- [ ] Establish an isolated reassembly allocation baseline, separate from
+  WireGuard/gVisor allocations. Cover small fragmented packets, MTU-sized
+  fragments and maximum datagrams, including completion, reordered ranges,
+  exact duplicates, missing ranges, late duplicates, expiry and quota saturation.
+  Record bytes and allocation objects per completed datagram, retained bytes
+  during incomplete assemblies, and recovery after expiry and shutdown.
+- [ ] Use that evidence to select the smallest worthwhile storage change.
+  Compare the same workload, runtime and measurement method before and after;
+  report allocation savings and any throughput or retained-memory tradeoff.
+  Do not infer a leak from cumulative allocations or optimize solely from a
+  sampled heap profile.
+- [ ] Preserve reserve-before-retain, the aggregate/sub-budget boundaries,
+  global/source/range quotas, and the charge held through synchronous dispatch.
+  Completion, rejection, expiry and joined shutdown must release ownership
+  exactly once. Any retained pool/cache or transient old/new storage must have
+  explicit bounded accounting; moving allocations outside accounting is not a
+  reduction in memory use.
+- [ ] Verify unchanged checksum, overlap, ECN, duplicate and expiry behavior,
+  exact-byte delivery, quota counters and recovery. Run focused regression,
+  race and fuzz checks followed by the unchanged full bounded pipeline and
+  actual-image validation/promotion for the tested commit. Accept the change
+  only with demonstrated allocation improvement, no resource-gate regression,
+  zero final reservations and verified worker/resource cleanup.
+
+#### 2. Unpaced encrypted acceptance
+
+- [ ] Declare a separate opt-in CI profile that removes the artificial
+  one-millisecond pause per original packet. Unpaced still means finite traffic
+  volumes and connection counts inside bounded containers, not an unlimited
+  producer. Preserve the original short/bulk/UDP volumes, exact-byte checks,
+  duplicate/reordering bursts and two deliberate fragment losses.
+- [ ] Retain the current acceptance limits: ordinary heap/RSS 192/384 MiB,
+  race heap/RSS 256/768 MiB, the 45-second mixed-traffic deadline, 300-second Go
+  test deadline and 600-second container deadline. Keep one CPU, 2 GiB/no swap,
+  128 PIDs, bounded tmpfs/logs and all cleanup/resource-event gates. Do not pass
+  by shrinking traffic, adding pacing, removing loss, forcing GC or relaxing
+  limits. A different capacity envelope requires a separately declared decision
+  and does not resolve the original failed profile.
+- [ ] Measure reassembly and WireGuard buffer/queue behavior together with
+  allocation rate, sampled heap/RSS, natural GC, throughput, handshake latency
+  and post-load recovery. Use profiled runs for diagnosis and unprofiled runs
+  for acceptance; sampled allocation profiles can lag GC and instrumentation
+  can affect timing. Retain the original heap breach and diagnostic timeout
+  evidence alongside any new result.
+- [ ] Predeclare a repetition count before running acceptance (proposed: three
+  fresh ordinary containers and three fresh race containers). Require every
+  run to meet unchanged gates without timeout, data mismatch, OOM/PID events or
+  cleanup failures, with final reservations zero and workers joined. Follow
+  with the full pipeline and actual-image validation, promoting the same tested
+  digest before marking unpaced acceptance complete.
+
+Private-server testing remains paused. These follow-ups retain arrival-order
+admission: the per-source IP quota is not authenticated-peer fairness, and four
+sources can occupy all 32 assembly slots. Default-policy review must explicitly
+consider that limitation and retain the `IPV4_REASSEMBLY=false` escape hatch.
 
 Native focused reassembly tests and Linux cross-vet including the new fixture
 passed. The baseline build, vet, unit/race, integration/race and fuzz stage passed

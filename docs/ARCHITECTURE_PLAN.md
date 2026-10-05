@@ -719,6 +719,18 @@ image and same-digest development promotion. Production reassembly allocation ch
 unpaced/high-rate acceptance remain explicit follow-ups there. This result does
 not authorize a default-policy change by itself.
 
+Remaining sequence and acceptance criteria are tracked in the
+[allocation-churn and unpaced acceptance checklist](ENCRYPTED_FRAGMENTS.md#remaining-work-allocation-churn-and-unpaced-acceptance):
+
+- [ ] Baseline isolated reassembly allocations, then reduce demonstrated churn
+  while preserving reservation, dispatch, expiry and shutdown ownership; pass
+  unchanged regression and full bounded image gates.
+- [ ] Establish separate, repeated unpaced ordinary/race acceptance with the
+  original traffic and resource/deadline limits; preserve failure evidence and
+  validate/promote the same tested image artifact.
+- [ ] Review default policy separately, including per-source fairness and the
+  explicit `IPV4_REASSEMBLY=false` escape hatch.
+
 ## First implementation milestone
 
 Complete Phase 0 and Phase 1 before beginning broad TCP refactoring. The milestone is reached when publishing is test-gated, sensitive diagnostics are repaired, lifecycle/health regressions pass, and invalid configuration cannot cause the identified panics. Then make resource controls effective before investing in structural cleanup.
