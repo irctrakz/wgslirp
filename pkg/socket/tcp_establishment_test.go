@@ -3,10 +3,14 @@ package socket
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/irctrakz/wgslirp/pkg/core"
 )
 
 func TestTCPEstablishmentFailurePolicy(t *testing.T) {
@@ -19,9 +23,21 @@ func TestTCPEstablishmentFailurePolicy(t *testing.T) {
 				b := newTCPBridge(parent)
 				t.Cleanup(b.stop)
 				b.errorSignal = policy
-				b.dial = func(_ context.Context, _ string, timeout time.Duration) (*net.TCPConn, error) {
-					if async && timeout < time.Second {
-						return nil, &net.DNSError{IsTimeout: true}
+				gate := make(chan struct{})
+				if !async {
+					b.tuning.FastDialMs = 1000
+					close(gate)
+				}
+				var calls atomic.Int32
+				b.dial = func(ctx context.Context, _ string, timeout time.Duration) (*net.TCPConn, error) {
+					calls.Add(1)
+					if timeout != 5*time.Second {
+						t.Errorf("dial lifetime: %v", timeout)
+					}
+					select {
+					case <-gate:
+					case <-ctx.Done():
+						return nil, ctx.Err()
 					}
 					return nil, errors.New("refused")
 				}
@@ -29,9 +45,15 @@ func TestTCPEstablishmentFailurePolicy(t *testing.T) {
 				if err := b.HandleOutbound(syn); err != nil {
 					t.Fatal(err)
 				}
+				if async {
+					close(gate)
+				}
 				done := make(chan struct{})
 				go func() { b.workers.Wait(); close(done) }()
 				awaitBudgetWorker(t, done)
+				if calls.Load() != 1 {
+					t.Fatalf("dial calls=%d", calls.Load())
+				}
 				packets := capture.snapshot()
 				if async {
 					if len(packets) == 0 || packets[0][9] != 6 || packets[0][33] != fSYN|fACK {
@@ -65,6 +87,163 @@ func TestTCPEstablishmentFailurePolicy(t *testing.T) {
 	}
 }
 
+func TestDialHandoffClosesLateSocketAfterCancellation(t *testing.T) {
+	for _, reason := range []string{"rst", "stop", "fast-stop", "synack-refusal", "quote-limit"} {
+		t.Run(reason, func(t *testing.T) {
+			parent := NewSocketInterface(DefaultConfig())
+			parent.processor = &captureProcessor{}
+			if reason == "synack-refusal" {
+				parent.processor = &mockPacketProcessor{processPacketFunc: func(core.Packet) error { return errors.New("refused") }}
+			}
+			b := newTCPBridge(parent)
+			if reason == "fast-stop" {
+				b.tuning.FastDialMs = 1000
+			}
+			if reason == "quote-limit" {
+				b.buffers.limit = 1
+			}
+			client, host := tcpBudgetPair(t)
+			started, cancelled, finish := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(finish) })
+			t.Cleanup(func() { release(); b.stop() })
+			var calls atomic.Int32
+			b.dial = func(ctx context.Context, _ string, _ time.Duration) (*net.TCPConn, error) {
+				calls.Add(1)
+				close(started)
+				<-ctx.Done()
+				close(cancelled)
+				<-finish // Model a successful connect racing with cancellation.
+				return client, nil
+			}
+			src, dst := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
+			done := make(chan error, 1)
+			go func() { done <- b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 42, 0, fSYN, nil)) }()
+			awaitBudgetWorker(t, started)
+			if reason == "fast-stop" {
+				b.requestStop()
+			}
+			select {
+			case err := <-done:
+				if reason == "rst" || reason == "stop" {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if err == nil {
+					t.Fatal("expected establishment failure")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("SYN handler blocked")
+			}
+			switch reason {
+			case "rst":
+				if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 43, 0, fRST, nil)); err != nil {
+					t.Fatal(err)
+				}
+			case "stop":
+				b.requestStop()
+			}
+			awaitBudgetWorker(t, cancelled)
+			assertBudget(t, b.dialSlots, 1) // Cancellation alone must not free a running dial's slot.
+			release()
+			b.stop()
+			if calls.Load() != 1 {
+				t.Fatalf("dial calls=%d", calls.Load())
+			}
+			if err := host.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			var p [1]byte
+			if n, err := host.Read(p[:]); n != 0 || err != io.EOF {
+				t.Fatalf("late socket not closed: n=%d err=%v", n, err)
+			}
+			assertBudget(t, b.dialSlots, 0)
+			assertBudget(t, b.buffers, 0)
+			if len(b.flowSnapshot()) != 0 || atomic.LoadInt64(&b.dialInflight) != 0 {
+				t.Fatal("retained flow or dial accounting")
+			}
+		})
+	}
+}
+
+func TestDialHandoffFlushesPendingDataBeforeHalfClose(t *testing.T) {
+	parent := NewSocketInterface(DefaultConfig())
+	capture := &captureProcessor{}
+	parent.processor = capture
+	b := newTCPBridge(parent)
+	client, host := tcpBudgetPair(t)
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(func() { release(); b.stop() })
+	var calls atomic.Int32
+	b.dial = func(ctx context.Context, _ string, _ time.Duration) (*net.TCPConn, error) {
+		calls.Add(1)
+		select {
+		case <-gate:
+			return client, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	src, dst := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 42, 0, fSYN, nil)); err != nil {
+		t.Fatal(err)
+	}
+	flows := b.flowSnapshot()
+	if len(flows) != 1 {
+		t.Fatal("missing connecting flow")
+	}
+	f := flows[0]
+	f.stateMu.Lock()
+	ack := f.serverNxt
+	f.stateMu.Unlock()
+	payload := []byte("pending data before FIN")
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 43, ack, fACK|fFIN, payload)); err != nil {
+		t.Fatal(err)
+	}
+	assertBudget(t, b.dialSlots, 1)
+	release()
+	if err := host.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(host)
+	if err != nil || string(got) != string(payload) {
+		t.Fatalf("pending bytes/EOF: %q %v", got, err)
+	}
+	b.stop()
+	if calls.Load() != 1 {
+		t.Fatalf("dial calls=%d", calls.Load())
+	}
+	synacks := 0
+	for _, p := range capture.snapshot() {
+		if p[9] == 6 && p[33] == fSYN|fACK {
+			synacks++
+		}
+	}
+	if synacks != 1 {
+		t.Fatalf("SYN-ACKs=%d", synacks)
+	}
+	assertBudget(t, b.dialSlots, 0)
+	assertBudget(t, b.buffers, 0)
+}
+
+func TestDialHandoffHonorsLongConfiguredFastWait(t *testing.T) {
+	parent := NewSocketInterface(DefaultConfig())
+	parent.processor = &captureProcessor{}
+	b := newTCPBridge(parent)
+	t.Cleanup(b.stop)
+	b.tuning.FastDialMs = 6000
+	b.dial = func(_ context.Context, _ string, timeout time.Duration) (*net.TCPConn, error) {
+		if timeout != 6*time.Second {
+			t.Errorf("configured wait truncated: %v", timeout)
+		}
+		return nil, errors.New("refused")
+	}
+	if err := b.HandleOutbound(buildIPv4TCP([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, 80, 42, 0, fSYN, nil)); err != nil {
+		t.Fatal(err)
+	}
+	assertBudget(t, b.dialSlots, 0)
+}
+
 func TestTCPEstablishmentEmitsOneSYNACK(t *testing.T) {
 	for _, async := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fast", true: "async"}[async], func(t *testing.T) {
@@ -75,14 +254,25 @@ func TestTCPEstablishmentEmitsOneSYNACK(t *testing.T) {
 			t.Cleanup(b.stop)
 			client, _ := tcpBudgetPair(t)
 			var calls atomic.Int32
-			b.dial = func(context.Context, string, time.Duration) (*net.TCPConn, error) {
-				if calls.Add(1) == 1 && async {
-					return nil, &net.DNSError{IsTimeout: true}
+			gate := make(chan struct{})
+			if !async {
+				b.tuning.FastDialMs = 1000
+				close(gate)
+			}
+			b.dial = func(ctx context.Context, _ string, _ time.Duration) (*net.TCPConn, error) {
+				calls.Add(1)
+				select {
+				case <-gate:
+				case <-ctx.Done():
+					return nil, ctx.Err()
 				}
 				return client, nil
 			}
 			if err := b.HandleOutbound(buildIPv4TCP([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, 80, 42, 0, fSYN, nil)); err != nil {
 				t.Fatal(err)
+			}
+			if async {
+				close(gate)
 			}
 			flows := b.flowSnapshot()
 			if len(flows) != 1 {
@@ -103,6 +293,9 @@ func TestTCPEstablishmentEmitsOneSYNACK(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 			b.stop() // Join completion before asserting that no second SYN-ACK was sent.
+			if calls.Load() != 1 {
+				t.Fatalf("dial calls=%d", calls.Load())
+			}
 			packets := capture.snapshot()
 			if len(packets) != 1 || packets[0][33] != fSYN|fACK {
 				t.Fatalf("expected one SYN-ACK, got %d packets", len(packets))

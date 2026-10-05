@@ -6,6 +6,31 @@ privileges or runtime configuration.
 
 ## Further simplification (2026-10-04)
 
+### Single-dial handoff
+
+The fast wait and async completion now consume one unbuffered dial-result
+channel. Crossing the fast-wait deadline neither cancels nor replaces the host
+dial. A bridge-owned worker retains its reservation and undelivered socket;
+successful channel delivery transfers socket ownership to the receiver. An
+abandoned worker closes a late socket itself. Cancellation alone never releases
+a still-running dial's reservation; shutdown joins both dial and completion
+workers. The once-only release also permits a receiver to release promptly after
+receiving the completed dial, preserving immediate admission accounting.
+
+Default total dial time is five seconds from the original attempt. Explicit
+fast waits greater than five seconds remain honored as the total deadline;
+there is no second five-second attempt. Immediate failures retain configured
+RST/ICMP/silent signaling before SYN-ACK. Async publication still owns the sole
+initial SYN-ACK under `stateMu`; completion attaches only after that lock is
+released, or closes its socket if the flow was removed. Pending bytes still
+flush before host write-half-close. No existing lock is removed or reordered.
+
+Tests control dial completion/cancellation with channels and cover one attempt,
+one SYN-ACK, fast/async failure policies, reset/shutdown, late successful sockets,
+SYN-ACK refusal, quote-budget failure, duplicate candidates and pending FIN.
+The independent-peer mixed gate additionally requires zero empty host accepts
+and exactly 130 payload connections. Validation of this change is pending.
+
 `ed2a4d8` removes write-only retransmission flags (`rtx`, `pipeBytes`) and the
 sole no-op `OnSent` callback. Actual retry counts still govern RTT sampling;
 the local in-flight calculation still governs recovery. No lock, policy,
@@ -20,7 +45,7 @@ a production failure or throughput claim.
 
 Keep the next changes independently reviewable:
 
-1. Investigate handing one ongoing dial from the fast path to async completion,
+1. Implemented above, pending validation: hand one ongoing dial from the fast path to async completion,
    avoiding cancellation/redial. Preserve immediate-refusal behavior, SYN-ACK
    ownership, candidate publication, shutdown cancellation and exactly-once
    socket/reservation release. Add deterministic handoff/cancellation tests

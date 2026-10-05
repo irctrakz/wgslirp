@@ -55,6 +55,13 @@ sequence-wrap and recovery assertions.
 
 ## Validation status
 
+**Single-dial handoff acceptance, declared before its run:** retain all existing
+traffic, latency, resource and cleanup criteria, and additionally require zero
+empty host accepts (exactly 130 host payload connections). Keep the 260-accept
+fixture safety ceiling for failure diagnostics. Async-dial metrics now count
+handoffs of the original attempt, not replacement host dials. Earlier results
+below describe the cancellation/redial implementation and remain historical.
+
 Initial [run 37241906300](https://github.com/irctrakz/wgslirp/actions/runs/37241906300)
 at `4a2b2b2` passed ordinary mode in 10.53 seconds (handshake p95 7.701 ms,
 maximum 13.031 ms), but race mode timed out on short worker 0, request 24.

@@ -38,7 +38,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 		}
 		return fmt.Errorf("tcp: %w", ErrFlowLimit)
 	}
-	// One reservation spans fast dialing and asynchronous fallback.
+	// One reservation and one dial span the fast wait and asynchronous handoff.
 	if !b.dialSlots.acquire(1) {
 		b.parent.admission.pendingDials.Add(1)
 		if b.parent.processor != nil {
@@ -51,30 +51,52 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	handedOff := false
 	defer func() {
 		if !handedOff {
-			releaseDial()
+			cancelDial()
 		}
 	}()
-	// Fast pre-dial to detect immediate refusal before emitting SYN-ACK; fallback to async otherwise
-	var preConn *net.TCPConn
-	{
-		raddr := &net.TCPAddr{IP: net.IP(dstIP[:]), Port: int(dstPort)}
-		fastT := time.Duration(b.tuning.FastDialMs) * time.Millisecond
-		if fastT <= 0 {
-			fastT = time.Millisecond
-		}
-		if c, err := b.dial(dialCtx, raddr.String(), fastT); err == nil {
-			preConn = c
-			b.configureHostSocket(c)
-			releaseDial()
-		} else {
-			if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
-				// Hard failure: signal guest per policy and abort without SYN-ACK
-				b.signalDialFailure(srcIP, dstIP, srcPort, dstPort, seq, pkt)
-				atomic.AddUint64(&b.parent.metrics.Errors, 1)
-				atomic.AddUint64(&b.metrics.Errors, 1)
-				return nil
+	// The worker owns an undelivered result and the reservation. An unbuffered
+	// send transfers socket ownership to exactly one receiver; cancellation
+	// closes any socket that never transfers. Shutdown joins this worker.
+	result := make(chan tcpDialResult)
+	address := (&net.TCPAddr{IP: net.IP(dstIP[:]), Port: int(dstPort)}).String()
+	fastT := time.Duration(b.tuning.FastDialMs) * time.Millisecond
+	if fastT <= 0 {
+		fastT = time.Millisecond
+	}
+	dialTimeout := max(fastT, 5*time.Second)
+	if !b.launch(func() {
+		defer releaseDial()
+		conn, err := b.dial(dialCtx, address, dialTimeout)
+		select {
+		case result <- tcpDialResult{conn, err}:
+		case <-dialCtx.Done():
+			if conn != nil {
+				conn.Close()
 			}
 		}
+	}) {
+		releaseDial()
+		return fmt.Errorf("TCP bridge stopped")
+	}
+	// FastDialMs bounds how long SYN processing waits, not the dial's lifetime.
+	// Expiry hands the same result channel to completion; it never redials.
+	var preConn *net.TCPConn
+	timer := time.NewTimer(fastT)
+	defer timer.Stop()
+	select {
+	case outcome := <-result:
+		releaseDial()
+		if outcome.err != nil {
+			b.signalDialFailure(srcIP, dstIP, srcPort, dstPort, seq, pkt)
+			atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			atomic.AddUint64(&b.metrics.Errors, 1)
+			return nil
+		}
+		preConn = outcome.conn
+		b.configureHostSocket(preConn)
+	case <-timer.C:
+	case <-dialCtx.Done():
+		return dialCtx.Err()
 	}
 	serverISN := rand.Uint32()
 	candidate := &tcpFlow{
@@ -185,13 +207,18 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 			copy(quotedPacket, pkt[:quoteLen])
 			handedOff = true
 			if !b.launch(func() {
-				defer releaseDial()
 				defer b.buffers.release(quoteLen)
 				atomic.AddUint64(&b.dialStart, 1)
 				atomic.AddInt64(&b.dialInflight, 1)
-				raddr := &net.TCPAddr{IP: net.IP(f.dstIP[:]), Port: int(f.dstPort)}
-				conn, err := b.dial(dialCtx, raddr.String(), 5*time.Second)
+				var outcome tcpDialResult
+				select {
+				case outcome = <-result:
+				case <-dialCtx.Done():
+					atomic.AddInt64(&b.dialInflight, -1)
+					return
+				}
 				releaseDial()
+				conn, err := outcome.conn, outcome.err
 				if err != nil {
 					f.stateMu.Lock()
 					defer f.stateMu.Unlock()
@@ -227,7 +254,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 				// Flush any pre-connect pending data and contiguous reassembly
 				b.flushPending(f)
 			}) {
-				releaseDial()
+				cancelDial()
 				b.buffers.release(quoteLen)
 				b.removeFlowLocked(f)
 				return fmt.Errorf("TCP bridge stopped")
@@ -246,6 +273,11 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	}
 
 	return b.handleTCPFlow(flow, segment)
+}
+
+type tcpDialResult struct {
+	conn *net.TCPConn
+	err  error
 }
 
 func (b *tcpBridge) signalDialFailure(src, dst [4]byte, sport, dport uint16, seq uint32, quote []byte) {

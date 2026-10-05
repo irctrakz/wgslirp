@@ -341,6 +341,9 @@ func runEncryptedMixed(t *testing.T) {
 	if accepted.Load()-empty.Load() != 130 {
 		t.Fatalf("host payload connection count: accepted=%d empty=%d", accepted.Load(), empty.Load())
 	}
+	if empty.Load() != 0 {
+		t.Fatalf("single-dial handoff left empty host connections: %d", empty.Load())
+	}
 	sort.Slice(handshakes, func(i, j int) bool { return handshakes[i] < handshakes[j] })
 	if len(handshakes) != 130 || handshakes[129] > 5*time.Second {
 		t.Fatalf("handshake bound/count: %v", handshakes)

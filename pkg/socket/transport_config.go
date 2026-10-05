@@ -19,7 +19,7 @@ type TransportConfig struct {
 	LogHandshake       bool
 	// Deprecated: retained for configuration compatibility; send-gate logging has no active caller.
 	GateLog             string // accepted values: info, debug, off
-	FastDialMs          int    // zero retains the historical one-millisecond minimum
+	FastDialMs          int    // initial result wait; zero retains the one-millisecond minimum
 	CongestionControl   string // newreno or off
 	InitialCwndMSS      int    // zero uses RFC 6928; positive values only reduce the window
 	SocketReceiveBuffer int    // zero uses the OS default

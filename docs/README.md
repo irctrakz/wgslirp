@@ -250,7 +250,7 @@ fallback. Booleans accept true/false, 1/0, yes/no and on/off (case-insensitive).
 | `TCP_ERROR_SIGNAL` | icmp | Dial-failure signaling: `icmp`, `rst`, or `none`. |
 | `TCP_LOG_HANDSHAKE` | false | Log SYN-ACK MSS decisions. |
 | `TCP_GATE_LOG` | info | Deprecated, inactive setting; `info`, `debug`, `off` and true/false aliases remain accepted for compatibility. |
-| `TCP_FAST_DIAL_MS` | 5 | Preliminary dial deadline; zero retains the historical 1 ms minimum. Async fallback remains bounded to 5 seconds. |
+| `TCP_FAST_DIAL_MS` | 5 | Wait for an immediate dial result before SYN-ACK; zero retains the historical 1 ms minimum. The same dial continues asynchronously, with a total deadline of the greater of this wait and 5 seconds. |
 | `TCP_CC` | newreno | Congestion control: `newreno` (`reno`/`new-reno` aliases) or `off`. |
 | `TCP_INIT_CWND_MSS` | 0 | Positive values reduce the RFC 6928 initial window to at most this many MSS; zero uses the RFC default. |
 | `TCP_SOCK_RCVBUF` | 0 | Requested host receive-buffer bytes; zero uses OS defaults. |
@@ -298,7 +298,7 @@ Detailed metrics (`tcp_ext` in JSON output) include `dial_reserved`, `dial_peak`
 - `TCP_GATE_LOG`: deprecated and inactive; accepted for configuration compatibility. It does not control active TCP logging.
 - `TCP_CC`: congestion control algo for host→guest path; `off` to disable, default newreno.
 - `TCP_ERROR_SIGNAL`: how to signal outbound connect failure to the guest: `icmp` (default), `rst`, or `none`.
-- `TCP_FAST_DIAL_MS`: fast pre-dial timeout (ms) to map immediate refusals to ICMP/RST without sending SYN-ACK first (default ~5ms).
+- `TCP_FAST_DIAL_MS`: initial wait (ms) to map immediate refusals to ICMP/RST before SYN-ACK (default 5 ms). Expiry hands off the same dial rather than cancelling and redialing.
 - `TCP_SOCK_RCVBUF`, `TCP_SOCK_SNDBUF`: optional OS socket buffer sizes for host TCP connections.
 - `TCP_ACK_IDLE_GATE_MS`, `TCP_ACK_IDLE_MIN_INFLIGHT`, `TCP_ACK_IDLE_FAIL_SEC`: advanced gating of host reads when no guest ACK progress. Defaults: `TCP_ACK_IDLE_GATE_MS=6000`, `TCP_ACK_IDLE_FAIL_SEC=120`; `TCP_ACK_IDLE_MIN_INFLIGHT` defaults to ~1 MSS when unset.
   The sender and 15-second maintenance pass share this policy; the former hardcoded 30-second closure is removed. A zero failure timeout disables ACK-idle closure while retaining gating. The failure deadline takes effect only after the gate and minimum in-flight threshold are met. Independent connection-lifetime, retransmission and close timers still apply.
