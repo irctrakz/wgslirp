@@ -698,6 +698,15 @@ commit only on `codex/architecture-hardening`; nothing pushed.
 | 29 | Documentation Close to Code | 2–6 | Current contracts, assumptions, examples, and decisions live with their code. |
 | 30 | Readability First | 4, 6 | Formatting, naming, function scope, and invariant documentation support straightforward review. |
 
+## Opt-in IPv4 reassembly follow-through (2026-10-05)
+
+The [implementation and acceptance checklist](IPV4_FRAGMENT_REASSEMBLY.md)
+tracks bounded reassembly, retained-buffer ownership, expiry, diagnostics,
+race/fuzz checks and actual-image acceptance. Default enablement remains a
+separate decision after acceptance and deployment evidence, including per-source
+fairness and memory under fragmented production traffic. No private server tests
+or kernel routing privileges are required.
+
 ## First implementation milestone
 
 Complete Phase 0 and Phase 1 before beginning broad TCP refactoring. The milestone is reached when publishing is test-gated, sensitive diagnostics are repaired, lifecycle/health regressions pass, and invalid configuration cannot cause the identified panics. Then make resource controls effective before investing in structural cleanup.

@@ -14,6 +14,11 @@ Unknown variables are not rejected (the process inherits unrelated OS variables)
 
 - Boolean controls accept `true/false`, `1/0`, `yes/no`, `on/off`, ignoring case
   and surrounding whitespace. Empty/unknown boolean values fail startup.
+- `IPV4_REASSEMBLY` defaults to false. Its finite
+  `IPV4_FRAGMENT_BUFFER_CAP_BYTES` defaults to 4 MiB (zero also selects that
+  default), sharing the aggregate socket budget. Enabled support requires at
+  least 69,631 bytes. Fixed datagram/source/range limits and expiry are documented
+  in [IPv4 fragment reassembly](IPV4_FRAGMENT_REASSEMBLY.md).
 - Numeric controls reject empty, malformed, overflowing and out-of-range values.
   Unset values retain defaults. WireGuard listen port zero requests an ephemeral
   port; MTU is 576-65535 and keepalive is 0-65535 seconds.

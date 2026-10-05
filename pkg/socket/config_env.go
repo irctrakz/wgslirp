@@ -38,6 +38,7 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 		{"SOCKET_BUFFER_CAP_BYTES", &cfg.SocketBufferCapBytes},
 		{"TCP_PEND_CAP_BYTES", &cfg.TCPPendingCapBytes},
 		{"TCP_RETRANSMIT_CAP_BYTES", &cfg.TCPRetransmitCapBytes},
+		{"IPV4_FRAGMENT_BUFFER_CAP_BYTES", &cfg.IPv4FragmentBufferCapBytes},
 	} {
 		if value, present := lookup(setting.name); present {
 			number, err := strconv.Atoi(strings.TrimSpace(value))
@@ -53,6 +54,7 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 	}{
 		{"TCP_ACK_TRACE", &transport.AckTrace}, {"TCP_LOG_HANDSHAKE", &transport.LogHandshake},
 		{"TCP_ENABLE_SACK", &transport.EnableSACK}, {"COPY_TOS", &transport.CopyTOS},
+		{"IPV4_REASSEMBLY", &cfg.IPv4Reassembly},
 	} {
 		if value, present := lookup(setting.name); present {
 			switch strings.ToLower(strings.TrimSpace(value)) {

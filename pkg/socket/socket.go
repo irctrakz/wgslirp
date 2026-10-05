@@ -47,9 +47,10 @@ type SocketInterface struct {
 	wg       sync.WaitGroup
 
 	// Slirp bridges
-	udp  *udpBridge
-	tcp  *tcpBridge
-	icmp *icmpBridge
+	udp       *udpBridge
+	tcp       *tcpBridge
+	icmp      *icmpBridge
+	fragments *ipv4Fragments // assigned during Start, immutable until joined shutdown
 
 	// (FlowManager and egress limiter removed)
 
@@ -177,6 +178,11 @@ func (s *SocketInterface) Start() error {
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
 	s.icmp = newICMPBridge(s)
+	if s.config.IPv4Reassembly {
+		s.fragments = newIPv4Fragments(s.buffers(), s.config.IPv4FragmentBufferCapBytes)
+		s.wg.Add(1)
+		go s.maintainIPv4Fragments()
+	}
 	s.udp.start()
 	s.tcp.start()
 
@@ -244,6 +250,9 @@ func (s *SocketInterface) RequestStop() <-chan struct{} {
 			udp.stop()
 		}
 		s.wg.Wait()
+		if s.fragments != nil {
+			s.fragments.close()
+		}
 		if dgram != nil {
 			dgram.clear()
 		}
@@ -282,15 +291,29 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		return fmt.Errorf("nil packet")
 	}
 
-	data, _, err := parseIPv4(core.BorrowPacketData(packet))
+	data := core.BorrowPacketData(packet)
+	wireSize := len(data)
+	var err error
+	if s.fragments != nil {
+		var release func()
+		data, release, err = s.fragments.add(data, time.Now())
+		if release != nil {
+			defer release()
+		}
+		if err == nil && data == nil {
+			return nil
+		}
+	} else {
+		data, _, err = parseIPv4(data)
+	}
 	if err != nil {
 		atomic.AddUint64(&s.metrics.Errors, 1)
 		return err
 	}
 	// Check packet size against MTU
-	if len(data) > s.config.MTU {
+	if wireSize > s.config.MTU {
 		if s.failureLog.Allow(time.Now()) {
-			logging.Warnf("Guest packet size %d exceeds configured MTU %d", len(data), s.config.MTU)
+			logging.Warnf("Guest packet size %d exceeds configured MTU %d", wireSize, s.config.MTU)
 		}
 	}
 
@@ -437,11 +460,14 @@ func (s *SocketInterface) SetEgressMTU(mtu int) {
 // DetailedMetrics returns total and per-bridge metrics, including active flows.
 func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 	s.mu.Lock()
-	udp, tcp, processor := s.udp, s.tcp, s.processor
+	udp, tcp, processor, fragments := s.udp, s.tcp, s.processor, s.fragments
 	s.mu.Unlock()
 	dm := SocketDetailedMetrics{
 		Total:     loadSocketMetrics(&s.metrics),
 		Admission: s.admissionSnapshot(),
+	}
+	if fragments != nil {
+		dm.IPv4Fragments = fragments.snapshot()
 	}
 	if udp != nil {
 		udp.flowsMu.Lock()

@@ -76,9 +76,13 @@ behavior and admission counters are unchanged. Aggregation does not enable
 incoming IPv4 fragment support.
 
 Counts describe TUN write error callbacks, not necessarily individual packets:
-wireguard-go may batch packets, and the existing WGTun path returns at the first
-packet error. Continuing other packets within a failed batch requires a separate
-packet/error ownership review; log aggregation does not change that behavior.
+wireguard-go may batch packets. WGTun attempts the remaining packets after a
+failure and returns the first error; only accepted packets/bytes are counted.
+
+Incoming IPv4 reassembly is opt-in with `IPV4_REASSEMBLY: "true"` in Compose's
+environment. It keeps finite byte/datagram/source/range limits and shares the
+socket buffer budget. Leave it disabled until acceptance evidence is reviewed;
+see [configuration, ownership and default-enablement gates](IPV4_FRAGMENT_REASSEMBLY.md).
 
 Capture is off by default. Enabling `WG_PCAP` requires an explicitly writable
 path with private permissions and an appropriate `WG_PCAP_MAX_BYTES` cap. The

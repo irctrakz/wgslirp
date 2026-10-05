@@ -23,6 +23,8 @@ type SocketDetailedMetrics struct {
 	Processor map[string]uint64
 	UDPExt    map[string]uint64
 	TCPExt    map[string]uint64
+	// IPv4Fragments is nil when the experimental feature is disabled.
+	IPv4Fragments map[string]uint64
 }
 
 func loadSocketMetrics(m *core.SocketMetrics) core.SocketMetrics {

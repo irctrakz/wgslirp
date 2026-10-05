@@ -227,6 +227,8 @@ Resource controls are parsed once before socket startup. Invalid, empty, negativ
 | `TCP_FLOW_LIFETIME_SEC` | 120 | Idle TCP lifetime; zero uses the default. |
 | `UDP_FLOW_LIFETIME_SEC` | 60 | Idle UDP lifetime; zero uses the default. |
 | `TCP_REASSEMBLY_CAP_BYTES` | 131072 | Out-of-order storage threshold per TCP flow; zero uses the default. |
+| `IPV4_REASSEMBLY` | false | Opt-in incoming TCP/UDP/ICMP fragment reassembly; see [limits and acceptance gates](IPV4_FRAGMENT_REASSEMBLY.md). |
+| `IPV4_FRAGMENT_BUFFER_CAP_BYTES` | 4194304 | Finite fragment storage cap sharing the socket budget; zero uses the default. Fixed datagram/source/range quotas also apply. |
 | `MAX_TCP_FLOWS` | 64 | Maximum registered TCP flows; explicit zero is unlimited. |
 | `MAX_UDP_FLOWS` | 256 | Maximum registered UDP flows; explicit zero is unlimited. |
 | `MAX_PENDING_TCP_DIALS` | 64 | Concurrent fast/async TCP dial attempts; one reservation spans fallback. |
