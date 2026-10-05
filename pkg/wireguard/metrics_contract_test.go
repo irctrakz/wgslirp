@@ -33,8 +33,8 @@ func TestTUNMetricsPartialBatchAndOverlay(t *testing.T) {
 	p[0] = 0x45
 	p[16] = 10
 	p[19] = 1
-	n, err := tun.Write([][]byte{p, p}, 0)
-	if n != 1 || !errors.Is(err, cause) || tun.Metrics().PlaintextFromWG != 20 {
+	n, err := tun.Write([][]byte{p, p, p}, 0)
+	if n != 2 || !errors.Is(err, cause) || tun.Metrics().PlaintextFromWG != 40 || w.calls != 3 {
 		t.Fatalf("partial batch %d %v %+v", n, err, tun.Metrics())
 	}
 	if err := tun.SetPeerCIDRs([]string{"10.0.0.0/8"}); err != nil {
@@ -44,7 +44,7 @@ func TestTUNMetricsPartialBatchAndOverlay(t *testing.T) {
 		t.Fatal(n, err)
 	}
 	m := tun.Metrics()
-	if m.PlaintextFromWG != 40 || m.PlaintextToWG != 20 || w.calls != 2 {
+	if m.PlaintextFromWG != 60 || m.PlaintextToWG != 20 || w.calls != 3 {
 		t.Fatal(m)
 	}
 	if _, err = tun.Read([][]byte{make([]byte, 40)}, make([]int, 1), 0); err != nil {

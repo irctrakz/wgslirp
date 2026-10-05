@@ -56,8 +56,10 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		return 0, fmt.Errorf("wg tun closed")
 	default:
 	}
-	// forward each buffer as a packet either back into WG (overlay) or to slirp
+	// Attempt every buffer. Return the first failure after processing the batch;
+	// only accepted packets contribute to the count and plaintext byte metrics.
 	sent := 0
+	var firstErr error
 
 	for _, b := range buffs {
 		if b == nil {
@@ -80,7 +82,10 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		// Exclusion first: always egress via slirp
 		if t.dstInExclude(dst) {
 			if err := t.writeToSocket(pkt); err != nil {
-				return sent, err
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
 			sent++
 			atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
@@ -89,7 +94,10 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		// Overlay re-route: back into WG if destination is inside a peer prefix
 		if t.dstInPeerCIDR(dst) {
 			if err := t.InjectToPeer(pkt); err != nil {
-				return sent, err
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
 			sent++
 			atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
@@ -97,12 +105,15 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		}
 		// Default: egress via slirp
 		if err := t.writeToSocket(pkt); err != nil {
-			return sent, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		sent++
 		atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
 	}
-	return sent, nil
+	return sent, firstErr
 }
 
 // Flush is a no-op for userspace WGTun.
