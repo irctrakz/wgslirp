@@ -82,6 +82,18 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Repeated packet diagnostics (2026-10-04):** `f6b65ea` aggregates known repeated
+TUN write errors into fixed per-device categories. The first error remains
+immediate; suppressed counts flush every thirty seconds and after joined device
+shutdown. Unexpected errors and packet error/counter semantics are unchanged.
+Concurrent record/flush tests preserve all 8,000 failures and repeated shutdown
+does not duplicate summaries. After `e909a8b` synchronized the image fixture with
+processing evidence, [run 37264490586](https://github.com/irctrakz/wgslirp/actions/runs/37264490586)
+passed standard checks, both modes of every bounded workload, exact actual-image
+fragment-log assertions, encrypted forwarding, SIGTERM and same-digest promotion.
+All resource-event and owned-cleanup checks passed. Incoming fragments remain
+unsupported; batch handling remains the follow-up below.
+
 **TUN batch-error follow-up (2026-10-04):** review WGTun's existing early return
 on a packet failure within a wireguard-go batch. Later buffers in that batch may
 remain unprocessed. Any change must preserve packet error/counter semantics,

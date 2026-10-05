@@ -8,22 +8,32 @@ of that digest to a unique development tag. Promotion does not rebuild the image
 
 ## Latest validation — 2026-10-04
 
-[Run 37260238700](https://github.com/irctrakz/wgslirp/actions/runs/37260238700)
+[Run 37264490586](https://github.com/irctrakz/wgslirp/actions/runs/37264490586)
 passed the standard checks and all sequential ordinary/race mixed, sustained,
-WAN and capacity gates for `1e0de5efea8487b6ec978d397b3cd70899d058e8`.
+WAN and capacity gates for `e909a8bb1a83e8fa9c40daf5530f9a6a2a3337bb`.
 See [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md) for the new independent-peer evidence
 and retained initial fixture failure.
 
 The actual image passed UID 100 startup, encrypted TCP/UDP and SIGTERM under
-traffic (79.285622 ms), using the unchanged dropped-capability and resource
+traffic (73.255002 ms), using the unchanged dropped-capability and resource
 constraints. The fixture omits `WG_PEERS`, verifying automatic discovery through
 the image's normal startup path. Cleanup verified no owned runtime containers, networks, builder,
 cache volume or local image remained. CI promoted the same immutable artifact:
 
-`ghcr.io/irctrakz/wgslirp@sha256:772ec9a8b02350f7810f5e0e1b6050e2afd2d9a57b6752cc1dcd055520f1e871`
+`ghcr.io/irctrakz/wgslirp@sha256:2d108a86d5ea3741d23e813bb2b435467c8f6d6aa296db46065b7183da04f233`
 
-as `dev-1e0de5efea8487b6ec978d397b3cd70899d058e8-37260238700-1`.
+as `dev-e909a8bb1a83e8fa9c40daf5530f9a6a2a3337bb-37264490586-1`.
 This covers linux/amd64; main/master and `latest` were untouched.
+
+The actual-image log regression injected sixteen encrypted IPv4 fragments,
+synchronizing each with the error counter to avoid the existing TUN batch early
+return. It required exactly sixteen observed failures, one immediate diagnostic
+and a shutdown summary of fifteen repeats; subsequent TCP/UDP traffic succeeded.
+Both capacity modes also exercised the periodic summary: two expected flow-limit
+failures produced one immediate line and a thirty-second summary of one repeat.
+Unexpected errors retain immediate logging, and packet errors/counters are not
+suppressed. The failed first fixture and batch follow-up remain recorded in
+[HARDENING_REVIEW.md](HARDENING_REVIEW.md).
 
 ## Execution environment
 
