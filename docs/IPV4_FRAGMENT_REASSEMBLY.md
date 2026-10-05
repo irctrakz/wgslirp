@@ -74,6 +74,9 @@ include recognizable fragment headers failing validation. Buffered fragments are
 accepted TUN frames; transport packet/byte metrics count completed datagrams.
 Cache metadata is bounded separately; reserved bytes include a conservative
 metadata allowance and do not represent process RSS or garbage awaiting GC.
+Admission reasons and peaks add `source_limit`, `global_limit`, `storage_limit`,
+`aggregate_limit`, `live_peak` and `source_peak`; see
+[expanded encrypted evidence and fairness scope](ENCRYPTED_FRAGMENTS.md).
 
 ## Acceptance evidence
 
@@ -111,6 +114,9 @@ the existing lifecycle tests; image construction and promotion were skipped.
 
 The completed race/fuzz and actual-image gates establish opt-in acceptance.
 Before changing the default:
+
+The [expanded profile](ENCRYPTED_FRAGMENTS.md) declares workload/resource criteria
+before acceptance and records its separate default-policy decision.
 
 - [ ] Expand bounded encrypted evidence to realistic MTU-sized fragments and
   larger datagrams, mixed short/bulk/UDP traffic, loss/reordering and multiple

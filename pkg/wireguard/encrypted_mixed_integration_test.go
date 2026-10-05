@@ -22,17 +22,23 @@ import (
 	"github.com/irctrakz/wgslirp/pkg/socket"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
+	wgtun "golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 )
 
 // The guest owns an independent TCP implementation. Neither side needs a kernel
 // TUN, raw sockets, sysctl changes or elevated capabilities.
 func mixedTestLink(t *testing.T) (*socket.SocketInterface, *netstack.Net) {
+	return mixedTestLinkWithOptions(t, false, nil)
+}
+
+func mixedTestLinkWithOptions(t *testing.T, reassembly bool, wrap func(wgtun.Device) wgtun.Device) (*socket.SocketInterface, *netstack.Net) {
 	t.Helper()
 	serverPrivate, serverPublic := encryptedKey(t)
 	guestPrivate, guestPublic := encryptedKey(t)
 	cfg := socket.DefaultConfig()
 	cfg.Protocol, cfg.MTU = "ip4:tcp", 1380
+	cfg.IPv4Reassembly = reassembly
 	s := socket.NewSocketInterface(cfg)
 	tun, err := NewWGTunWithConfig("mixed-server", 1380, s, DefaultTunConfig())
 	if err != nil {
@@ -67,7 +73,11 @@ func mixedTestLink(t *testing.T) (*socket.SocketInterface, *netstack.Net) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	guest := device.NewDevice(guestTun, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "[mixed-guest] "))
+	var guestDevice wgtun.Device = guestTun
+	if wrap != nil {
+		guestDevice = wrap(guestDevice)
+	}
+	guest := device.NewDevice(guestDevice, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "[mixed-guest] "))
 	t.Cleanup(guest.Close) // Device owns and closes guestTun exactly once.
 	private, _ := base64.StdEncoding.DecodeString(guestPrivate)
 	public, _ := base64.StdEncoding.DecodeString(serverPublic)
@@ -96,6 +106,10 @@ func TestEncryptedMixed(t *testing.T) {
 }
 
 func runEncryptedMixed(t *testing.T) {
+	runEncryptedMixedWithLink(t, mixedTestLink)
+}
+
+func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.SocketInterface, *netstack.Net)) {
 	// Use the container's ordinary IPv4 address: a remote loopback destination
 	// would depend on the guest stack's special loopback routing semantics.
 	addresses, err := net.InterfaceAddrs()
@@ -113,7 +127,7 @@ func runEncryptedMixed(t *testing.T) {
 	if !host.IsValid() {
 		t.Fatal("bounded container requires a non-loopback IPv4 address")
 	}
-	s, guest := mixedTestLink(t)
+	s, guest := link(t)
 	deadline := time.Now().Add(45 * time.Second)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	t.Cleanup(cancel)

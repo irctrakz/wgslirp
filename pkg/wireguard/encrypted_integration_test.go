@@ -104,6 +104,10 @@ func encryptedTestLinkWithIngress(t *testing.T, endpoint func(int) string, ingre
 }
 
 func encryptedTestLinkWithConfig(t *testing.T, endpoint func(int) string, ingress func(*socket.SocketInterface) core.PacketWriter, configure func(*socket.Config)) (*socket.SocketInterface, *WGTun, encryptedGuestSink) {
+	return encryptedTestLinkWithSources(t, endpoint, ingress, configure, "10.0.0.2/32", 32)
+}
+
+func encryptedTestLinkWithSources(t *testing.T, endpoint func(int) string, ingress func(*socket.SocketInterface) core.PacketWriter, configure func(*socket.Config), sources string, queue int) (*socket.SocketInterface, *WGTun, encryptedGuestSink) {
 	t.Helper()
 	serverPrivate, serverPublic := encryptedKey(t)
 	guestPrivate, guestPublic := encryptedKey(t)
@@ -130,7 +134,7 @@ func encryptedTestLinkWithConfig(t *testing.T, endpoint func(int) string, ingres
 	}
 	t.Cleanup(func() { s.Stop() })
 	server, err := StartDevice(DeviceConfig{PrivateKey: serverPrivate, MTU: 1380,
-		Peers: []PeerConfig{{PublicKey: guestPublic, AllowedIPs: []string{"10.0.0.2/32"}}}}, serverTun)
+		Peers: []PeerConfig{{PublicKey: guestPublic, AllowedIPs: []string{sources}}}}, serverTun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +152,7 @@ func encryptedTestLinkWithConfig(t *testing.T, endpoint func(int) string, ingres
 	if err != nil || port <= 0 {
 		t.Fatal("device did not bind a UDP port")
 	}
-	responses := make(encryptedGuestSink, 32)
+	responses := make(encryptedGuestSink, queue)
 	guestTun, err := NewWGTunWithConfig("encrypted-guest", 1380, responses, DefaultTunConfig())
 	if err != nil {
 		t.Fatal(err)

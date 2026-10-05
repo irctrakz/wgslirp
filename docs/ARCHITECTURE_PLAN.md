@@ -706,6 +706,10 @@ race/fuzz checks and actual-image acceptance. Default enablement remains a
 separate decision after acceptance and deployment evidence, including per-source
 fairness and memory under fragmented production traffic. No private server tests
 or kernel routing privileges are required.
+The [expanded encrypted profile](ENCRYPTED_FRAGMENTS.md) adds realistic MTUs,
+large datagrams, independent-stack mixed traffic with loss, competing sources,
+real repeated expiry and sampled allocation/RSS recovery. Its acceptance and
+default-policy commit remain separate reviewable changes.
 
 ## First implementation milestone
 

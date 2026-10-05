@@ -57,10 +57,13 @@ jobs:
                 wan) test_name=TestEncryptedWANRecovery; test_timeout=120s ;;
                 sustained) test_name=TestEncryptedSustainedLoss; test_timeout=330s ;;
                 mixed) test_name=TestEncryptedMixed; test_timeout=120s ;;
+                fragments) test_name=TestEncryptedFragments; test_timeout=300s ;;
                 *) echo "Unknown workload" >&2; exit 1 ;;
               esac
               set +e
-              go test $race_flag -v -tags="integration,$WORKLOAD" -run="^${test_name}$" -timeout="$test_timeout" -count=1 -parallel=1 ./pkg/wireguard
+              test_tags="integration,$WORKLOAD"
+              if [ "$WORKLOAD" = fragments ]; then test_tags="$test_tags,mixed"; fi
+              go test $race_flag -v -tags="$test_tags" -run="^${test_name}$" -timeout="$test_timeout" -count=1 -parallel=1 ./pkg/wireguard
               result=$?
               set -e
               echo CGROUP_MEMORY_PEAK
@@ -86,6 +89,7 @@ jobs:
             wan) grep -q 'WAN_ACCEPTED' evidence/test.log ;;
             sustained) grep -q 'SUSTAINED_ACCEPTED' evidence/test.log ;;
             mixed) grep -q 'MIXED_ACCEPTED' evidence/test.log ;;
+            fragments) grep -q 'FRAGMENTS_ACCEPTED' evidence/test.log ;;
             *) exit 1 ;;
           esac
       - name: Remove owned container and toolchain image
