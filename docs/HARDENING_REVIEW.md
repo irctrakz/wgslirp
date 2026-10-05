@@ -123,8 +123,9 @@ unsupported; batch handling remains the follow-up below.
 
 **TUN batch-error follow-up (2026-10-04; implemented 2026-10-05):** `e06d73e`
 attempts later batch packets, preserves the first error and counts accepted
-bytes. Focused partial-batch/overlay regressions pass; Linux/image acceptance
-is pending alongside [opt-in reassembly](IPV4_FRAGMENT_REASSEMBLY.md). Original scope:
+bytes. Partial-batch/overlay regressions and Linux/image acceptance passed in
+[run 37359184215](https://github.com/irctrakz/wgslirp/actions/runs/37359184215),
+alongside [opt-in reassembly](IPV4_FRAGMENT_REASSEMBLY.md). Original scope:
 review WGTun's existing early return
 on a packet failure within a wireguard-go batch. Later buffers in that batch may
 remain unprocessed. Any change must preserve packet error/counter semantics,

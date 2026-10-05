@@ -8,6 +8,31 @@ of that digest to a unique development tag. Promotion does not rebuild the image
 
 ## Latest validation — 2026-10-05
 
+[Run 37359184215](https://github.com/irctrakz/wgslirp/actions/runs/37359184215)
+passed standard build/vet/unit/race/integration/fuzz checks, all sequential
+ordinary/race encrypted workload gates and both actual-image modes for
+`8054f40bfa0975ddb5712f171a2a8bb06e45c5e0`. The same image passed default fragment
+rejection and opt-in bounded reassembly; see [feature evidence](IPV4_FRAGMENT_REASSEMBLY.md).
+
+The enabled fixture contained forty incomplete IDs at eight assemblies / 557,048
+reserved bytes, maintained 223 ordinary TCP/UDP rounds during sixty-second expiry,
+released all fragment reservations and restored fragmented admission. Both modes
+ran as UID 100 under the unchanged 1 CPU/256 MiB/no-swap/128-PID/dropped-capability
+profile, with zero memory/PID-limit events. SIGTERM under traffic exited zero in
+69 ms (default) and 85 ms (enabled). Owned runtime/build/image cleanup passed.
+
+Tested digest:
+
+`ghcr.io/irctrakz/wgslirp@sha256:e5a746f0737361e523fd052dc8525fd5b43bc93ec599baf34fe05c93517421be`
+
+As of 2026-10-05 19:27 UTC, all ten validation jobs had passed; the separate
+`promote-development` job was queued without an assigned runner. The digest above
+is the accepted candidate artifact. Its development tag is not recorded as
+promoted until that job verifies manifest identity. Main/master and `latest`
+remain untouched.
+
+## Node 24 migration validation — 2026-10-05
+
 [Run 37351322953](https://github.com/irctrakz/wgslirp/actions/runs/37351322953)
 passed the standard checks and all sequential ordinary/race mixed, sustained,
 WAN and capacity gates for `9a6c05280ffafa5fb101b3323a9320a3b8fc5a15`.
@@ -98,7 +123,18 @@ and still requires separate migration to tested-artifact promotion.
 ## Runtime checks
 
 `TestReleaseImage` (tags `integration,releaseimage,linux`) starts the exact built
-image with its normal non-root entrypoint and default IPv6 policy. It uses:
+image with its normal non-root entrypoint and default IPv6 policy.
+
+It runs two sequential subtests against the same digest: default rejection and
+opt-in `IPV4_REASSEMBLY=true`. The enabled mode sends reordered fragments and
+exact duplicates through encrypted TCP/UDP, rejects conflicting overlaps and
+fills the per-source quota with eight incomplete datagrams from a forty-ID flood.
+Ordinary TCP/UDP continues during the real sixty-second expiry; afterward
+fragmented traffic must work again. Both modes verify clean SIGTERM under traffic.
+`runtime-default.json` records default behavior; `runtime.json` records enabled
+behavior. All runtime restrictions and overall 120/180-second deadlines remain.
+
+Each subtest uses:
 
 - A dedicated internal Docker network with no published ports.
 - Read-only root filesystem, all capabilities dropped, no-new-privileges.
@@ -110,7 +146,8 @@ The fixture verifies Docker's effective configuration, nonzero UID, PID 1's empt
 effective capability set and no-new-privileges flag, and actual cgroup CPU/memory/
 swap/PID limits. It verifies at least nine exact 1 KiB TCP/UDP echo rounds through
 encryption, the release executable and real host sockets. It samples memory/PID
-events after eight rounds and requires zero events. Traffic continues while Docker
+events after fixture traffic (including enabled-mode expiry traffic) and requires
+zero events. Traffic continues while Docker
 sends SIGTERM; the process must exit zero within ten seconds without OOM kill.
 
 The traffic worker is joined on cleanup. Every Docker command has a 15-second

@@ -26,6 +26,15 @@ or socket demand; investigate the cause and measure headroom before changing the
 
 ## Units and counting ownership
 
+Opt-in IPv4 reassembly adds a separate fixed `IPv4Fragments` snapshot and optional
+JSON `ipv4_fragments` object under schema version 1. Text uses `ipv4_fragments:`.
+[Its counters and gauges](IPV4_FRAGMENT_REASSEMBLY.md) distinguish received
+fragments, completions, duplicate/rejected/expired input and reserved storage.
+Per-source/datagram/range refusals appear in its `rejected` counter; a failed
+shared-budget reservation also increments `aggregate_buffer_limit`. Transport
+counters count completed datagrams; accepted TUN byte counts include buffered
+fragments. The object is absent when the feature is disabled.
+
 Each failed admission check increments its owner exactly once. Wrappers, error
 propagation, ACK scheduling and teardown do not repeat that count. Per-flow pending
 and reassembly checks precede aggregate reservation, so the same requested payload

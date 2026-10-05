@@ -1,7 +1,7 @@
 # Opt-in IPv4 fragment reassembly
 
-Status: implementation and acceptance in progress. Default enablement is deferred
-until protocol, ownership, bounded workload and actual-image evidence is accepted.
+Status: implemented and accepted as an opt-in feature. Default enablement remains
+a separate deployment-evidence review.
 All forwarding remains in userspace with the existing privilege requirements.
 
 ## Sequence
@@ -11,9 +11,9 @@ All forwarding remains in userspace with the existing privilege requirements.
 - [x] Validate fragment headers independently of complete transport datagrams.
 - [x] Add bounded reassembly with explicit retained-buffer ownership and expiry.
 - [x] Integrate opt-in startup configuration, shutdown and fixed diagnostics.
-- [ ] Validate malformed/overlapping/reordered/duplicate fragments, exhaustion,
+- [x] Validate malformed/overlapping/reordered/duplicate fragments, exhaustion,
   expiry and concurrent shutdown; fuzz boundaries and run race checks.
-- [ ] Validate encrypted fragment traffic and floods alongside ordinary traffic
+- [x] Validate encrypted fragment traffic and floods alongside ordinary traffic
   in the actual non-root image, with resource and owned-cleanup gates.
 - [ ] Review evidence before enabling support by default.
 
@@ -46,6 +46,9 @@ for at least one 69,631-byte reservation. The existing aggregate socket budget
 can refuse admission earlier. Increasing the fragment byte cap does not increase
 the fixed limits: 32 live datagrams per interface, 8 per source and 128 disjoint
 ranges per datagram. Reservations count completed datagrams during dispatch.
+At the fixed global limit, fragment reservations total at most 2,228,192 bytes;
+one source can reserve at most 557,048 bytes. The byte cap may reduce admission
+further but cannot expand those fixed quotas.
 The quota is shared by sources across peers; it is not an authenticated-peer quota.
 
 TCP, UDP and ICMP fragments are eligible; other protocols remain unsupported.
@@ -55,6 +58,9 @@ final lengths, overlapping ranges and inconsistent DSCP/ECN fail closed.
 Byte-identical ranges with matching final flags are duplicates, consume no extra
 storage and do not extend expiry. IPv4 checksum/total length/fragment flags are
 rebuilt on completion, then the existing transport validator checks the result.
+Duplicate suppression is scoped to a live assembly. There is no completed-ID
+replay cache: late fragments after dispatch may start an incomplete assembly,
+which is subject to the same quotas and expiry.
 Timeout sends best-effort ICMP Time Exceeded code 1 when fragment zero exists,
 unless its source/destination or ICMP type suppresses error feedback. Feedback
 uses the same finite aggregate budget and ordinary packet delivery interface.
@@ -69,21 +75,53 @@ accepted TUN frames; transport packet/byte metrics count completed datagrams.
 Cache metadata is bounded separately; reserved bytes include a conservative
 metadata allowance and do not represent process RSS or garbage awaiting GC.
 
-## Default-enablement gate
+## Acceptance evidence
+
+At `8054f40bfa0975ddb5712f171a2a8bb06e45c5e0`,
+[run 37359184215](https://github.com/irctrakz/wgslirp/actions/runs/37359184215)
+passed Linux build/vet, unit/race, integration-race, three ten-second fuzz stages,
+both modes of all mixed/sustained/WAN/capacity workloads, and both actual-image
+subtests. Native focused tests and a 537,517-case ten-second reassembly fuzz run
+also passed; native Windows checks are supplemental to Linux acceptance.
+The separate development-tag promotion job remained queued without a runner at
+19:27 UTC; this is not an overall completed-CI claim. The tested candidate digest
+and current promotion status are recorded in [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md).
+
+The actual image ran as UID 100 with all capabilities dropped, read-only root,
+1 CPU, 256 MiB memory/no swap and 128 PIDs. Enabled-mode evidence records:
+
+- Forty incomplete IDs retained exactly eight assemblies / 557,048 bytes.
+- 223 verified ordinary TCP/UDP rounds continued during the sixty-second expiry.
+- All eight assemblies expired, fragment reservations returned to zero, and
+  reordered/duplicate fragmented TCP/UDP worked afterward.
+- SIGTERM under fragmented traffic exited zero in 85 ms; default mode exited
+  zero in 69 ms and preserved the sixteen-failure log-aggregation regression.
+- Enabled runtime cgroup memory peak was 53,407,744 bytes; default mode recorded
+  26,750,976 bytes. These workloads differ in duration and traffic volume; the
+  values are bounded observations, not a direct memory-overhead comparison.
+- All memory/PID-limit events were zero. Owned containers, networks, builder,
+  cache volume and local tested image were removed; GHCR candidates are retained.
 
 Initial CI [run 37359016545](https://github.com/irctrakz/wgslirp/actions/runs/37359016545)
 stopped at a new lifecycle test's unintended default ICMP socket mode on the
 unprivileged Linux runner. Its fixture now selects ordinary TCP sockets, matching
 the existing lifecycle tests; image construction and promotion were skipped.
 
-Keep support off until the complete race/fuzz suite and both actual-image modes
-pass. The enabled image must forward reordered/duplicate encrypted TCP/UDP,
-reject overlaps, contain a forty-datagram flood at eight retained assemblies,
-continue ordinary traffic during expiry, restore fragment admission afterward,
-and terminate cleanly under traffic. Preserve the existing memory/PID event and
-owned-image/network cleanup gates. Review production memory, timeout and
-per-source fairness evidence separately before changing the default; the feature
-does not promise reliable forwarding of every possible fragmented IPv4 stream.
+## Remaining default-enablement work
+
+The completed race/fuzz and actual-image gates establish opt-in acceptance.
+Before changing the default:
+
+- [ ] Expand bounded encrypted evidence to realistic MTU-sized fragments and
+  larger datagrams, mixed short/bulk/UDP traffic, loss/reordering and multiple
+  sources competing for the global quota.
+- [ ] Measure sustained allocation/RSS and recovery across repeated expiry,
+  late duplicates and quota saturation; retain the current resource/cleanup gates.
+- [ ] Review deployment counters and per-source fairness, then make a separate
+  default-policy change preserving an explicit `IPV4_REASSEMBLY=false` escape hatch.
+
+The feature does not promise reliable forwarding of every possible fragmented
+IPv4 stream. Raising a byte budget does not resolve the fixed range/source quotas.
 
 References: [RFC 1122 §3.3.2](https://www.rfc-editor.org/rfc/rfc1122.html#section-3.3.2),
 [RFC 3168 §5.3](https://www.rfc-editor.org/rfc/rfc3168.html#section-5.3),

@@ -10,11 +10,11 @@ operation; the application receives no Docker socket or host network access.
 Use Linux/amd64 and a digest from a successful development CI run. Candidate tags
 are not validation evidence. See [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md)
 for the current tested source/digest and run reports. The example below uses the
-validated automatic-peer-discovery and log-aggregation image. Arm64 runtime
+validated automatic-peer-discovery, log-aggregation and opt-in reassembly image. Arm64 runtime
 validation remains separate.
 
 ```sh
-export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:d9eabf07ec910f44d09c68cf7fccd01583c7ca045a50ee06f5e427e7e40935d5
+export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:e5a746f0737361e523fd052dc8525fd5b43bc93ec599baf34fe05c93517421be
 ```
 
 ## Keep credentials in a private local file
@@ -81,7 +81,8 @@ failure and returns the first error; only accepted packets/bytes are counted.
 
 Incoming IPv4 reassembly is opt-in with `IPV4_REASSEMBLY: "true"` in Compose's
 environment. It keeps finite byte/datagram/source/range limits and shares the
-socket buffer budget. Leave it disabled until acceptance evidence is reviewed;
+socket buffer budget. Bounded image acceptance passed; default enablement remains
+a separate deployment review. For opt-in testing,
 see [configuration, ownership and default-enablement gates](IPV4_FRAGMENT_REASSEMBLY.md).
 
 Capture is off by default. Enabling `WG_PCAP` requires an explicitly writable

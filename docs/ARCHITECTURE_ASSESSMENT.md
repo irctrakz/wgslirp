@@ -5,6 +5,13 @@ consolidates current progress and remaining work, and revises the earlier
 KISS/DRY/readability judgment following closer inspection of TCP code paths.
 The ratings below remain the historical assessment, with dated updates.
 
+**IPv4 fragment update (2026-10-05):** observed deployment fragmentation now
+justifies an opt-in bounded reassembler. It preserves default rejection and the
+userspace forwarding model; ownership, quotas, expiry and diagnostics are
+documented in [IPV4_FRAGMENT_REASSEMBLY.md](IPV4_FRAGMENT_REASSEMBLY.md).
+Default enablement remains a separate evidence review. Historical YAGNI rationale
+below describes the earlier unsupported scope, rather than the current opt-in.
+
 **Implementation update (2026-09-22):** A1/F10e.2 is now accepted for its explicitly
 revised finite low-rate natural-GC profile: three fresh ordinary and three fresh
 race runs passed. See [ENCRYPTED_WORKLOADS.md](ENCRYPTED_WORKLOADS.md) for criteria,

@@ -19,6 +19,12 @@ and expose retained capacity for buffer accounting.
 
 ## Transfer and retention
 
+Opt-in [IPv4 reassembly](IPV4_FRAGMENT_REASSEMBLY.md) copies fragment payloads
+before `WritePacket` returns. Completion passes the same reserved allocation to
+synchronous transport dispatch; it remains charged until dispatch returns.
+Expiry detaches entries under the cache lock, delivers feedback outside that lock
+and then releases ownership. Joined shutdown releases any remaining cached entries.
+
 Successful `ProcessPacket` transfers ownership. On rejection, the caller retains
 release responsibility; sequential repeated release of built-in pooled packets
 is harmless. Access/release must not race: these are single-owner packets, not
