@@ -216,35 +216,35 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 				}
 				releaseDial()
 				conn, err := outcome.conn, outcome.err
-				if err != nil {
-					f.stateMu.Lock()
-					defer f.stateMu.Unlock()
-					if f.closed {
-						atomic.AddInt64(&b.dialInflight, -1)
-						return
+				if err == nil {
+					b.configureHostSocket(conn)
+				}
+				f.stateMu.Lock()
+				defer f.stateMu.Unlock()
+				if f.closed {
+					if err == nil {
+						conn.Close()
 					}
+					atomic.AddInt64(&b.dialInflight, -1)
+					return
+				}
+				if err != nil {
 					b.signalDialFailure(f.srcIP, f.dstIP, f.srcPort, f.dstPort, f.clientISN, quotedPacket)
 					atomic.AddUint64(&b.dialFail, 1)
 					atomic.AddUint64(&b.parent.metrics.Errors, 1)
 					atomic.AddUint64(&b.metrics.Errors, 1)
-					atomic.AddInt64(&b.dialInflight, -1)
-					// Remove the flow on dial failure
+				} else {
+					f.conn = conn
+					f.connecting = false
+					f.lastAckTime = time.Now()
+					atomic.AddUint64(&b.dialOk, 1)
+				}
+				// Completion accounting ends before teardown or pending host writes.
+				atomic.AddInt64(&b.dialInflight, -1)
+				if err != nil {
 					b.removeFlowLocked(f)
 					return
 				}
-				b.configureHostSocket(conn)
-				f.stateMu.Lock()
-				defer f.stateMu.Unlock()
-				if f.closed {
-					conn.Close()
-					atomic.AddInt64(&b.dialInflight, -1)
-					return
-				}
-				f.conn = conn
-				f.connecting = false
-				f.lastAckTime = time.Now()
-				atomic.AddUint64(&b.dialOk, 1)
-				atomic.AddInt64(&b.dialInflight, -1)
 
 				// Start reader now that conn exists
 				b.launch(func() { b.reader(f) })

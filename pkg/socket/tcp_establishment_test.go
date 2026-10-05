@@ -82,6 +82,13 @@ func TestTCPEstablishmentFailurePolicy(t *testing.T) {
 				}
 				assertBudget(t, b.dialSlots, 0)
 				assertBudget(t, b.buffers, 0)
+				want := uint64(0)
+				if async {
+					want = 1
+				}
+				if atomic.LoadUint64(&b.dialStart) != want || atomic.LoadUint64(&b.dialFail) != want || atomic.LoadUint64(&b.dialOk) != 0 || atomic.LoadInt64(&b.dialInflight) != 0 {
+					t.Fatal("failure changed asynchronous dial accounting")
+				}
 			})
 		}
 	}
@@ -208,6 +215,9 @@ func TestDialHandoffFlushesPendingDataBeforeHalfClose(t *testing.T) {
 	got, err := io.ReadAll(host)
 	if err != nil || string(got) != string(payload) {
 		t.Fatalf("pending bytes/EOF: %q %v", got, err)
+	}
+	if atomic.LoadUint64(&b.dialStart) != 1 || atomic.LoadUint64(&b.dialOk) != 1 || atomic.LoadUint64(&b.dialFail) != 0 || atomic.LoadInt64(&b.dialInflight) != 0 {
+		t.Fatal("attached dial retained completion accounting")
 	}
 	b.stop()
 	if calls.Load() != 1 {

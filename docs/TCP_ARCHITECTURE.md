@@ -87,8 +87,17 @@ the historical measurements remain in the workload document.
 
 Keep the next changes independently reviewable:
 
-1. Simplify repeated dial accounting and host-write error handling only where
-   metric timing, byte ownership and lock scope remain explicit.
+1. Simplify host-write error handling only where metric timing, byte ownership
+   and lock scope remain explicit.
+
+Repeated async dial completion branches were consolidated on October 5, 2026.
+Socket configuration still precedes the state lock; closed flows close late
+sockets without recording success/failure. In-flight accounting still ends
+before failed-flow removal or successful pending writes. Cancellation and the
+actual dial-slot reservation retain their separate ownership rules. Focused
+Windows TCP regressions, Linux vet and integration-test compilation passed;
+full Linux runtime acceptance remains pending. The broader Windows socket suite
+fails its empty-UDP-datagram forwarding test, outside this TCP change.
 
 Retain the existing lock boundaries and independent protocol fixtures. A shorter
 function or fewer files alone is not evidence of a simpler state machine.
