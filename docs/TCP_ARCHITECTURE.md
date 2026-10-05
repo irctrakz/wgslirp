@@ -87,8 +87,8 @@ the historical measurements remain in the workload document.
 
 Keep the next changes independently reviewable:
 
-1. Simplify host-write error handling only where metric timing, byte ownership
-   and lock scope remain explicit.
+1. Retain the separate conservative lock audit below; no further TCP cleanup
+   is justified solely by reducing line counts.
 
 Repeated async dial completion branches were consolidated on October 5, 2026.
 Socket configuration still precedes the state lock; closed flows close late
@@ -98,6 +98,16 @@ actual dial-slot reservation retain their separate ownership rules. Focused
 Windows TCP regressions, Linux vet and integration-test compilation passed;
 full Linux runtime acceptance remains pending. The broader Windows socket suite
 fails its empty-UDP-datagram forwarding test, outside this TCP change.
+
+Async pending and reassembly host-write failures now share one counter/reset
+exit (October 5, 2026), without changing success accounting, partial-write
+policy, sequence advancement, locks or detached-buffer ownership. Half-close
+errors remain separate because `closeHostWriteLocked` already resets the flow;
+synchronous receive errors still propagate to the packet caller for counting.
+Closed-socket regressions exercise pending, reassembly and half-close failures,
+checking one reset/error, no successful write counters or sequence advancement,
+and complete buffer/registry release. Focused TCP tests, Linux vet and integration
+compilation passed; bounded Linux runtime acceptance remains pending.
 
 Retain the existing lock boundaries and independent protocol fixtures. A shorter
 function or fewer files alone is not evidence of a simpler state machine.

@@ -344,24 +344,26 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		f.pendingBytes = 0
 	}
 	f.pendMu.Unlock()
+	var writeErr error
 	for _, p := range batches {
 		if f.conn == nil {
 			break
 		}
-		if n, err := writeTCP(f.conn, p); err == nil {
-			atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
-			atomic.AddUint64(&b.metrics.PacketsSent, 1)
-			f.toSrvBytes += uint64(n)
-			f.toSrvPkts += 1
-			atomic.AddUint64(&b.pendFlush, 1)
-		} else {
-			atomic.AddUint64(&b.parent.metrics.Errors, 1)
-			atomic.AddUint64(&b.metrics.Errors, 1)
-			b.abortBufferedFlowLocked(f)
-			return
+		n, err := writeTCP(f.conn, p)
+		if err != nil {
+			writeErr = err
+			break
 		}
+		atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
+		atomic.AddUint64(&b.metrics.PacketsSent, 1)
+		f.toSrvBytes += uint64(n)
+		f.toSrvPkts += 1
+		atomic.AddUint64(&b.pendFlush, 1)
 	}
-	if err := b.flushReassembly(f); err != nil {
+	if writeErr == nil {
+		writeErr = b.flushReassembly(f)
+	}
+	if writeErr != nil {
 		atomic.AddUint64(&b.parent.metrics.Errors, 1)
 		atomic.AddUint64(&b.metrics.Errors, 1)
 		b.abortBufferedFlowLocked(f)
