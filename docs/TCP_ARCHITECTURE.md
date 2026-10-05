@@ -14,7 +14,12 @@ instance before publication, and disabled flows retain nil. No later assignment
 toggles the controller. ACK handling, send allowance and recovery now use that
 single condition. The existing fast/async, enabled/off transport tests check the
 controller and configured initial window directly. Lock ownership, configuration
-and congestion-control algorithms are preserved. Runtime validation is pending.
+and congestion-control algorithms are preserved. At `474cf7f`,
+[run 37252560572](https://github.com/irctrakz/wgslirp/actions/runs/37252560572)
+passed build/vet, unit/integration race, fuzz, both modes of mixed/sustained/WAN/
+capacity workloads, actual-image validation and same-digest development promotion.
+Both mixed modes retained exactly 130 payload connections and zero empty accepts;
+race mode exercised 36 async handoffs. All owned-resource cleanup checks passed.
 
 ### Single-dial handoff
 

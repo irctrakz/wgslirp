@@ -82,6 +82,15 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Congestion-control state (2026-10-04):** `474cf7f` removes the redundant
+`ccEnabled` flag; controller presence now supplies the sole enabled condition.
+Establishment assigns the controller before publication, with no later toggle.
+ACK, send allowance and recovery retain their existing algorithms and locks.
+[Run 37252560572](https://github.com/irctrakz/wgslirp/actions/runs/37252560572)
+passed standard race/fuzz checks, both modes of every bounded workload,
+actual-image validation and same-digest promotion. Resource and cleanup checks
+passed. Duplicate MSS state and repeated accounting remain separate candidates.
+
 **Single-dial handoff (2026-10-04):** `6a2b78b` replaces fast-wait cancellation
 and redial with ownership transfer of one dial result. All existing locks remain.
 Focused cancellation, late-socket, rejection, pending-FIN and duplicate-candidate
@@ -101,8 +110,8 @@ are preserved. Linux cross-compilation, vet, standard race/fuzz CI and the new
 ordinary/race mixed gate passed at `740d0cd`. The same run passed sustained-loss,
 WAN and capacity ordinary/race checks, actual-image validation and same-digest
 development promotion, with verified owned-resource cleanup.
-Further candidates require separate review: redundant congestion-control
-enable state, duplicate MSS state, and repeated async-dial completion accounting.
+Further candidates require separate review: duplicate MSS state and repeated
+async-dial completion accounting.
 Do not combine these with a lock rewrite or replace protocol tests with line-count
 claims. Independent-peer WAN, failure and saturation stages remain follow-ups.
 

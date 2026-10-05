@@ -55,6 +55,17 @@ sequence-wrap and recovery assertions.
 
 ## Validation status
 
+### Congestion-control state cleanup — 2026-10-04
+
+At `474cf7f`, [run 37252560572](https://github.com/irctrakz/wgslirp/actions/runs/37252560572)
+passed this unchanged profile in both modes: 130 host accepts, zero empty accepts,
+all exact payload/half-close checks and final reservation/worker cleanup. Race
+mode exercised 36 async handoffs. Both modes recorded zero memory/PID-limit
+events or OOM and verified container/tmpfs/image cleanup. The same run passed
+standard checks, sustained-loss, WAN, full TIME-WAIT capacity, actual-image
+validation and same-digest promotion. These observations establish acceptance;
+they do not establish a performance improvement from removing redundant state.
+
 ### Single-dial handoff — 2026-10-04
 
 At `6a2b78b`, [run 37246793917](https://github.com/irctrakz/wgslirp/actions/runs/37246793917)
