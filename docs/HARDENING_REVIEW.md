@@ -82,6 +82,17 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Peer configuration (2026-10-04):** `1e0de5e` makes `WG_PEERS` optional for
+the executable and `LoadFromEnv`: peer settings are discovered from one startup
+environment snapshot in numeric order, including sparse indices. Incomplete
+peers and invalid setting names fail startup. Explicit selectors (including
+empty selection) and the lookup-only library API retain their existing behavior.
+[Run 37260238700](https://github.com/irctrakz/wgslirp/actions/runs/37260238700)
+passed standard checks, every bounded workload in both modes, and actual-image
+startup/forwarding/shutdown with the selector omitted. The same tested digest
+was promoted; all resource-event and owned-cleanup checks passed. This change
+does not add live configuration reload or change transport/fragment handling.
+
 **Congestion-control state (2026-10-04):** `474cf7f` removes the redundant
 `ccEnabled` flag; controller presence now supplies the sole enabled condition.
 Establishment assigns the controller before publication, with no later toggle.

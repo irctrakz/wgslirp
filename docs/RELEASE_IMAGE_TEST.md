@@ -8,20 +8,21 @@ of that digest to a unique development tag. Promotion does not rebuild the image
 
 ## Latest validation — 2026-10-04
 
-[Run 37252560572](https://github.com/irctrakz/wgslirp/actions/runs/37252560572)
+[Run 37260238700](https://github.com/irctrakz/wgslirp/actions/runs/37260238700)
 passed the standard checks and all sequential ordinary/race mixed, sustained,
-WAN and capacity gates for `474cf7f6d4f6950c644929111901ea0a69aafc15`.
+WAN and capacity gates for `1e0de5efea8487b6ec978d397b3cd70899d058e8`.
 See [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md) for the new independent-peer evidence
 and retained initial fixture failure.
 
 The actual image passed UID 100 startup, encrypted TCP/UDP and SIGTERM under
-traffic (78.290678 ms), using the unchanged dropped-capability and resource
-constraints. Cleanup verified no owned runtime containers, networks, builder,
+traffic (79.285622 ms), using the unchanged dropped-capability and resource
+constraints. The fixture omits `WG_PEERS`, verifying automatic discovery through
+the image's normal startup path. Cleanup verified no owned runtime containers, networks, builder,
 cache volume or local image remained. CI promoted the same immutable artifact:
 
-`ghcr.io/irctrakz/wgslirp@sha256:bd5a2cd198c7f0fe653fac0a70799b116562b2d4188f5611c29f6ebe419792e8`
+`ghcr.io/irctrakz/wgslirp@sha256:772ec9a8b02350f7810f5e0e1b6050e2afd2d9a57b6752cc1dcd055520f1e871`
 
-as `dev-474cf7f6d4f6950c644929111901ea0a69aafc15-37252560572-1`.
+as `dev-1e0de5efea8487b6ec978d397b3cd70899d058e8-37260238700-1`.
 This covers linux/amd64; main/master and `latest` were untouched.
 
 ## Execution environment
