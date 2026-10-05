@@ -96,8 +96,9 @@ sockets without recording success/failure. In-flight accounting still ends
 before failed-flow removal or successful pending writes. Cancellation and the
 actual dial-slot reservation retain their separate ownership rules. Focused
 Windows TCP regressions, Linux vet and integration-test compilation passed;
-full Linux runtime acceptance remains pending. The broader Windows socket suite
-fails its empty-UDP-datagram forwarding test, outside this TCP change.
+full Linux runtime acceptance is recorded below. The broader Windows socket
+suite fails its empty-UDP-datagram forwarding test; a disposable copy of the
+pre-change `742c160` reproduces the same failure and was removed after checking.
 
 Async pending and reassembly host-write failures now share one counter/reset
 exit (October 5, 2026), without changing success accounting, partial-write
@@ -107,7 +108,14 @@ synchronous receive errors still propagate to the packet caller for counting.
 Closed-socket regressions exercise pending, reassembly and half-close failures,
 checking one reset/error, no successful write counters or sequence advancement,
 and complete buffer/registry release. Focused TCP tests, Linux vet and integration
-compilation passed; bounded Linux runtime acceptance remains pending.
+compilation passed. At `05c5f74`,
+[run 37347566364](https://github.com/irctrakz/wgslirp/actions/runs/37347566364)
+passed build/vet, unit/integration race, both fuzz checks, ordinary/race mixed,
+sustained-loss, WAN and capacity workloads, actual-image validation and
+same-digest development promotion. All resource-event and owned-cleanup gates
+passed. The actual image ran as UID 100 with dropped capabilities and exited
+cleanly 70 ms after SIGTERM under encrypted TCP/UDP traffic. This validates the
+two separate cleanup commits without claiming a performance improvement.
 
 Retain the existing lock boundaries and independent protocol fixtures. A shorter
 function or fewer files alone is not evidence of a simpler state machine.

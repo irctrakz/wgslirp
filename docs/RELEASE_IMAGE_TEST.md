@@ -8,21 +8,21 @@ of that digest to a unique development tag. Promotion does not rebuild the image
 
 ## Latest validation — 2026-10-05
 
-[Run 37343127478](https://github.com/irctrakz/wgslirp/actions/runs/37343127478)
+[Run 37347566364](https://github.com/irctrakz/wgslirp/actions/runs/37347566364)
 passed the standard checks and all sequential ordinary/race mixed, sustained,
-WAN and capacity gates for `6126e4202de7244624ea31e914a9dcb493300e68`.
+WAN and capacity gates for `05c5f742c002079a6a3608de3574dd06cdb90abe`.
 See [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md) for the new independent-peer evidence
 and retained initial fixture failure.
 
 The actual image passed UID 100 startup, encrypted TCP/UDP and SIGTERM under
-traffic (70.192637 ms), using the unchanged dropped-capability and resource
+traffic (70 ms), using the unchanged dropped-capability and resource
 constraints. The fixture omits `WG_PEERS`, verifying automatic discovery through
 the image's normal startup path. Cleanup verified no owned runtime containers, networks, builder,
 cache volume or local image remained. CI promoted the same immutable artifact:
 
-`ghcr.io/irctrakz/wgslirp@sha256:8d5ce2a61a607c624300aabe090b92bf4dea2f903874f2e1194629f311fc181a`
+`ghcr.io/irctrakz/wgslirp@sha256:e3dc78ef871a76087e631d6a157b2a023b98196e0ae3cb68917ac296bf7fc4d9`
 
-as `dev-6126e4202de7244624ea31e914a9dcb493300e68-37343127478-1`.
+as `dev-05c5f742c002079a6a3608de3574dd06cdb90abe-37347566364-1`.
 This covers linux/amd64; main/master and `latest` were untouched.
 
 The actual-image log regression injected sixteen encrypted IPv4 fragments,

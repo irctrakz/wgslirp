@@ -82,6 +82,19 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Dial accounting and host-write failures (2026-10-05):** separate commits
+`39f5fce` and `05c5f74` consolidate async completion branches and the pending/
+reassembly write-failure exit. Counter timing, cancellation/socket ownership,
+partial-write policy, half-close handling, reservation release and all lock
+boundaries remain unchanged. Failure regressions require one reset/error,
+unchanged sequence/success counters and no retained flow/buffer reservations.
+[Run 37347566364](https://github.com/irctrakz/wgslirp/actions/runs/37347566364)
+passed build/vet, unit/integration race, fuzz, both modes of every bounded
+workload, actual-image validation and same-digest promotion. All resource-event
+and owned-cleanup gates passed. The Windows empty-UDP test failure also occurs
+in a disposable pre-change `742c160` copy; that copy was removed. These cleanup
+candidates are complete; overlapping locks remain a separate conservative audit.
+
 **Negotiated MSS consolidation (2026-10-05):** `6126e42` removes duplicate
 `clientMSS` flow state and uses the existing integer `mss` for segmentation,
 congestion control, recovery and ACK-idle policy. Initial negotiation remains
@@ -91,8 +104,10 @@ unchanged. [Run 37343127478](https://github.com/irctrakz/wgslirp/actions/runs/37
 passed focused negotiation/segmentation regressions, standard race/fuzz checks,
 every bounded workload in both modes, actual-image validation and same-digest
 promotion. All resource-event and owned-cleanup checks passed. The remaining TCP
-simplicity candidates are repeated dial accounting and host-write error handling;
-lock removal remains subject to the separate conservative audit.
+simplicity candidates, repeated dial accounting and host-write error handling,
+are complete in the separate changes recorded in
+[TCP_ARCHITECTURE.md](TCP_ARCHITECTURE.md), with runtime acceptance above.
+Lock removal remains subject to the separate conservative audit.
 
 **Repeated packet diagnostics (2026-10-04):** `f6b65ea` aggregates known repeated
 TUN write errors into fixed per-device categories. The first error remains
@@ -135,8 +150,7 @@ ACK, send allowance and recovery retain their existing algorithms and locks.
 [Run 37252560572](https://github.com/irctrakz/wgslirp/actions/runs/37252560572)
 passed standard race/fuzz checks, both modes of every bounded workload,
 actual-image validation and same-digest promotion. Resource and cleanup checks
-passed. MSS consolidation is completed above; repeated accounting remains a
-separate candidate.
+passed. MSS consolidation and repeated accounting are completed as recorded above.
 
 **Single-dial handoff (2026-10-04):** `6a2b78b` replaces fast-wait cancellation
 and redial with ownership transfer of one dial result. All existing locks remain.
@@ -157,8 +171,8 @@ are preserved. Linux cross-compilation, vet, standard race/fuzz CI and the new
 ordinary/race mixed gate passed at `740d0cd`. The same run passed sustained-loss,
 WAN and capacity ordinary/race checks, actual-image validation and same-digest
 development promotion, with verified owned-resource cleanup.
-Repeated async-dial completion accounting requires separate review. Duplicate
-MSS state is consolidated as recorded above.
+Repeated async-dial completion accounting and duplicate MSS state are
+consolidated as recorded above.
 Do not combine these with a lock rewrite or replace protocol tests with line-count
 claims. Independent-peer WAN, failure and saturation stages remain follow-ups.
 
