@@ -124,7 +124,6 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	}
 	// Bound the peer MSS by our current egress policy.
 	eff, _ := b.synACKMSS()
-	candidate.clientMSS = uint16(eff)
 	candidate.mss = eff
 	// Parse client SYN options for MSS, Window Scale, and SACK
 	if dataOff > 20 {
@@ -156,7 +155,6 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 					if m > eff {
 						m = eff
 					}
-					candidate.clientMSS = uint16(m)
 					candidate.mss = m
 				} else if kind == 3 && l == 3 { // Window scale
 					candidate.wsIn = opts[i+2]
@@ -322,7 +320,7 @@ func (b *tcpBridge) sendInitialSYNACKLocked(f *tcpFlow) error {
 	}
 	if b.logHandshake {
 		logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
-			f.key, mtu, int(b.mssClamp.Load()), int(f.clientMSS), mss)
+			f.key, mtu, int(b.mssClamp.Load()), f.mss, mss)
 	}
 	packet := b.buildIPv4TCPOpts(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverISN, f.clientISN+1, fSYN|fACK, nil, opts)
 	return b.sendSYNACKLocked(f, packet)

@@ -6,6 +6,19 @@ privileges or runtime configuration.
 
 ## Further simplification (2026-10-04)
 
+### Negotiated MSS state (2026-10-05)
+
+The duplicate `clientMSS` field is removed. The flow's integer `mss` now supplies
+the initial congestion window, recovery minimum, ACK-idle threshold and data
+segment limit. Both old fields were assigned together only during establishment;
+the value remains immutable after publication. The dynamic atomic bridge clamp
+still limits data segments separately, and SYN-ACK MSS remains an independent
+offer derived from the bridge MTU/clamp rather than the peer's smaller offer.
+The diagnostic `clientMSS` label and existing zero-offer failure behavior remain
+unchanged. NewReno retains its own private MSS scale; that is algorithm state,
+not a second mutable flow policy. No locks, ownership boundaries or public APIs
+change. Focused negotiation/segmentation tests passed locally; full CI is pending.
+
 ### Congestion-control state
 
 The redundant `ccEnabled` flag is removed. Establishment is the sole production
@@ -67,10 +80,7 @@ the historical measurements remain in the workload document.
 
 Keep the next changes independently reviewable:
 
-1. Consolidate `clientMSS` and `mss` after distinguishing negotiated peer size
-   from the dynamic bridge clamp and advertised SYN-ACK MSS. Preserve those
-   distinct meanings and public diagnostics.
-2. Simplify repeated dial accounting and host-write error handling only where
+1. Simplify repeated dial accounting and host-write error handling only where
    metric timing, byte ownership and lock scope remain explicit.
 
 Retain the existing lock boundaries and independent protocol fixtures. A shorter

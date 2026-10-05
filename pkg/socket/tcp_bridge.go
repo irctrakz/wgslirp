@@ -180,10 +180,12 @@ type tcpFlow struct {
 	futureBytes int
 
 	// Peer receive window information (from client)
-	clientMSS uint16
-	wsIn      uint8  // peer's window scale (client SYN option)
-	wsOut     uint8  // our advertised window scale (SYN-ACK)
-	advWnd    uint32 // latest advertised peer window in bytes
+	// Immutable after publication: peer MSS bounded by the initial MTU/clamp.
+	// Current MTU/clamp can further restrict segmentation without changing it.
+	mss    int
+	wsIn   uint8  // peer's window scale (client SYN option)
+	wsOut  uint8  // our advertised window scale (SYN-ACK)
+	advWnd uint32 // latest advertised peer window in bytes
 
 	// delayed ack scheduling
 	ackScheduled bool
@@ -230,8 +232,7 @@ type tcpFlow struct {
 	}
 
 	// Congestion control (server->guest)
-	cc  congestionControl // nil when congestion control is disabled
-	mss int
+	cc congestionControl // nil when congestion control is disabled
 }
 
 // newTCPBridge constructs a TCP bridge instance and wires optional per-flow

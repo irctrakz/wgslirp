@@ -16,7 +16,7 @@ func BenchmarkTCPHandleACK(b *testing.B) {
 		key:   "10.0.0.2:40000-127.0.0.1:80",
 		srcIP: [4]byte{10, 0, 0, 2}, dstIP: [4]byte{127, 0, 0, 1}, srcPort: 40000, dstPort: 80,
 		state: tcpEstablished, clientNxt: 100, serverNxt: 1000, sndUna: 1000,
-		clientMSS: 600, mss: 600, advWnd: 1200, lastAckTime: time.Now(),
+		mss: 600, advWnd: 1200, lastAckTime: time.Now(),
 		rto: time.Second, rtoStop: make(chan struct{}), ackCh: make(chan struct{}, 1),
 	}
 	bridge.flows[f.key] = f

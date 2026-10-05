@@ -171,7 +171,7 @@ func TestDuplicateSuccessfulDialsReleaseBothReservations(t *testing.T) {
 func TestAggregateSendExhaustionDoesNotDiscardOtherFlow(t *testing.T) {
 	b, first, _ := concurrentFlow(t)
 	b.buffers.limit = bufferCharge(4)
-	second := &tcpFlow{key: "other", state: tcpEstablished, serverNxt: 1000, sndUna: 1000, clientMSS: 600, advWnd: 1200, rtoStop: make(chan struct{}), ackCh: make(chan struct{}, 1)}
+	second := &tcpFlow{key: "other", state: tcpEstablished, serverNxt: 1000, sndUna: 1000, mss: 600, advWnd: 1200, rtoStop: make(chan struct{}), ackCh: make(chan struct{}, 1)}
 	b.mu.Lock()
 	b.flows[second.key] = second
 	b.mu.Unlock()

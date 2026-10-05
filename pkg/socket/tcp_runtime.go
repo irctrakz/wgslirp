@@ -140,7 +140,7 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 			}
 			continue
 		}
-		maxSegment := int(f.clientMSS)
+		maxSegment := f.mss
 		if clamp := int(b.mssClamp.Load()); clamp > 0 {
 			maxSegment = minInt(maxSegment, clamp)
 		}
