@@ -151,7 +151,7 @@ The router loads and validates one environment snapshot before startup. See the 
 |----------------------|-------------|---------|
 | `WG_PRIVATE_KEY` | Base64-encoded WireGuard private key (required) | - |
 | `WG_LISTEN_PORT` | UDP port for WireGuard to listen on | 51820 |
-| `WG_PEERS` | Comma-separated list of peer indices (e.g., 0,1) | - |
+| `WG_PEERS` | Optional explicit peer selection (e.g., 0,1); empty selects none | Discover from `WG_PEER_<index>_*` settings when absent |
 | `WG_OVERLAY_ROUTING` | Enable overlay routing mode (1/true/yes/on) | - |
 | `WG_OVERLAY_EXCLUDE_CIDRS` | Comma-separated CIDRs to exclude from overlay routing | - |
 
@@ -172,7 +172,11 @@ Core WireGuard (required/primary)
 - `WG_PRIVATE_KEY`: Base64 private key for the device (required).
 - `WG_LISTEN_PORT`: UDP listen port, default 51820.
 - `WG_MTU`: Plaintext MTU for the userspace TUN (default 1380).
-- `WG_PEERS`: Comma-separated peer indices (e.g., `0,1`). For each index `i`:
+- Peers are discovered from `WG_PEER_<index>_*` settings when `WG_PEERS` is absent.
+  Indices are canonical nonnegative decimal integers (`0`, `2`, `10`); gaps are
+  allowed and discovery uses numeric order. Incomplete peers and unknown peer
+  setting names fail startup. Set `WG_PEERS` explicitly to select/reorder peers
+  using the existing behavior; an explicit empty value selects none. For each index `i`:
   - `WG_PEER_i_PUBLIC_KEY`: base64 peer public key (required for each peer).
   - `WG_PEER_i_ALLOWED_IPS`: comma-separated CIDRs for overlay routing decisions.
   - `WG_PEER_i_ENDPOINT`: `host:port` (optional if static endpoint is used).

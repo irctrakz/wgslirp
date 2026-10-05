@@ -26,10 +26,16 @@ From the repository root, create `deploy/wgslirp.env` with mode 0600 (use
 WG_PRIVATE_KEY=<server-private-key>
 WG_LISTEN_PORT=51820
 WG_MTU=1380
-WG_PEERS=0
 WG_PEER_0_PUBLIC_KEY=<client-public-key>
 WG_PEER_0_ALLOWED_IPS=10.77.0.2/32
 ```
+
+`WG_PEERS` is optional: the executable discovers numeric peer indices from the
+configured `WG_PEER_<index>_*` fields. Sparse indices work; every discovered peer
+must have a valid public key. An explicitly set `WG_PEERS` retains its selection
+behavior, including an empty value selecting no peers. Lookup-only library callers
+using `DeviceConfigFromEnv` still supply a selector; use
+`DeviceConfigFromEnvironment` with an environment map for automatic discovery.
 
 Generate keys with `wg genkey > private.key` under the same restrictive umask;
 derive the public key with `wg pubkey < private.key > public.key`. Share only the

@@ -73,7 +73,7 @@ func TestReleaseImage(t *testing.T) {
 	}
 	serverPrivate, serverPublic := encryptedKey(t)
 	guestPrivate, guestPublic := encryptedKey(t)
-	config := strings.Join([]string{"WG_PRIVATE_KEY=" + serverPrivate, "WG_LISTEN_PORT=51820", "WG_MTU=1380", "WG_PEERS=0",
+	config := strings.Join([]string{"WG_PRIVATE_KEY=" + serverPrivate, "WG_LISTEN_PORT=51820", "WG_MTU=1380",
 		"WG_PEER_0_PUBLIC_KEY=" + guestPublic, "WG_PEER_0_ALLOWED_IPS=10.0.0.2/32"}, "\n") + "\n"
 	envFile := filepath.Join(t.TempDir(), "device.env")
 	if err := os.WriteFile(envFile, []byte(config), 0600); err != nil {

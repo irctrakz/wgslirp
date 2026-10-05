@@ -7,6 +7,7 @@ import (
 	"github.com/irctrakz/wgslirp/internal/envconfig"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -39,16 +40,16 @@ type DeviceConfig struct {
 //
 //	WG_LISTEN_PORT (default 51820)
 //	WG_MTU (default 1380)
-//	WG_PEERS (comma-separated peer indices, e.g., "0,1")
+//	WG_PEERS (optional explicit peer selection, e.g., "0,1"; empty selects none)
 //
-// For each index i in WG_PEERS, read:
+// Without WG_PEERS, discover numeric indices from the following settings:
 //
 //	WG_PEER_i_PUBLIC_KEY
 //	WG_PEER_i_ALLOWED_IPS (comma-separated CIDRs)
 //	WG_PEER_i_ENDPOINT (host:port)
 //	WG_PEER_i_KEEPALIVE (seconds, optional)
 func (c *DeviceConfig) LoadFromEnv() error {
-	next, err := DeviceConfigFromEnv(os.LookupEnv)
+	next, err := DeviceConfigFromEnvironment(envconfig.Snapshot(os.Environ()))
 	if err == nil {
 		*c = next
 	}
@@ -56,10 +57,57 @@ func (c *DeviceConfig) LoadFromEnv() error {
 }
 
 // DeviceConfigFromEnv parses and validates without opening devices or mutating callers.
+// A lookup cannot enumerate names, so this compatibility API uses WG_PEERS.
+// Use DeviceConfigFromEnvironment for automatic peer discovery.
 func DeviceConfigFromEnv(lookup func(string) (string, bool)) (DeviceConfig, error) {
 	var c DeviceConfig
 	err := c.loadFromLookup(lookup)
 	return c, err
+}
+
+// DeviceConfigFromEnvironment discovers peers from an environment snapshot when
+// WG_PEERS is absent. An explicit WG_PEERS value retains its selection semantics.
+// The snapshot is read only; no process environment or device is accessed.
+func DeviceConfigFromEnvironment(values map[string]string) (DeviceConfig, error) {
+	environment := envconfig.Environment(values)
+	if _, explicit := values["WG_PEERS"]; explicit {
+		return DeviceConfigFromEnv(environment.Lookup)
+	}
+	indices := make(map[int]bool)
+	for name := range values {
+		if !strings.HasPrefix(name, "WG_PEER_") {
+			continue
+		}
+		index, field, ok := strings.Cut(strings.TrimPrefix(name, "WG_PEER_"), "_")
+		if !ok {
+			return DeviceConfig{}, fmt.Errorf("invalid peer setting name %q", name)
+		}
+		switch field {
+		case "PUBLIC_KEY", "ALLOWED_IPS", "ENDPOINT", "KEEPALIVE":
+		default:
+			return DeviceConfig{}, fmt.Errorf("unknown peer setting name %q", name)
+		}
+		n, err := strconv.Atoi(index)
+		if err != nil || n < 0 || strconv.Itoa(n) != index {
+			return DeviceConfig{}, fmt.Errorf("peer setting %q requires a canonical nonnegative integer index", name)
+		}
+		indices[n] = true
+	}
+	ordered := make([]int, 0, len(indices))
+	for index := range indices {
+		ordered = append(ordered, index)
+	}
+	sort.Ints(ordered)
+	selected := make([]string, 0, len(ordered))
+	for _, index := range ordered {
+		selected = append(selected, strconv.Itoa(index))
+	}
+	return DeviceConfigFromEnv(func(name string) (string, bool) {
+		if name == "WG_PEERS" {
+			return strings.Join(selected, ","), true
+		}
+		return environment.Lookup(name)
+	})
 }
 
 func (c *DeviceConfig) loadFromLookup(lookup func(string) (string, bool)) error {

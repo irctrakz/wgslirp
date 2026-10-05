@@ -32,20 +32,15 @@ type applicationConfig struct {
 }
 
 // snapshotEnvironment provides a stable input to all parsers in this startup.
-func snapshotEnvironment(entries []string) func(string) (string, bool) {
-	values := make(map[string]string, len(entries))
-	for _, entry := range entries {
-		if key, value, ok := strings.Cut(entry, "="); ok {
-			values[key] = value
-		}
-	}
-	return func(key string) (string, bool) { v, ok := values[key]; return v, ok }
+func snapshotEnvironment(entries []string) envconfig.Environment {
+	return envconfig.Snapshot(entries)
 }
 
-func loadApplicationConfig(lookup func(string) (string, bool)) (applicationConfig, error) {
+func loadApplicationConfig(environment envconfig.Environment) (applicationConfig, error) {
+	lookup := environment.Lookup
 	var c applicationConfig
 	var err error
-	if c.Device, err = wg.DeviceConfigFromEnv(lookup); err != nil {
+	if c.Device, err = wg.DeviceConfigFromEnvironment(environment); err != nil {
 		return c, err
 	}
 	if c.Socket, err = socketConfig(c.Device.MTU, lookup); err != nil {

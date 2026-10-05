@@ -11,7 +11,7 @@ import (
 
 func TestApplicationConfigurationSnapshotAndSummary(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	entries := []string{"WG_PRIVATE_KEY=" + key, "WG_LISTEN_PORT=12345", "WG_MTU=1420", "WG_PEERS=0", "WG_PEER_0_PUBLIC_KEY=" + key,
+	entries := []string{"WG_PRIVATE_KEY=" + key, "WG_LISTEN_PORT=12345", "WG_MTU=1420", "WG_PEER_0_PUBLIC_KEY=" + key,
 		"WG_PEER_0_ENDPOINT=private.example:1234", "WG_PEER_0_ALLOWED_IPS=10.3.0.0/16", "WG_DEBUG=true", "DEBUG=true", "WG_DISABLE_IPV6=false",
 		"WG_OVERLAY_ROUTING=true", "WG_OVERLAY_EXCLUDE_CIDRS=10.4.0.0/16", "WG_TUN_QUEUE_CAP=7", "WG_PCAP=/private/capture", "WG_PCAP_MAX_BYTES=44",
 		"POOLING=true", "POOL_WRAP=true", "HEALTHCHECK=true", "HEALTH_HTTP_URL=https://user:password@private.example/path?token=secret",
