@@ -8,21 +8,21 @@ of that digest to a unique development tag. Promotion does not rebuild the image
 
 ## Latest validation — 2026-10-05
 
-[Run 37347566364](https://github.com/irctrakz/wgslirp/actions/runs/37347566364)
+[Run 37351322953](https://github.com/irctrakz/wgslirp/actions/runs/37351322953)
 passed the standard checks and all sequential ordinary/race mixed, sustained,
-WAN and capacity gates for `05c5f742c002079a6a3608de3574dd06cdb90abe`.
+WAN and capacity gates for `9a6c05280ffafa5fb101b3323a9320a3b8fc5a15`.
 See [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md) for the new independent-peer evidence
 and retained initial fixture failure.
 
 The actual image passed UID 100 startup, encrypted TCP/UDP and SIGTERM under
-traffic (70 ms), using the unchanged dropped-capability and resource
+traffic (73 ms), using the unchanged dropped-capability and resource
 constraints. The fixture omits `WG_PEERS`, verifying automatic discovery through
 the image's normal startup path. Cleanup verified no owned runtime containers, networks, builder,
 cache volume or local image remained. CI promoted the same immutable artifact:
 
-`ghcr.io/irctrakz/wgslirp@sha256:e3dc78ef871a76087e631d6a157b2a023b98196e0ae3cb68917ac296bf7fc4d9`
+`ghcr.io/irctrakz/wgslirp@sha256:d9eabf07ec910f44d09c68cf7fccd01583c7ca045a50ee06f5e427e7e40935d5`
 
-as `dev-05c5f742c002079a6a3608de3574dd06cdb90abe-37347566364-1`.
+as `dev-9a6c05280ffafa5fb101b3323a9320a3b8fc5a15-37351322953-1`.
 This covers linux/amd64; main/master and `latest` were untouched.
 
 The actual-image log regression injected sixteen encrypted IPv4 fragments,
@@ -49,11 +49,19 @@ keeps the previous dependency-cache basis explicit after the setup-go upgrade.
 
 The selected actions require Actions Runner 2.327.1 or later; all workflows
 currently use GitHub-hosted `ubuntu-latest`. No Node runtime override is needed.
-Action metadata and configured inputs are checked with actionlint 1.7.12.
+Runtime declarations are checked against each maintainer's action metadata;
+workflow syntax, expressions and configured inputs pass actionlint 1.7.12.
 Runtime acceptance on the development branch does not execute PR-only or
 master-only jobs; those references receive static validation. See the maintainers'
 [setup-go release notes](https://github.com/actions/setup-go#breaking-changes-in-v6)
 and [Docker Node 24 migration](https://github.com/docker/build-push-action/releases/tag/v7.0.0).
+
+At `9a6c052`, run 37351322953 passed all eleven executed jobs, including the
+upgraded checkout, Go setup, artifact upload and registry login actions. All job
+annotations were inspected: zero Node.js 20 deprecation warnings remained.
+The PR build and master publisher were skipped by their existing conditions;
+their updated action references passed static validation. Workload resource-event
+checks, actual-image validation, same-digest promotion and owned cleanup passed.
 
 Use an ephemeral GitHub-hosted Linux runner with Docker and cgroup v2. The private
 SSH test server remains outside this image-build path: its existing cached-image
