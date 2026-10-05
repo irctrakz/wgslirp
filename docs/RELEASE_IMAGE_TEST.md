@@ -6,6 +6,24 @@ same commit. The candidate is published to GHCR, pulled by immutable digest and
 tested. Only a successful validation job (including cleanup) permits promotion
 of that digest to a unique development tag. Promotion does not rebuild the image.
 
+## Latest validation — 2026-10-04
+
+[Run 37242371491](https://github.com/irctrakz/wgslirp/actions/runs/37242371491)
+passed the standard checks and all sequential ordinary/race mixed, sustained,
+WAN and capacity gates for `740d0cdb8e8de58b7251ae72286957e901e2f9e5`.
+See [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md) for the new independent-peer evidence
+and retained initial fixture failure.
+
+The actual image passed UID 100 startup, encrypted TCP/UDP and SIGTERM under
+traffic (101.71672 ms), using the unchanged dropped-capability and resource
+constraints. Cleanup verified no owned runtime containers, networks, builder,
+cache volume or local image remained. CI promoted the same immutable artifact:
+
+`ghcr.io/irctrakz/wgslirp@sha256:b47b92492cbd09db701e41e77d5180ff33428fab31786b7ad29464066d72c4b8`
+
+as `dev-740d0cdb8e8de58b7251ae72286957e901e2f9e5-37242371491-1`.
+This covers linux/amd64; main/master and `latest` were untouched.
+
 ## Execution environment
 
 Use an ephemeral GitHub-hosted Linux runner with Docker and cgroup v2. The private
@@ -14,7 +32,7 @@ harness does not authorize host image builds, pulls or Docker socket mounts.
 
 Push to `codex/architecture-hardening` to run `.github/workflows/docker.yml`.
 The development-only `release-image-test` job depends on the ordinary Go checks
-and sequential ordinary/race sustained-loss, WAN and capacity gates;
+and sequential ordinary/race independent-peer mixed, sustained-loss, WAN and capacity gates;
 `promote-development` depends on successful image validation. Publication is
 restricted to `irctrakz/wgslirp` and that exact branch on push/manual events;
 pull requests cannot enter these jobs. No default-branch change is required for

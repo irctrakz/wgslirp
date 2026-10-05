@@ -4,6 +4,53 @@ This refactoring preserves userspace TCP/UDP forwarding, admission policy,
 protocol behavior, public APIs and existing lock ownership. It adds no network
 privileges or runtime configuration.
 
+## Further simplification (2026-10-04)
+
+`ed2a4d8` removes write-only retransmission flags (`rtx`, `pipeBytes`) and the
+sole no-op `OnSent` callback. Actual retry counts still govern RTT sampling;
+the local in-flight calculation still governs recovery. No lock, policy,
+public API or protocol transition changed. Stale scheduler/watermark comments
+now describe the actual ACK/window waits and retained-buffer budgets.
+
+The new [independent-peer mixed gate](ENCRYPTED_MIXED.md) passed ordinary and
+race execution. It also exposed the cost of fast-dial cancellation followed by
+async redial: the accepted pair observed four and fifteen extra empty host
+connections respectively. This is evidence for a follow-up investigation, not
+a production failure or throughput claim.
+
+Keep the next changes independently reviewable:
+
+1. Investigate handing one ongoing dial from the fast path to async completion,
+   avoiding cancellation/redial. Preserve immediate-refusal behavior, SYN-ACK
+   ownership, candidate publication, shutdown cancellation and exactly-once
+   socket/reservation release. Add deterministic handoff/cancellation tests
+   before replacing the current two-path implementation.
+2. Remove redundant `ccEnabled` state if non-nil `cc` fully represents the
+   existing enabled condition in all constructors and tests.
+3. Consolidate `clientMSS` and `mss` after distinguishing negotiated peer size
+   from the dynamic bridge clamp and advertised SYN-ACK MSS. Preserve those
+   distinct meanings and public diagnostics.
+4. Simplify repeated dial accounting and host-write error handling only where
+   metric timing, byte ownership and lock scope remain explicit.
+
+Retain the existing lock boundaries and independent protocol fixtures. A shorter
+function or fewer files alone is not evidence of a simpler state machine.
+
+### Conservative lock audit
+
+Overlapping `stateMu`, `txMu`, `sackMu` and related locks are audit candidates,
+not presumed redundant. Before proposing removal, enumerate every protected
+field's reader/writer, publication and teardown path, callback/re-entry path,
+and lock acquisition order. Explain what invariant the lock currently preserves
+and how that invariant survives all asynchronous paths without it. Review timer,
+retransmission, diagnostics and shutdown interactions explicitly.
+
+Require focused interleaving/cancellation/shutdown regressions and independent
+review of that argument. A race-detector pass is supporting evidence, not proof
+that the lock has no second-order purpose. Keep any lock whose role remains
+uncertain; harmless redundant locking is preferable to an unproven simplification.
+The current cleanup removes no locks and changes no lock ownership.
+
 ## Policy consolidation and establishment cleanup (2026-10-02)
 
 The hardcoded 30-second health monitor is removed. `tcp_stall.go` supplies one

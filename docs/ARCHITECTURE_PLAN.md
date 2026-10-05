@@ -11,6 +11,10 @@ RTO/receiver-reneging gates now have ordinary and race evidence in
 fixed stale SACK state suppressing retransmission after receiver reneging.
 A paced 15.75 MiB persistent TCP/UDP profile with seeded and burst ACK/uplink
 loss also passed ordinary/race checks; see [ENCRYPTED_SUSTAINED.md](ENCRYPTED_SUSTAINED.md).
+An independent gVisor guest now exercises concurrent short requests, bulk TCP
+and UDP with default delayed ACKs; the first ordinary/race mixed pair passed.
+See [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md) for acceptance and staged follow-ups,
+and [TCP_ARCHITECTURE.md](TCP_ARCHITECTURE.md) for the next simplification sequence.
 Higher concurrent/saturation profiles and deployment-specific impairment
 distributions remain scope decisions; F10 is not universally complete. The
 [Lean verification proposal](LEAN_VERIFICATION_PROPOSAL.md) is deferred, with no

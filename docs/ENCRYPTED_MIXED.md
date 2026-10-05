@@ -68,4 +68,42 @@ the asynchronous fallback creates its replacement. The responder now serves
 until all clients finish, with a hard 260-accept ceiling, six concurrent handlers
 and the same deadline. It logs total and empty accepts to test this explanation.
 The 130 completed guest requests, exact bytes and all resource/time criteria are
-unchanged. Pending corrected ordinary/race execution; no combined acceptance yet.
+unchanged.
+
+### Corrected mixed gate accepted
+
+Both modes passed at `740d0cd` in
+[run 37242371491](https://github.com/irctrakz/wgslirp/actions/runs/37242371491).
+
+| Measurement | Ordinary | Race |
+| --- | ---: | ---: |
+| Traffic elapsed | 10.588 s | 11.863 s |
+| Completed TCP handshakes | 130 | 130 |
+| Handshake p50 | 0.217 ms | 1.546 ms |
+| Handshake p95 | 8.810 ms | 82.002 ms |
+| Handshake maximum | 72.085 ms | 104.799 ms |
+| Host accepts / empty accepts | 134 / 4 | 145 / 15 |
+| Async fallback dials | 4 | 15 |
+| Bridge buffer peak | 466,795 bytes | 416,155 bytes |
+| Cgroup peak, including compilation/cache | 597,889,024 bytes | 887,861,248 bytes |
+
+Both completed every exact payload and half-close/EOF check, zero final flow,
+dial and buffer reservations, and worker cleanup. Memory/PID events and OOM
+were zero; container, tmpfs and toolchain-image removal were verified. The extra
+empty accepts matching fallback dials support the corrected fixture diagnosis.
+This is one accepted pair, not a latency distribution across deployment runs.
+
+Standard build/vet, unit/integration race, fuzz and configuration checks also
+passed. The same run passed both modes of sustained-loss, calibrated WAN and
+capacity/TIME-WAIT gates, then actual-image validation and same-digest promotion.
+All workload containers reported zero memory/PID-limit events and verified
+cleanup. The image ran as UID 100 with dropped capabilities, forwarded encrypted
+TCP/UDP and exited on SIGTERM under traffic in 101.71672 ms.
+
+Tested/promoted artifact:
+`ghcr.io/irctrakz/wgslirp@sha256:b47b92492cbd09db701e41e77d5180ff33428fab31786b7ad29464066d72c4b8`.
+Development tag:
+`dev-740d0cdb8e8de58b7251ae72286957e901e2f9e5-37242371491-1`.
+Image cleanup verified no owned runtime containers, networks, builder, cache
+volume or local image remained. Published candidate/development artifacts remain
+in GHCR intentionally. Neither main/master nor `latest` was updated.
