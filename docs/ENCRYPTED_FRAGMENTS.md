@@ -1,6 +1,7 @@
 # Bounded encrypted fragment evidence
 
-Status: acceptance pending. Default enablement remains separate from this test change.
+Status: implemented; encrypted runtime acceptance pending. Default enablement
+remains separate from this test change and is still disabled.
 
 ## Profile and preselected gates
 
@@ -39,8 +40,9 @@ checks remain mandatory. The private SSH server is unused.
 Sample heap/RSS every 100 ms during mixed traffic and on every ordinary round
 during expiry. Ordinary bounds: 192 MiB sampled heap, 384 MiB sampled RSS; race
 bounds: 256 MiB heap, 768 MiB RSS. Both permit at most 512 goroutines. Report
-allocation bytes/objects and natural GC cycles, with three idle observations
-after teardown. No forced GC, scavenging or runtime-limit changes are allowed.
+allocation bytes/objects and natural GC cycles, with RSS at each expiry recovery
+and three idle observations after teardown. Initial, peak and final RSS are
+reported. No forced GC, scavenging or runtime-limit changes are allowed.
 Reservation recovery is asserted; RSS returning to its cold baseline is observed,
 not assumed. Limits are fixed before acceptance and are distinct from the
 actual release image's existing 256 MiB runtime validation profile.
@@ -66,6 +68,15 @@ Expected quota totals on the datagram interface: `live_peak=32`, `source_peak=8`
 assemblies are released by joined shutdown and do not count as timeout expiry.
 
 ## Acceptance and default-policy decision
+
+Native focused reassembly tests and Linux cross-vet including the new fixture
+passed. The baseline build, vet, unit/race, integration/race and fuzz stage passed
+in [run 37369562429](https://github.com/irctrakz/wgslirp/actions/runs/37369562429).
+The new ordinary/race workload jobs remained queued without an assigned runner;
+that run was cancelled before workload execution to validate the later RSS
+checkpoint commit instead. It does **not** establish encrypted acceptance.
+The default remains false while the expanded profile and resource/cleanup gates
+await runtime results. No private-server workload was launched.
 
 Record runtime, allocation/RSS, counter and owned-cleanup evidence here before
 marking this profile accepted. Review the measured arrival-order fairness limit

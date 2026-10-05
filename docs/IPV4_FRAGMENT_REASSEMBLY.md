@@ -117,6 +117,9 @@ Before changing the default:
 
 The [expanded profile](ENCRYPTED_FRAGMENTS.md) declares workload/resource criteria
 before acceptance and records its separate default-policy decision.
+Its fixture, quota attribution counters, CI jobs and RSS recovery checkpoints
+are implemented; runtime acceptance is pending runner availability. The items
+below remain unchecked until their evidence is reviewed, and the default is false.
 
 - [ ] Expand bounded encrypted evidence to realistic MTU-sized fragments and
   larger datagrams, mixed short/bulk/UDP traffic, loss/reordering and multiple
