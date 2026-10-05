@@ -29,7 +29,14 @@ Tests control dial completion/cancellation with channels and cover one attempt,
 one SYN-ACK, fast/async failure policies, reset/shutdown, late successful sockets,
 SYN-ACK refusal, quote-budget failure, duplicate candidates and pending FIN.
 The independent-peer mixed gate additionally requires zero empty host accepts
-and exactly 130 payload connections. Validation of this change is pending.
+and exactly 130 payload connections. At `6a2b78b`,
+[run 37246793917](https://github.com/irctrakz/wgslirp/actions/runs/37246793917)
+passed build/vet, unit/integration race, fuzz, both modes of mixed/sustained/WAN/
+capacity workloads, actual-image validation and same-digest development promotion.
+The mixed race run exercised 46 async handoffs with zero empty host connections;
+all owned-resource cleanup checks passed.
+
+### Earlier private cleanup
 
 `ed2a4d8` removes write-only retransmission flags (`rtx`, `pipeBytes`) and the
 sole no-op `OnSent` callback. Actual retry counts still govern RTT sampling;
@@ -40,22 +47,17 @@ now describe the actual ACK/window waits and retained-buffer budgets.
 The new [independent-peer mixed gate](ENCRYPTED_MIXED.md) passed ordinary and
 race execution. It also exposed the cost of fast-dial cancellation followed by
 async redial: the accepted pair observed four and fifteen extra empty host
-connections respectively. This is evidence for a follow-up investigation, not
-a production failure or throughput claim.
+connections respectively. The single-dial handoff above addresses that residue;
+the historical measurements remain in the workload document.
 
 Keep the next changes independently reviewable:
 
-1. Implemented above, pending validation: hand one ongoing dial from the fast path to async completion,
-   avoiding cancellation/redial. Preserve immediate-refusal behavior, SYN-ACK
-   ownership, candidate publication, shutdown cancellation and exactly-once
-   socket/reservation release. Add deterministic handoff/cancellation tests
-   before replacing the current two-path implementation.
-2. Remove redundant `ccEnabled` state if non-nil `cc` fully represents the
+1. Remove redundant `ccEnabled` state if non-nil `cc` fully represents the
    existing enabled condition in all constructors and tests.
-3. Consolidate `clientMSS` and `mss` after distinguishing negotiated peer size
+2. Consolidate `clientMSS` and `mss` after distinguishing negotiated peer size
    from the dynamic bridge clamp and advertised SYN-ACK MSS. Preserve those
    distinct meanings and public diagnostics.
-4. Simplify repeated dial accounting and host-write error handling only where
+3. Simplify repeated dial accounting and host-write error handling only where
    metric timing, byte ownership and lock scope remain explicit.
 
 Retain the existing lock boundaries and independent protocol fixtures. A shorter

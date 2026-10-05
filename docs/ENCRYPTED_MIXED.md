@@ -55,6 +55,35 @@ sequence-wrap and recovery assertions.
 
 ## Validation status
 
+### Single-dial handoff — 2026-10-04
+
+At `6a2b78b`, [run 37246793917](https://github.com/irctrakz/wgslirp/actions/runs/37246793917)
+passed the standard build/vet, unit/integration race and fuzz checks, plus both
+mixed modes with the predeclared zero-empty-connection requirement.
+
+| Measurement | Ordinary | Race |
+| --- | ---: | ---: |
+| Traffic elapsed | 10.518 s | 13.733 s |
+| Host accepts / empty accepts | 130 / 0 | 130 / 0 |
+| Async handoffs | 0 | 46 |
+| Handshake p50 | 0.656 ms | 15.512 ms |
+| Handshake p95 | 5.492 ms | 96.372 ms |
+| Handshake maximum | 7.720 ms | 132.668 ms |
+| Bridge buffer peak | 580,363 bytes | 470,015 bytes |
+| Cgroup peak, including compilation/cache | 564,604,928 bytes | 927,158,272 bytes |
+
+All exact payload, half-close, reservation and worker checks passed. Both modes
+recorded zero memory/PID-limit events or OOM and verified container/tmpfs/image
+cleanup. The race result exercises actual async handoffs without extra empty
+host sockets. These are separate runner observations, not a controlled latency
+comparison or a speedup claim. The same run passed both modes of sustained-loss,
+WAN and capacity/TIME-WAIT checks, then actual-image validation and promotion.
+All workload resource-event and cleanup checks passed. The image ran as UID 100,
+forwarded encrypted TCP/UDP, and handled SIGTERM under traffic in 85.696406 ms.
+CI promoted the same tested digest; see [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md)
+for its immutable identity. No owned runtime containers, networks, builder,
+cache volume or local image remained after cleanup.
+
 **Single-dial handoff acceptance, declared before its run:** retain all existing
 traffic, latency, resource and cleanup criteria, and additionally require zero
 empty host accepts (exactly 130 host payload connections). Keep the 260-accept

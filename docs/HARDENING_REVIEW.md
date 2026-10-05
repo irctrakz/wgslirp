@@ -82,6 +82,17 @@ testing that tag would not validate all code reviewed here.
 
 ## Remaining work, ordered by impact
 
+**Single-dial handoff (2026-10-04):** `6a2b78b` replaces fast-wait cancellation
+and redial with ownership transfer of one dial result. All existing locks remain.
+Focused cancellation, late-socket, rejection, pending-FIN and duplicate-candidate
+tests pass in standard race CI. Both mixed modes pass with exactly 130 host
+connections and zero empty accepts; race mode exercised 46 async handoffs.
+See [TCP_ARCHITECTURE.md](TCP_ARCHITECTURE.md) for the ownership argument and
+[ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md) for measured evidence.
+[Run 37246793917](https://github.com/irctrakz/wgslirp/actions/runs/37246793917)
+passed all workload, actual-image, promotion and cleanup gates. This handoff is
+complete; overlapping locks remain a separate conservative audit.
+
 **Mixed workload and TCP simplicity (2026-10-04):** the next independent-peer
 gate and its predeclared limits are in [ENCRYPTED_MIXED.md](ENCRYPTED_MIXED.md).
 The first private cleanup removes write-only `rtx`/`pipeBytes` state and the
@@ -90,8 +101,7 @@ are preserved. Linux cross-compilation, vet, standard race/fuzz CI and the new
 ordinary/race mixed gate passed at `740d0cd`. The same run passed sustained-loss,
 WAN and capacity ordinary/race checks, actual-image validation and same-digest
 development promotion, with verified owned-resource cleanup.
-Further candidates require separate review: fast/async dial handoff without
-redial, redundant congestion-control
+Further candidates require separate review: redundant congestion-control
 enable state, duplicate MSS state, and repeated async-dial completion accounting.
 Do not combine these with a lock rewrite or replace protocol tests with line-count
 claims. Independent-peer WAN, failure and saturation stages remain follow-ups.
