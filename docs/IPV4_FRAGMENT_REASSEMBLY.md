@@ -117,14 +117,16 @@ Before changing the default:
 
 The [expanded profile](ENCRYPTED_FRAGMENTS.md) declares workload/resource criteria
 before acceptance and records its separate default-policy decision.
-Its fixture, quota attribution counters, CI jobs and RSS recovery checkpoints
-are implemented; runtime acceptance is pending runner availability. The items
-below remain unchecked until their evidence is reviewed, and the default is false.
+Its finite-uplink ordinary/race profiles and full image/promotion pipeline passed
+in [run 37376714607](https://github.com/irctrakz/wgslirp/actions/runs/37376714607).
+The evidence records RSS retention, quota recovery, profiling and cleanup, plus
+the still-unresolved unpaced failure. Default-policy review remains separate,
+and the default is false.
 
-- [ ] Expand bounded encrypted evidence to realistic MTU-sized fragments and
+- [x] Expand bounded encrypted evidence to realistic MTU-sized fragments and
   larger datagrams, mixed short/bulk/UDP traffic, loss/reordering and multiple
   sources competing for the global quota.
-- [ ] Measure sustained allocation/RSS and recovery across repeated expiry,
+- [x] Measure sustained allocation/RSS and recovery across repeated expiry,
   late duplicates and quota saturation; retain the current resource/cleanup gates.
 - [ ] Review deployment counters and per-source fairness, then make a separate
   default-policy change preserving an explicit `IPV4_REASSEMBLY=false` escape hatch.

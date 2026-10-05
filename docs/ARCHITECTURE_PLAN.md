@@ -710,6 +710,14 @@ The [expanded encrypted profile](ENCRYPTED_FRAGMENTS.md) adds realistic MTUs,
 large datagrams, independent-stack mixed traffic with loss, competing sources,
 real repeated expiry and sampled allocation/RSS recovery. Its acceptance and
 default-policy commit remain separate reviewable changes.
+The allocation-profile review identified upstream WireGuard message buffers as
+the largest sampled live allocation source in the unpaced fragment fixture.
+The declared finite-uplink profile passed ordinary/race fragment gates without
+raising memory/resource limits or forcing GC; full-chain acceptance is tracked
+in the linked evidence document and passed run 37376714607, including the actual
+image and same-digest development promotion. Production reassembly allocation churn and
+unpaced/high-rate acceptance remain explicit follow-ups there. This result does
+not authorize a default-policy change by itself.
 
 ## First implementation milestone
 

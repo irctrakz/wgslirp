@@ -1,7 +1,7 @@
 # Bounded encrypted fragment evidence
 
-Status: implemented; encrypted runtime acceptance pending. Default enablement
-remains separate from this test change and is still disabled.
+Status: finite-rate ordinary/race fragment profile and full pipeline accepted.
+Default enablement remains separate and is still disabled.
 
 ## Profile and preselected gates
 
@@ -86,7 +86,63 @@ can lag recent allocations and perturbs execution; it is diagnostic evidence,
 not an acceptance run. Both failures had zero cgroup limit/OOM events and passed
 owned cleanup. The finite-rate candidate retains all original byte/loss/quota,
 memory/RSS, deadline and cleanup checks without changing production storage or
-forcing GC. Acceptance remains pending its ordinary/race and full-pipeline results.
+forcing GC.
+
+### Finite-rate profile results
+
+Both fragment modes passed in
+[run 37376714607](https://github.com/irctrakz/wgslirp/actions/runs/37376714607)
+on source `b99620bcfbc8f233fea23080fb909f23cc0b704c`:
+
+| Measurement | Ordinary | Race |
+| --- | ---: | ---: |
+| Sampled peak heap, bytes | 159,381,208 | 143,494,848 |
+| Sampled peak RSS, bytes | 144,629,760 | 538,411,008 |
+| Final idle heap, bytes | 73,221,280 | 56,189,896 |
+| Final idle RSS, bytes | 144,629,760 | 501,710,848 |
+| Cumulative allocated bytes | 788,133,832 | 2,384,902,136 |
+| Natural / forced GC cycles | 16 / 0 | 42 / 0 |
+| Cgroup peak including compilation, bytes | 505,090,048 | 921,776,128 |
+
+Both passed the original exact-byte mixed traffic, two fragment losses, 48 large
+datagrams, 66 real expiries, late-duplicate recovery and two global quota cycles.
+The observed peaks were 32 live assemblies and eight per source; source/global
+refusals were exactly 2/4. Ordinary TCP/UDP progressed for 243 rounds per expiry
+cycle in ordinary mode and 240/241/241 in race mode. All reservations returned to
+zero, worker teardown passed, all cgroup memory/PID-limit events were zero, and
+owned container/tmpfs/toolchain-image removal and absence checks passed.
+
+Cumulative allocations are traffic volume, not simultaneously retained bytes.
+Neither mode returned RSS to its cold baseline during the three-second idle
+window; retained runtime/race memory is recorded without forced GC. These are
+bounded observations, not a production capacity or leak-free proof.
+
+The same run completed successfully: baseline build/vet/unit-race/integration-race
+and fuzz checks, all ten ordinary/race workloads, actual-image validation and
+tested-digest promotion passed (13 applicable jobs; two branch-inapplicable jobs
+skipped). Every workload had zero cgroup memory/OOM/PID-limit events and passed
+owned cleanup. The tested and promoted linux/amd64 artifact is:
+
+`ghcr.io/irctrakz/wgslirp@sha256:a91d7784f99ce65e4ec957ef9f3b50341ade0992c95f34365544efe5975e4c5b`
+
+Development tag:
+`dev-b99620bcfbc8f233fea23080fb909f23cc0b704c-37376714607-1`.
+The normal non-root image passed default rejection and explicit enabled
+reassembly, with all capabilities dropped, one CPU, 256 MiB/no swap, 128 PIDs,
+read-only root and bounded tmpfs/logs. Enabled mode retained eight assemblies
+from a forty-ID flood, completed 222 ordinary TCP/UDP rounds during expiry,
+expired all eight and restored fragment admission. Its observed cgroup memory
+peak was 56,954,880 bytes; SIGTERM exited zero in 71 ms (default mode: 75 ms).
+All runtime resource events were zero. Owned runtime containers/networks,
+builder/cache volume and local tested image were removed; GHCR artifacts are
+deliberately retained. Promotion preserved the tested digest, without rebuilding.
+
+### Follow-up limits
+
+- [ ] Profile and reduce reassembly's full-datagram allocation churn for small
+  fragmented traffic while preserving reservation, dispatch and expiry ownership.
+- [ ] Establish a separate unpaced/high-rate acceptance profile before claiming
+  that the original producer's heap/deadline failures have been resolved.
 
 Native focused reassembly tests and Linux cross-vet including the new fixture
 passed. The baseline build, vet, unit/race, integration/race and fuzz stage passed
@@ -94,12 +150,13 @@ in [run 37369562429](https://github.com/irctrakz/wgslirp/actions/runs/3736956242
 The new ordinary/race workload jobs remained queued without an assigned runner;
 that run was cancelled before workload execution to validate the later RSS
 checkpoint commit instead. It does **not** establish encrypted acceptance.
-The default remains false while the expanded profile and resource/cleanup gates
-await runtime results. No private-server workload was launched.
+The default remains false while the separate default-policy review remains
+open; finite-rate acceptance does not resolve the unpaced failure above. No
+private-server workload was launched.
 
-Record runtime, allocation/RSS, counter and owned-cleanup evidence here before
-marking this profile accepted. Review the measured arrival-order fairness limit
-and workload scope explicitly. A separate default-policy commit must preserve
+The runtime, allocation/RSS, counter and owned-cleanup evidence above accepts the
+declared finite-rate profile. The arrival-order fairness limit and unpaced
+failure remain explicit. A separate default-policy commit must preserve
 `IPV4_REASSEMBLY=false`, verify the normal default-enabled image startup path and
 the explicit disabled image path, and pass the unchanged full pipeline. There is
 no claim of production capacity, authenticated-peer scheduling fairness or
