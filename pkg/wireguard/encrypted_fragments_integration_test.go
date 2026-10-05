@@ -10,7 +10,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,6 +114,12 @@ func (m *fragmentResourceSamples) sample(s *socket.SocketInterface) error {
 	}
 	if current.HeapAlloc > heapCap || rss > rssCap || runtime.NumGoroutine() > 512 || current.NumForcedGC != m.initial.NumForcedGC {
 		m.err = fmt.Errorf("fragment resource bound: heap=%d rss=%d workers=%d forced_gc=%d", current.HeapAlloc, rss, runtime.NumGoroutine(), current.NumForcedGC-m.initial.NumForcedGC)
+		if dir := os.Getenv("WGSLIRP_FRAGMENT_PROFILE_DIR"); dir != "" {
+			// Capture the violating sample without forcing GC or changing limits.
+			if err := writeFragmentHeapProfile(dir); err != nil {
+				m.err = fmt.Errorf("%v; profile: %w", m.err, err)
+			}
+		}
 	}
 	if s != nil {
 		dm := s.DetailedMetrics()
@@ -121,6 +129,21 @@ func (m *fragmentResourceSamples) sample(s *socket.SocketInterface) error {
 		}
 	}
 	return m.err
+}
+
+func writeFragmentHeapProfile(dir string) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	f, err := os.Create(filepath.Join(dir, "fragment-breach.pprof"))
+	if err != nil {
+		return err
+	}
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func TestEncryptedFragments(t *testing.T) {

@@ -42,9 +42,11 @@ jobs:
             --tmpfs /work:rw,exec,nosuid,nodev,size=768m,mode=1777 \
             --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777 \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/evidence,dst=/evidence" \
             --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
             -e MODE -e WORKLOAD -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
             -e GOCACHE=/work/cache -e GOPATH=/work/gopath -e GOTMPDIR=/work/build \
+            -e WGSLIRP_FRAGMENT_PROFILE_DIR=/evidence \
             golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 600s bash -c '
               set -eu
               mkdir -p "$GOTMPDIR"
@@ -66,6 +68,11 @@ jobs:
               go test $race_flag -v -tags="$test_tags" -run="^${test_name}$" -timeout="$test_timeout" -count=1 -parallel=1 ./pkg/wireguard
               result=$?
               set -e
+              if [ -f /evidence/fragment-breach.pprof ]; then
+                go tool pprof -top -sample_index=inuse_space /evidence/fragment-breach.pprof > /evidence/fragment-inuse.txt
+                go tool pprof -top -sample_index=alloc_space /evidence/fragment-breach.pprof > /evidence/fragment-allocations.txt
+                cat /evidence/fragment-inuse.txt /evidence/fragment-allocations.txt
+              fi
               echo CGROUP_MEMORY_PEAK
               cat /sys/fs/cgroup/memory.peak
               cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/pids.events
