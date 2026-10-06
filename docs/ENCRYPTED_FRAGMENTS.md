@@ -174,12 +174,15 @@ are recorded in [reassembly allocation churn](REASSEMBLY_ALLOCATION_CHURN.md).
 
 #### 2. Unpaced encrypted acceptance
 
-- [ ] Declare a separate opt-in CI profile that removes the artificial
+The [declared unpaced profile and repetition gates](UNPACED_FRAGMENT_ACCEPTANCE.md)
+track implementation, results and the subsequent separate default-policy change.
+
+- [x] Declare a separate opt-in CI profile that removes the artificial
   one-millisecond pause per original packet. Unpaced still means finite traffic
   volumes and connection counts inside bounded containers, not an unlimited
   producer. Preserve the original short/bulk/UDP volumes, exact-byte checks,
   duplicate/reordering bursts and two deliberate fragment losses.
-- [ ] Retain the current acceptance limits: ordinary heap/RSS 192/384 MiB,
+- [x] Retain the current acceptance limits: ordinary heap/RSS 192/384 MiB,
   race heap/RSS 256/768 MiB, the 45-second mixed-traffic deadline, 300-second Go
   test deadline and 600-second container deadline. Keep one CPU, 2 GiB/no swap,
   128 PIDs, bounded tmpfs/logs and all cleanup/resource-event gates. Do not pass
@@ -192,7 +195,7 @@ are recorded in [reassembly allocation churn](REASSEMBLY_ALLOCATION_CHURN.md).
   for acceptance; sampled allocation profiles can lag GC and instrumentation
   can affect timing. Retain the original heap breach and diagnostic timeout
   evidence alongside any new result.
-- [ ] Predeclare a repetition count before running acceptance (proposed: three
+- [ ] Predeclare a repetition count before running acceptance (declared: three
   fresh ordinary containers and three fresh race containers). Require every
   run to meet unchanged gates without timeout, data mismatch, OOM/PID events or
   cleanup failures, with final reservations zero and workers joined. Follow

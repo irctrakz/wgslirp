@@ -6,6 +6,9 @@ on:
       workload:
         type: string
         default: capacity
+      repetitions:
+        type: string
+        default: '[1]'
 
 permissions:
   contents: read
@@ -19,10 +22,11 @@ jobs:
       max-parallel: 1
       matrix:
         mode: [ordinary, race]
+        repetition: ${{ fromJSON(inputs.repetitions) }}
     env:
       MODE: ${{ matrix.mode }}
       WORKLOAD: ${{ inputs.workload }}
-      CONTAINER: wgslirp-${{ inputs.workload }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
+      CONTAINER: wgslirp-${{ inputs.workload }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}-${{ matrix.repetition }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -60,11 +64,14 @@ jobs:
                 sustained) test_name=TestEncryptedSustainedLoss; test_timeout=330s ;;
                 mixed) test_name=TestEncryptedMixed; test_timeout=120s ;;
                 fragments) test_name=TestEncryptedFragments; test_timeout=300s ;;
+                fragments-unpaced) test_name=TestEncryptedFragmentsUnpaced; test_timeout=300s ;;
                 *) echo "Unknown workload" >&2; exit 1 ;;
               esac
               set +e
               test_tags="integration,$WORKLOAD"
-              if [ "$WORKLOAD" = fragments ]; then test_tags="$test_tags,mixed"; fi
+              case "$WORKLOAD" in
+                fragments|fragments-unpaced) test_tags="integration,fragments,mixed" ;;
+              esac
               if [ "$WORKLOAD" = fragments ]; then
                 go test $race_flag -run="^$" -bench="^BenchmarkIPv4Fragments$" -benchmem \
                   -benchtime=100ms -count=3 -timeout=60s -parallel=1 ./pkg/socket > /evidence/reassembly-allocations.txt
@@ -104,6 +111,7 @@ jobs:
             sustained) grep -q 'SUSTAINED_ACCEPTED' evidence/test.log ;;
             mixed) grep -q 'MIXED_ACCEPTED' evidence/test.log ;;
             fragments) grep -q 'FRAGMENTS_ACCEPTED' evidence/test.log ;;
+            fragments-unpaced) grep -q 'FRAGMENTS_UNPACED_ACCEPTED' evidence/test.log ;;
             *) exit 1 ;;
           esac
       - name: Remove owned container and toolchain image
@@ -130,7 +138,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: ${{ inputs.workload }}-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.workload }}-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.repetition }}
           path: evidence/
           retention-days: 14
           if-no-files-found: error

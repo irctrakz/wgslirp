@@ -32,15 +32,17 @@ type fragmentGuestTUN struct {
 	scratch             [65535]byte
 	pending             [][]byte
 	id                  uint16
+	packetDelay         time.Duration
 	fragmented, dropped atomic.Uint64
 }
 
 func (f *fragmentGuestTUN) Read(buffers [][]byte, sizes []int, offset int) (int, error) {
 	for len(f.pending) == 0 {
-		// Model a finite uplink: at most 1000 original IP packets/s (about
-		// 11 Mbit/s at MTU 1380). Reordering/duplicates stay inside each burst.
-		// This reader owns pacing; no timer worker or runtime GC tuning is added.
-		time.Sleep(time.Millisecond)
+		// Finite-rate and unpaced profiles share traffic and loss injection.
+		// A zero delay removes all artificial original-packet pacing.
+		if f.packetDelay > 0 {
+			time.Sleep(f.packetDelay)
+		}
 		n, err := f.Device.Read([][]byte{f.scratch[:]}, sizes[:1], 0)
 		if err != nil {
 			return 0, err
@@ -151,6 +153,18 @@ func writeFragmentHeapProfile(dir string) error {
 }
 
 func TestEncryptedFragments(t *testing.T) {
+	testEncryptedFragments(t, time.Millisecond)
+}
+
+func TestEncryptedFragmentsUnpaced(t *testing.T) {
+	testEncryptedFragments(t, 0)
+}
+
+func testEncryptedFragments(t *testing.T, packetDelay time.Duration) {
+	profile, accepted := "finite-rate", "FRAGMENTS_ACCEPTED"
+	if packetDelay == 0 {
+		profile, accepted = "unpaced", "FRAGMENTS_UNPACED_ACCEPTED"
+	}
 	baseline := runtime.NumGoroutine()
 	samples := &fragmentResourceSamples{}
 	runtime.ReadMemStats(&samples.initial)
@@ -158,6 +172,7 @@ func TestEncryptedFragments(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !t.Run("mixed", func(t *testing.T) {
+		started := time.Now()
 		var wrapper *fragmentGuestTUN
 		stop, done := make(chan struct{}), make(chan struct{})
 		go func() {
@@ -176,7 +191,7 @@ func TestEncryptedFragments(t *testing.T) {
 		t.Cleanup(func() { close(stop); <-done })
 		runEncryptedMixedWithLink(t, func(t *testing.T) (*socket.SocketInterface, *netstack.Net) {
 			return mixedTestLinkWithOptions(t, true, func(d tun.Device) tun.Device {
-				wrapper = &fragmentGuestTUN{Device: d}
+				wrapper = &fragmentGuestTUN{Device: d, packetDelay: packetDelay}
 				return wrapper
 			})
 		})
@@ -186,7 +201,10 @@ func TestEncryptedFragments(t *testing.T) {
 		if err := samples.sample(nil); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("FRAGMENT_MIXED_OK original_packet_rate_cap=1000 fragmented=%d dropped=2 short_requests=128 bulk_bytes_each_direction=8388608 udp_round_trips=512", wrapper.fragmented.Load())
+		var mixed runtime.MemStats
+		runtime.ReadMemStats(&mixed)
+		t.Logf("FRAGMENT_MIXED_OK profile=%s original_packet_delay_us=%d fragmented=%d dropped=2 short_requests=128 bulk_bytes_each_direction=8388608 udp_round_trips=512", profile, packetDelay.Microseconds(), wrapper.fragmented.Load())
+		t.Logf("FRAGMENT_MIXED_MEMORY profile=%s elapsed_ms=%d allocation_bytes=%d allocation_objects=%d natural_gc=%d forced_gc=%d", profile, time.Since(started).Milliseconds(), mixed.TotalAlloc-samples.initial.TotalAlloc, mixed.Mallocs-samples.initial.Mallocs, mixed.NumGC-samples.initial.NumGC, mixed.NumForcedGC-samples.initial.NumForcedGC)
 	}) {
 		return
 	}
@@ -202,7 +220,7 @@ func TestEncryptedFragments(t *testing.T) {
 	}
 	var final runtime.MemStats
 	runtime.ReadMemStats(&final)
-	t.Logf("FRAGMENTS_ACCEPTED heap_peak=%d rss_initial=%d rss_peak=%d rss_final=%d allocation_bytes=%d allocation_objects=%d natural_gc=%d forced_gc=%d", samples.heapPeak, samples.rssInitial, samples.rssPeak, samples.rssLast, final.TotalAlloc-samples.initial.TotalAlloc, final.Mallocs-samples.initial.Mallocs, final.NumGC-samples.initial.NumGC, final.NumForcedGC-samples.initial.NumForcedGC)
+	t.Logf("%s heap_peak=%d rss_initial=%d rss_peak=%d rss_final=%d allocation_bytes=%d allocation_objects=%d natural_gc=%d forced_gc=%d", accepted, samples.heapPeak, samples.rssInitial, samples.rssPeak, samples.rssLast, final.TotalAlloc-samples.initial.TotalAlloc, final.Mallocs-samples.initial.Mallocs, final.NumGC-samples.initial.NumGC, final.NumForcedGC-samples.initial.NumForcedGC)
 }
 
 func fragmentUDP(port uint16, source byte, payload []byte) []byte {
