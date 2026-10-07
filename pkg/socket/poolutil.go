@@ -41,9 +41,15 @@ func poolingPolicy() PoolConfig {
 func poolingEnabled() bool  { return poolingPolicy().Enabled }
 func poolWrapEnabled() bool { return poolingPolicy().Wrap }
 
-// bufMaybePool returns a byte slice of length n, using the pool when enabled.
+// shouldPoolPacket is shared by allocation and live-capacity accounting. Reading
+// the startup policy first also freezes it when the first packet is tiny.
+func shouldPoolPacket(n int) bool {
+	return poolingEnabled() && n >= packetPoolMinSize && n <= pktXL
+}
+
+// bufMaybePool returns exact-sized tiny/uncached storage, or an eligible pool class.
 func bufMaybePool(n int) []byte {
-	if poolingEnabled() {
+	if shouldPoolPacket(n) {
 		return pktGet(n)
 	}
 	return make([]byte, n)

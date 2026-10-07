@@ -24,40 +24,91 @@ func TestSynthesisReservationAndDeliveryOwnership(t *testing.T) {
 	defer poolPolicy.Store(original)
 	for _, pooling := range []uint32{0, 1} {
 		poolPolicy.Store(&PoolConfig{Enabled: pooling == 1})
-		capacity := 43
-		if pooling == 1 {
-			capacity = pktSmall
-		}
-		budget := &resourceBudget{limit: capacity + 128}
-		bridge := &tcpBridge{buffers: budget}
-		p := bridge.buildIPv4TCP([4]byte{}, [4]byte{}, 1, 2, 3, 4, 0x10, []byte{5, 6, 7})
-		if p == nil {
-			t.Fatal("first reservation failed")
-		}
-		assertBudget(t, budget, uint64(capacity+128))
-		built := false
-		if budget.buildPacket(1, false, func() []byte { built = true; return []byte{1} }) != nil || built {
-			t.Fatal("builder ran before admission")
-		}
-		data := core.BorrowPacketData(p)
-		if calculateChecksum(data[:20]) != 0 || tcpChecksum(data[20:], [4]byte{}, [4]byte{}) != 0 {
-			t.Fatal("invalid synthesized checksum")
-		}
-		var retained core.Packet
-		if !deliverPacket(packetConsumer(func(p core.Packet) error { retained = p; return nil }), p) {
-			t.Fatal("delivery failed")
-		}
-		assertBudget(t, budget, uint64(capacity+128))
-		core.ReleasePacket(retained)
-		core.ReleasePacket(retained)
-		assertBudget(t, budget, 0)
-		for _, consumer := range []core.PacketProcessor{nil, packetConsumer(func(p core.Packet) error { return errors.New("reject") }), packetConsumer(func(p core.Packet) error { core.ReleasePacket(p); return errors.New("consumed") })} {
-			p = bridge.buildIPv4TCP([4]byte{}, [4]byte{}, 1, 2, 3, 4, 0x10, nil)
-			if deliverPacket(consumer, p) {
-				t.Fatal("rejection accepted")
+		for _, payloadSize := range []int{3, 472} {
+			payload := bytes.Repeat([]byte{5, 6, 7}, (payloadSize+2)/3)[:payloadSize]
+			capacity := 40 + payloadSize
+			if pooling == 1 && capacity >= packetPoolMinSize {
+				capacity = pktSmall
 			}
+			budget := &resourceBudget{limit: capacity + 128}
+			bridge := &tcpBridge{buffers: budget}
+			p := bridge.buildIPv4TCP([4]byte{}, [4]byte{}, 1, 2, 3, 4, 0x10, payload)
+			if p == nil {
+				t.Fatal("first reservation failed")
+			}
+			assertBudget(t, budget, uint64(capacity+128))
+			built := false
+			if budget.buildPacket(1, false, func() []byte { built = true; return []byte{1} }) != nil || built {
+				t.Fatal("builder ran before admission")
+			}
+			data := core.BorrowPacketData(p)
+			if calculateChecksum(data[:20]) != 0 || tcpChecksum(data[20:], [4]byte{}, [4]byte{}) != 0 {
+				t.Fatal("invalid synthesized checksum")
+			}
+			var retained core.Packet
+			if !deliverPacket(packetConsumer(func(p core.Packet) error { retained = p; return nil }), p) {
+				t.Fatal("delivery failed")
+			}
+			assertBudget(t, budget, uint64(capacity+128))
+			core.ReleasePacket(retained)
+			core.ReleasePacket(retained)
+			assertBudget(t, budget, 0)
+			for _, consumer := range []core.PacketProcessor{nil, packetConsumer(func(p core.Packet) error { return errors.New("reject") }), packetConsumer(func(p core.Packet) error { core.ReleasePacket(p); return errors.New("consumed") })} {
+				p = bridge.buildIPv4TCP([4]byte{}, [4]byte{}, 1, 2, 3, 4, 0x10, nil)
+				if deliverPacket(consumer, p) {
+					t.Fatal("rejection accepted")
+				}
+				assertBudget(t, budget, 0)
+			}
+		}
+	}
+}
+
+func TestSelectivePacketStorageBoundaries(t *testing.T) {
+	original := poolPolicy.Load()
+	defer poolPolicy.Store(original)
+	for _, enabled := range []bool{false, true} {
+		poolPolicy.Store(&PoolConfig{Enabled: enabled})
+		for _, size := range []int{40, 80, 511, 512, 2048, 2049, 4096, 4097, 8192, 8193, 16384, 16385} {
+			want := size
+			if enabled {
+				switch {
+				case size < 512:
+				case size <= 2048:
+					want = 2048
+				case size <= 4096:
+					want = 4096
+				case size <= 8192:
+					want = 8192
+				case size <= 16384:
+					want = 16384
+				}
+			}
+			budget := &resourceBudget{limit: want + bufferEntryAllowance}
+			packet := budget.buildPacket(size, true, func() []byte { return bufMaybePool(size) })
+			if packet == nil {
+				t.Fatalf("admission failed: enabled=%t size=%d", enabled, size)
+			}
+			if cap(core.BorrowPacketData(packet)) != want {
+				t.Fatalf("storage capacity mismatch: enabled=%t size=%d", enabled, size)
+			}
+			assertBudget(t, budget, uint64(want+bufferEntryAllowance))
+			core.ReleasePacket(packet)
+			core.ReleasePacket(packet)
 			assertBudget(t, budget, 0)
 		}
+	}
+}
+
+func TestTinyPacketFreezesPoolingPolicy(t *testing.T) {
+	original := poolPolicy.Swap(nil)
+	defer poolPolicy.Store(original)
+	buf := bufMaybePool(40)
+	if cap(buf) != 40 {
+		t.Fatal("tiny packet must remain exact-sized")
+	}
+	if ConfigurePooling(PoolConfig{Enabled: true}) == nil {
+		t.Fatal("first tiny allocation did not freeze startup policy")
 	}
 }
 

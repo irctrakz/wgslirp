@@ -10,7 +10,7 @@ on:
       pooling-profile:
         description: Pooling comparison profile
         type: choice
-        options: [basic, sustained]
+        options: [basic, sustained, selective]
         default: basic
   push:
     branches: [master, codex/architecture-hardening]

@@ -792,9 +792,11 @@ controls pass; independent-stack full CI remains the acceptance gate. See
   without establishing a consistent overall advantage. Default remains unchanged.
 - [ ] If selecting default-on, validate/promote that separate candidate's actual
   release image under existing deployment, ownership and shutdown gates.
-- [ ] Optional future reconsideration: only if deployment profiling supports it,
-  evaluate a separate policy avoiding tiny control-packet pooling, then repeat
-  paired evidence and actual-image acceptance. This is not a current blocker.
+- [ ] Validate the implemented [selective packet pooling candidate](SELECTIVE_PACKET_POOLING.md):
+  exact storage below 512 bytes, existing pool classes for 512–16,384 bytes,
+  shared allocation/reservation eligibility and captured release ownership.
+  Compare disabled/full/selective policies on one bounded runner before drawing
+  a performance conclusion. Any later default change requires actual-image acceptance.
 
 ## First implementation milestone
 

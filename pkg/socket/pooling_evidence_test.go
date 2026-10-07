@@ -25,7 +25,7 @@ func configurePoolingEvidence(tb testing.TB) bool {
 
 func BenchmarkPoolingPackets(b *testing.B) {
 	configurePoolingEvidence(b)
-	for _, size := range []int{40, 1380, 8192, 20000} {
+	for _, size := range []int{40, 80, 128, 256, 511, 512, 1024, 1380, 8192, 20000} {
 		b.Run(fmt.Sprint(size), func(b *testing.B) {
 			budget := &resourceBudget{limit: DefaultSocketBufferCap}
 			b.ReportAllocs()
@@ -51,7 +51,7 @@ func BenchmarkPoolingPackets(b *testing.B) {
 // downstream retention budget, then prove every reservation returns on release.
 func TestPoolingQueueCapacityEvidence(t *testing.T) {
 	enabled := configurePoolingEvidence(t)
-	for _, size := range []int{40, 1380} {
+	for _, size := range []int{40, 80, 511, 512, 1380} {
 		budget := &resourceBudget{limit: 64 * 1024}
 		var retained []core.Packet
 		for {
@@ -62,7 +62,7 @@ func TestPoolingQueueCapacityEvidence(t *testing.T) {
 			retained = append(retained, packet)
 		}
 		capacity := size
-		if enabled {
+		if enabled && size >= packetPoolMinSize && size <= pktXL {
 			capacity = packetCapacity(size)
 		}
 		used, peak, _, rejected := budget.snapshot()
