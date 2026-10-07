@@ -36,6 +36,10 @@ type fragmentGuestTUN struct {
 	fragmented, dropped atomic.Uint64
 }
 
+// The wrapper can return multiple ready ranges even when its backing TUN
+// produces only one original packet. Match WireGuard's maximum UDP batch.
+func (f *fragmentGuestTUN) BatchSize() int { return 128 }
+
 func TestFragmentGuestTUNReadyBatchOwnership(t *testing.T) {
 	original := encryptedPacket(6, 80, 1, 0, 0x18, bytes.Repeat([]byte{0x5a}, 1300))
 	frames := encryptedFragments(original, 1, 1176)
