@@ -55,7 +55,7 @@ func TestTransportFlowSnapshot(t *testing.T) {
 					}
 					return client, nil
 				}
-				syn := buildIPv4TCP([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, 80, 1, 0, 2, nil)
+				syn := buildIPv4TCPOpts([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, 80, 1, 0, 2, nil, []byte{3, 3, 7})
 				if err := s.tcp.HandleOutbound(syn); err != nil {
 					t.Fatal(err)
 				}

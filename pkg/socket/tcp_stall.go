@@ -24,7 +24,7 @@ func (b *tcpBridge) expireACKIdleLocked(f *tcpFlow, now time.Time) {
 		return
 	}
 	if b.errorSignal != "none" {
-		_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, fRST|fACK, nil))
+		_ = b.sendToGuest(f, b.buildTCPFlowLocked(f, f.serverNxt, fRST|fACK, nil, nil, 0, 64))
 	}
 	b.removeFlowLocked(f)
 }

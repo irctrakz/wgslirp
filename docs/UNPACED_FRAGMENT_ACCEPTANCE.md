@@ -61,6 +61,25 @@ against the previous code in a disposable source copy. This follows
 The repeated unpaced workload remains the acceptance gate; no deadline, pacing,
 memory limit or storage quota has been relaxed.
 
+The SACK-only follow-up at `0f427bb` passed baseline and finite-rate ordinary/race
+checks in [run 37560249997](https://github.com/irctrakz/wgslirp/actions/runs/37560249997).
+Its first unpaced sample failed at UDP round 3's two-second deadline; cleanup
+waited until the shared 45-second deadline. TCP reported 807 reassembly refusals,
+IPv4 fragment quotas reported none, memory/PID events were zero, and cleanup
+passed. It does not establish unpaced acceptance.
+
+The next change bounds advertised TCP receive space by the existing out-of-order
+storage cap, consistently across ACK/data/retransmission/FIN paths. It negotiates
+window scaling only when offered (including scale zero), clamps peer scales to
+14, keeps SYN windows unscaled and avoids retracting the right edge as future
+bytes are retained. Small caps reduce the scale to keep the window nonzero.
+Packet reservations and checksums are finalized once before ownership transfer.
+Focused wire tests pass; a disposable negative control restoring the old 8 MiB
+advertisement fails against the expected 128 KiB receive window. See
+[RFC 7323](https://www.rfc-editor.org/rfc/rfc7323.html#section-2.2).
+The fixture now also records an earlier sampled resource breach if traffic fails,
+so a subsequent deadline cannot hide the sampler's first error.
+
 - [x] Implement the separate zero-delay profile and repeated bounded CI gate.
 - [ ] Require all three ordinary and three race samples to pass; retain failure
   evidence and investigate any failure before continuing.

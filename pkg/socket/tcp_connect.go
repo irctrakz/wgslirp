@@ -157,7 +157,8 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 					}
 					candidate.mss = m
 				} else if kind == 3 && l == 3 { // Window scale
-					candidate.wsIn = opts[i+2]
+					candidate.wsIn = min(opts[i+2], 14)
+					candidate.windowScaleOffered = true
 				} else if kind == 4 && l == 2 { // SACK Permitted
 					candidate.sackPermitted = true
 				}
@@ -313,8 +314,16 @@ func (b *tcpBridge) synACKMSS() (int, int) {
 // Establishment is its sole caller; async dial completion never emits SYN-ACK.
 func (b *tcpBridge) sendInitialSYNACKLocked(f *tcpFlow) error {
 	mss, mtu := b.synACKMSS()
-	f.wsOut = uint8(b.tuning.WindowScale)
-	opts := []byte{2, 4, byte(mss >> 8), byte(mss), 3, 3, f.wsOut}
+	f.wsOut = 0
+	opts := []byte{2, 4, byte(mss >> 8), byte(mss)}
+	if f.windowScaleOffered {
+		f.wsOut = uint8(b.tuning.WindowScale)
+		// A small configured receive cap must still encode a nonzero window.
+		for f.wsOut > 0 && b.reasmCap>>f.wsOut == 0 {
+			f.wsOut--
+		}
+		opts = append(opts, 3, 3, f.wsOut)
+	}
 	if f.sackPermitted || b.tuning.EnableSACK {
 		opts = append(opts, 4, 2)
 	}
@@ -322,7 +331,7 @@ func (b *tcpBridge) sendInitialSYNACKLocked(f *tcpFlow) error {
 		logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
 			f.key, mtu, int(b.mssClamp.Load()), f.mss, mss)
 	}
-	packet := b.buildIPv4TCPOpts(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverISN, f.clientISN+1, fSYN|fACK, nil, opts)
+	packet := b.buildTCPFlowLocked(f, f.serverISN, fSYN|fACK, nil, opts, 0, 64)
 	return b.sendSYNACKLocked(f, packet)
 }
 

@@ -178,7 +178,7 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 		}{seq: seq, data: data, sentAt: time.Now()})
 		f.txMu.Unlock()
 		tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
-		pkt := b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seq, f.clientNxt, 0x18, data, tos, ttl)
+		pkt := b.buildTCPFlowLocked(f, seq, 0x18, data, nil, tos, ttl)
 		if b.sendToGuest(f, pkt) {
 			f.toCliBytes += uint64(size)
 			f.toCliPkts++

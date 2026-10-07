@@ -189,6 +189,13 @@ func testEncryptedFragments(t *testing.T, packetDelay time.Duration) {
 			}
 		}()
 		t.Cleanup(func() { close(stop); <-done })
+		t.Cleanup(func() {
+			if t.Failed() {
+				if err := samples.sample(nil); err != nil {
+					t.Logf("FRAGMENT_RESOURCE_FAILURE %v", err)
+				}
+			}
+		})
 		runEncryptedMixedWithLink(t, func(t *testing.T) (*socket.SocketInterface, *netstack.Net) {
 			return mixedTestLinkWithOptions(t, true, func(d tun.Device) tun.Device {
 				wrapper = &fragmentGuestTUN{Device: d, packetDelay: packetDelay}

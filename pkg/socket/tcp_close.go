@@ -20,7 +20,7 @@ func seqAfter(a, b uint32) bool  { return seqBefore(b, a) }
 
 func (b *tcpBridge) sendCloseACKLocked(f *tcpFlow) {
 	var options [36]byte
-	_ = b.sendToGuest(f, b.buildIPv4TCPOpts(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x10, nil, f.receiveSACKLocked(&options)))
+	_ = b.sendToGuest(f, b.buildTCPFlowLocked(f, f.serverNxt, 0x10, nil, f.receiveSACKLocked(&options), 0, 64))
 }
 
 func (b *tcpBridge) beginCloseLocked(f *tcpFlow, now time.Time) {
@@ -54,7 +54,7 @@ func (b *tcpBridge) startFINLocked(f *tcpFlow, now time.Time) {
 
 func (b *tcpBridge) emitFINLocked(f *tcpFlow, now time.Time) bool {
 	f.finSentAt = now
-	packet := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.finSeq, f.clientNxt, 0x11, nil)
+	packet := b.buildTCPFlowLocked(f, f.finSeq, 0x11, nil, nil, 0, 64)
 	if packet == nil {
 		return false
 	}
@@ -149,7 +149,7 @@ func (b *tcpBridge) closeTickLocked(f *tcpFlow, now time.Time) bool {
 		if b.failureLog.Allow(now) {
 			logging.Warnf("TCP close timed out: flow=%s state=%d unacknowledged=%d", f.key, f.state, f.serverNxt-f.sndUna)
 		}
-		_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
+		_ = b.sendToGuest(f, b.buildTCPFlowLocked(f, f.serverNxt, 0x14, nil, nil, 0, 64))
 		b.removeFlowLocked(f)
 		return false
 	}

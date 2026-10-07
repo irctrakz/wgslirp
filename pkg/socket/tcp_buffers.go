@@ -8,7 +8,7 @@ import (
 // bytes are silently discarded and unrelated flows keep their reservations.
 func (b *tcpBridge) abortBufferedFlowLocked(f *tcpFlow) {
 	b.bufferDrops.Add(1)
-	_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
+	_ = b.sendToGuest(f, b.buildTCPFlowLocked(f, f.serverNxt, 0x14, nil, nil, 0, 64))
 	b.removeFlowLocked(f)
 }
 
