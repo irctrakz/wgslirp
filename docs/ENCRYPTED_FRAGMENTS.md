@@ -1,7 +1,8 @@
 # Bounded encrypted fragment evidence
 
-Status: finite-rate ordinary/race fragment profile and full pipeline accepted.
-Default enablement remains separate and is still disabled.
+Status: finite-rate and six repeated unpaced ordinary/race samples, full pipeline
+and actual-image promotion accepted. Default enablement is implemented separately;
+its actual-image/full-pipeline validation remains pending.
 
 ## Profile and preselected gates
 
@@ -189,13 +190,13 @@ track implementation, results and the subsequent separate default-policy change.
   by shrinking traffic, adding pacing, removing loss, forcing GC or relaxing
   limits. A different capacity envelope requires a separately declared decision
   and does not resolve the original failed profile.
-- [ ] Measure reassembly and WireGuard buffer/queue behavior together with
+- [x] Measure reassembly and WireGuard buffer/queue behavior together with
   allocation rate, sampled heap/RSS, natural GC, throughput, handshake latency
   and post-load recovery. Use profiled runs for diagnosis and unprofiled runs
   for acceptance; sampled allocation profiles can lag GC and instrumentation
   can affect timing. Retain the original heap breach and diagnostic timeout
   evidence alongside any new result.
-- [ ] Predeclare a repetition count before running acceptance (declared: three
+- [x] Predeclare a repetition count before running acceptance (declared: three
   fresh ordinary containers and three fresh race containers). Require every
   run to meet unchanged gates without timeout, data mismatch, OOM/PID events or
   cleanup failures, with final reservations zero and workers joined. Follow
@@ -213,14 +214,17 @@ in [run 37369562429](https://github.com/irctrakz/wgslirp/actions/runs/3736956242
 The new ordinary/race workload jobs remained queued without an assigned runner;
 that run was cancelled before workload execution to validate the later RSS
 checkpoint commit instead. It does **not** establish encrypted acceptance.
-The default remains false while the separate default-policy review remains
-open; finite-rate acceptance does not resolve the unpaced failure above. No
-private-server workload was launched.
+That cancelled run used default false and did not resolve unpaced acceptance.
+No private-server workload was launched. Later, all six repeated unpaced samples
+and all 19 applicable pipeline jobs passed at `324d2ee` in
+[run 37561741720](https://github.com/irctrakz/wgslirp/actions/runs/37561741720),
+including actual-image validation and same-digest development promotion; see
+[per-run measurements and retained failures](UNPACED_FRAGMENT_ACCEPTANCE.md).
 
-The runtime, allocation/RSS, counter and owned-cleanup evidence above accepts the
-declared finite-rate profile. The arrival-order fairness limit and unpaced
-failure remain explicit. A separate default-policy commit must preserve
-`IPV4_REASSEMBLY=false`, verify the normal default-enabled image startup path and
-the explicit disabled image path, and pass the unchanged full pipeline. There is
-no claim of production capacity, authenticated-peer scheduling fairness or
-successful UDP delivery when an actual fragment is lost.
+The original failures remain historical evidence. The separate default-policy
+change now enables the executable and `DefaultConfig`, preserving
+`IPV4_REASSEMBLY=false` and zero-value library rejection. Its image fixture tests
+normal startup with the setting absent and explicit disabled startup, followed by
+the unchanged full pipeline and same-digest promotion. Arrival-order IP fairness
+remains limited: this is not a production capacity claim, authenticated-peer
+scheduling guarantee or promise of successful UDP delivery when a fragment is lost.

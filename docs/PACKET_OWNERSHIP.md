@@ -19,7 +19,7 @@ and expose retained capacity for buffer accounting.
 
 ## Transfer and retention
 
-Opt-in [IPv4 reassembly](IPV4_FRAGMENT_REASSEMBLY.md) copies fragment payloads
+[IPv4 reassembly](IPV4_FRAGMENT_REASSEMBLY.md), enabled by `DefaultConfig`, copies fragment payloads
 before `WritePacket` returns. Completion passes the same reserved allocation to
 synchronous transport dispatch; it remains charged until dispatch returns.
 Expiry detaches entries under the cache lock, delivers feedback outside that lock

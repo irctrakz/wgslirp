@@ -1,7 +1,8 @@
-# Opt-in IPv4 fragment reassembly
+# Bounded IPv4 fragment reassembly
 
-Status: implemented and accepted as an opt-in feature. Default enablement remains
-a separate deployment-evidence review.
+The executable and `socket.DefaultConfig()` enable reassembly by default.
+Explicit `IPV4_REASSEMBLY=false` and zero-value library configuration preserve
+fragment rejection. Default-policy acceptance is recorded separately below.
 All forwarding remains in userspace with the existing privilege requirements.
 
 ## Sequence
@@ -15,11 +16,11 @@ All forwarding remains in userspace with the existing privilege requirements.
   expiry and concurrent shutdown; fuzz boundaries and run race checks.
 - [x] Validate encrypted fragment traffic and floods alongside ordinary traffic
   in the actual non-root image, with resource and owned-cleanup gates.
-- [ ] Review evidence before enabling support by default.
+- [x] Review evidence before enabling support by default.
 
 ## Configuration and containment
 
-`IPV4_REASSEMBLY` defaults to false. A separate finite fragment storage ceiling
+`IPV4_REASSEMBLY` defaults to true. A separate finite fragment storage ceiling
 shares the existing aggregate socket buffer budget. Bound live datagrams,
 datagrams per source and fragment ranges per datagram. Reserve the maximum
 datagram storage and metadata before copying the first received fragment.
@@ -112,18 +113,21 @@ stopped at a new lifecycle test's unintended default ICMP socket mode on the
 unprivileged Linux runner. Its fixture now selects ordinary TCP sockets, matching
 the existing lifecycle tests; image construction and promotion were skipped.
 
-## Remaining default-enablement work
+## Default-enablement acceptance sequence
 
-The completed race/fuzz and actual-image gates establish opt-in acceptance.
-Before changing the default:
+The original race/fuzz and actual-image gates established opt-in acceptance.
 
 The [expanded profile](ENCRYPTED_FRAGMENTS.md) declares workload/resource criteria
 before acceptance and records its separate default-policy decision.
 Its finite-uplink ordinary/race profiles and full image/promotion pipeline passed
 in [run 37376714607](https://github.com/irctrakz/wgslirp/actions/runs/37376714607).
 The evidence records RSS retention, quota recovery, profiling and cleanup, plus
-the still-unresolved unpaced failure. Default-policy review remains separate,
-and the default is false.
+the original unpaced failures. Later, six repeated unpaced samples and the full
+pipeline passed at `324d2ee`, including actual-image validation/promotion; see
+[acceptance measurements](UNPACED_FRAGMENT_ACCEPTANCE.md). The default-policy
+change is separate: executable/`DefaultConfig` enablement is implemented, with
+explicit false and zero-value library rejection retained. Its final image and
+pipeline checks remain pending.
 
 - [x] Expand bounded encrypted evidence to realistic MTU-sized fragments and
   larger datagrams, mixed short/bulk/UDP traffic, loss/reordering and multiple
@@ -133,10 +137,11 @@ and the default is false.
 - [x] Reduce measured [reassembly allocation churn](REASSEMBLY_ALLOCATION_CHURN.md)
   while preserving reservation, dispatch, expiry and shutdown ownership; pass
   the full bounded pipeline and tested-image promotion.
-- [ ] Establish separate [unpaced encrypted acceptance](ENCRYPTED_FRAGMENTS.md#2-unpaced-encrypted-acceptance).
-  Finite-rate acceptance does not resolve the original unpaced failures.
-- [ ] Review deployment counters and per-source fairness, then make a separate
+- [x] Establish separate [unpaced encrypted acceptance](ENCRYPTED_FRAGMENTS.md#2-unpaced-encrypted-acceptance).
+- [x] Review deployment counters and per-source fairness, then make a separate
   default-policy change preserving an explicit `IPV4_REASSEMBLY=false` escape hatch.
+- [ ] Pass all unchanged gates for that policy commit, validate the actual image
+  with an absent setting and explicit false, then promote the same tested digest.
 
 The feature does not promise reliable forwarding of every possible fragmented
 IPv4 stream. Raising a byte budget does not resolve the fixed range/source quotas.

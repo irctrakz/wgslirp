@@ -14,7 +14,9 @@ Unknown variables are not rejected (the process inherits unrelated OS variables)
 
 - Boolean controls accept `true/false`, `1/0`, `yes/no`, `on/off`, ignoring case
   and surrounding whitespace. Empty/unknown boolean values fail startup.
-- `IPV4_REASSEMBLY` defaults to false. Its finite
+- `IPV4_REASSEMBLY` defaults to true in the executable and `socket.DefaultConfig()`.
+  Explicit `false` disables it; a zero-value library `socket.Config{}` stays
+  disabled for compatibility. Its finite
   `IPV4_FRAGMENT_BUFFER_CAP_BYTES` defaults to 4 MiB (zero also selects that
   default), sharing the aggregate socket budget. Enabled support requires at
   least 69,631 bytes. Fixed datagram/source/range limits and expiry are documented

@@ -1,7 +1,7 @@
 # Release validation and remaining gates
 
 Current development-image and encrypted-workload acceptance is recorded in
-[RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md), including opt-in IPv4 reassembly
+[RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md), including bounded IPv4 reassembly
 and both actual-image modes. The prerelease/build setup notes below are a
 historical snapshot; they do not describe the latest development image.
 

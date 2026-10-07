@@ -14,7 +14,7 @@ rejections increment the existing error metric. Input slices are not modified.
 | IPv4 lengths | Version 4, at least 20 header bytes, declared length at least the header length and no larger than supplied data. Trailing link padding is ignored. |
 | IPv4 checksum | Validate the entire declared header, including any options, before transport parsing. |
 | IPv4 options | Reject every IHL greater than 5, including NOP/EOL-only padding, source routes, timestamps, unknown and malformed options. Host socket forwarding cannot preserve their semantics. TCP options are separate and remain supported by the existing TCP implementation. |
-| Incoming fragments | Default mode rejects MF or any nonzero fragment offset. Opt-in `IPV4_REASSEMBLY=true` validates each header and performs bounded TCP/UDP/ICMP reassembly before transport dispatch. Direct bridge entry points still require complete datagrams. DF alone is permitted; the reserved flag is malformed. |
+| Incoming fragments | The executable and `socket.DefaultConfig()` validate each header and perform bounded TCP/UDP/ICMP reassembly by default. Explicit `IPV4_REASSEMBLY=false` or zero-value library configuration rejects MF or any nonzero fragment offset. Direct bridge entry points still require complete datagrams. DF alone is permitted; the reserved flag is malformed. |
 | TCP | Validate data offset and checksum over the complete TCP header/options/payload and IPv4 pseudoheader. TCP checksum omission is not supported. |
 | UDP | Length must equal the IP payload length and include at least eight header bytes. Validate nonzero checksums, including the pseudoheader. Accept zero as IPv4 checksum omission. Synthesized UDP packets encode a computed zero as `0xffff`. |
 | ICMP | Require at least eight bytes and validate the whole ICMP message checksum, without an IP pseudoheader. Raw-socket availability remains a separate capability requirement. |
@@ -38,7 +38,9 @@ options, are now rejected. There is no validation-disable configuration. Callers
 must finalize checksums before submission; this API carries no checksum-offload
 metadata. IPv4 UDP's explicit zero-checksum encoding remains accepted.
 
-Incoming fragment reassembly remains disabled by default. The opt-in feature's
+Incoming fragment reassembly is enabled by default in the executable and
+`socket.DefaultConfig()`. Explicit `IPV4_REASSEMBLY=false` and zero-value library
+configuration preserve rejection. The feature's
 [limits, overlap policy, timers and ownership](IPV4_FRAGMENT_REASSEMBLY.md) are
 independent of TCP stream reassembly. Configure guest MTU and application
 datagram sizes to avoid unnecessary fragmentation. Fragmentation of synthesized

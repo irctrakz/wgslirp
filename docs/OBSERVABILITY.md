@@ -26,7 +26,7 @@ or socket demand; investigate the cause and measure headroom before changing the
 
 ## Units and counting ownership
 
-Opt-in IPv4 reassembly adds a separate fixed `IPv4Fragments` snapshot and optional
+Enabled IPv4 reassembly adds a separate fixed `IPv4Fragments` snapshot and optional
 JSON `ipv4_fragments` object under schema version 1. Text uses `ipv4_fragments:`.
 [Its counters and gauges](IPV4_FRAGMENT_REASSEMBLY.md) distinguish received
 fragments, completions, duplicate/rejected/expired input and reserved storage.

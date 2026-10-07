@@ -141,11 +141,14 @@ jobs:
             2>&1 | tee release-evidence/runtime-test.log
           python3 - <<'PY'
           import json, os
-          report = json.load(open('release-evidence/runtime.json'))
-          assert report['passed'] is True, 'runtime fixture did not pass'
-          assert report['image'] == os.environ['WGSLIRP_RELEASE_IMAGE'], 'wrong image tested'
-          assert report['source_commit'] == os.environ['GITHUB_SHA'], 'wrong source tested'
-          assert report['initial']['Image'] == open('release-evidence/image-id.txt').read().strip(), 'wrong container image'
+          for mode, enabled, policy in [('default', True, 'unset'), ('disabled', False, 'false')]:
+              report = json.load(open(f'release-evidence/runtime-{mode}.json'))
+              assert report['passed'] is True, f'{mode} runtime fixture did not pass'
+              assert report['ipv4_reassembly'] is enabled, 'wrong reassembly mode'
+              assert report['reassembly_environment'] == policy, 'wrong startup policy tested'
+              assert report['image'] == os.environ['WGSLIRP_RELEASE_IMAGE'], 'wrong image tested'
+              assert report['source_commit'] == os.environ['GITHUB_SHA'], 'wrong source tested'
+              assert report['initial']['Image'] == open('release-evidence/image-id.txt').read().strip(), 'wrong container image'
           PY
       - name: Remove owned test resources
         if: always()

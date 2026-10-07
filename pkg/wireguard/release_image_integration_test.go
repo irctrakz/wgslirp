@@ -21,8 +21,8 @@ import (
 // This fixture controls Docker on a disposable runner; the tested application
 // receives neither the Docker socket nor privileges. Select it explicitly.
 func TestReleaseImage(t *testing.T) {
-	t.Run("default", func(t *testing.T) { testReleaseImage(t, false) })
-	t.Run("fragments", func(t *testing.T) { testReleaseImage(t, true) })
+	t.Run("default", func(t *testing.T) { testReleaseImage(t, true) })
+	t.Run("disabled", func(t *testing.T) { testReleaseImage(t, false) })
 }
 
 func testReleaseImage(t *testing.T, reassembly bool) {
@@ -35,8 +35,8 @@ func testReleaseImage(t *testing.T, reassembly bool) {
 		t.Fatal("a dedicated alphanumeric WGSLIRP_RELEASE_RUN is required")
 	}
 	name := "wgslirp-release-" + run
-	if reassembly {
-		name += "-fragments"
+	if !reassembly {
+		name += "-disabled"
 	}
 	label := "wgslirp.release.run=" + run
 	docker := func(args ...string) (string, error) {
@@ -57,14 +57,18 @@ func testReleaseImage(t *testing.T, reassembly bool) {
 		return out
 	}
 	report := map[string]any{"image": image, "source_commit": os.Getenv("WGSLIRP_RELEASE_COMMIT"), "run": run, "ipv4_reassembly": reassembly}
+	report["reassembly_environment"] = "unset"
+	if !reassembly {
+		report["reassembly_environment"] = "false"
+	}
 	t.Cleanup(func() {
 		report["passed"] = !t.Failed()
 		if dir := os.Getenv("WGSLIRP_RELEASE_REPORT"); dir != "" {
 			data, err := json.MarshalIndent(report, "", "  ")
 			if err == nil {
 				file := "runtime-default.json"
-				if reassembly {
-					file = "runtime.json"
+				if !reassembly {
+					file = "runtime-disabled.json"
 				}
 				err = os.WriteFile(filepath.Join(dir, file), data, 0600)
 			}
@@ -88,8 +92,8 @@ func testReleaseImage(t *testing.T, reassembly bool) {
 	config := strings.Join([]string{"WG_PRIVATE_KEY=" + serverPrivate, "WG_LISTEN_PORT=51820", "WG_MTU=1380",
 		"METRICS_INTERVAL=50ms", "METRICS_FORMAT=text",
 		"WG_PEER_0_PUBLIC_KEY=" + guestPublic, "WG_PEER_0_ALLOWED_IPS=10.0.0.2/32"}, "\n") + "\n"
-	if reassembly {
-		config += "IPV4_REASSEMBLY=true\n"
+	if !reassembly {
+		config += "IPV4_REASSEMBLY=false\n"
 	}
 	envFile := filepath.Join(t.TempDir(), "device.env")
 	if err := os.WriteFile(envFile, []byte(config), 0600); err != nil {
@@ -325,7 +329,7 @@ func testReleaseImage(t *testing.T, reassembly bool) {
 	}
 	report["verified_tcp_udp_rounds"] = 8
 	// Exercise the actual wireguard-go error callback with a bounded encrypted
-	// fragment burst. Default mode rejects fragments; enabled mode rejects a
+	// fragment burst. Explicit disabled mode rejects fragments; default mode rejects a
 	// conflicting overlap and disposes its assembly. Later traffic must progress.
 	for fragment := 0; fragment < 16; fragment++ {
 		p := encryptedPacket(17, uint16(udp.LocalAddr().(*net.UDPAddr).Port), 0, 0, 0, make([]byte, 8))

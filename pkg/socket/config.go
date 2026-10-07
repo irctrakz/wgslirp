@@ -82,8 +82,9 @@ type Config struct {
 	TCPPendingCapBytes    int
 	TCPRetransmitCapBytes int
 
-	// IPv4Reassembly is opt-in during feature acceptance. Zero storage cap uses
-	// a finite default, shared with SocketBufferCapBytes rather than added to it.
+	// IPv4Reassembly is enabled by DefaultConfig. An explicit false (including
+	// a zero-value Config) disables it. Zero storage cap uses a finite default,
+	// shared with SocketBufferCapBytes rather than added to it.
 	IPv4Reassembly             bool
 	IPv4FragmentBufferCapBytes int
 }
@@ -134,6 +135,7 @@ func DefaultConfig() Config {
 		SocketBufferCapBytes:       DefaultSocketBufferCap,
 		TCPPendingCapBytes:         DefaultTCPPendingCap,
 		TCPRetransmitCapBytes:      DefaultTCPRetransmitCap,
+		IPv4Reassembly:             true,
 		IPv4FragmentBufferCapBytes: DefaultIPv4FragmentBufferCap,
 	}
 }

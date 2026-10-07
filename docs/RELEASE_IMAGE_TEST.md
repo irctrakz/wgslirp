@@ -6,7 +6,28 @@ same commit. The candidate is published to GHCR, pulled by immutable digest and
 tested. Only a successful validation job (including cleanup) permits promotion
 of that digest to a unique development tag. Promotion does not rebuild the image.
 
-## Latest validation — 2026-10-05
+## Latest validated receive recovery — 2026-10-06
+
+[Run 37561741720](https://github.com/irctrakz/wgslirp/actions/runs/37561741720)
+passed all 19 applicable jobs at `324d2ee7dc4f0f9a1f7e44c52910cbbf572e3b06`,
+including six fresh unpaced samples and actual-image default-rejection/explicitly
+enabled checks. The tested and promoted image is:
+
+`ghcr.io/irctrakz/wgslirp@sha256:e9b6cd3df48e1976828f7c76a5ba78c87ad1ab947a0b6e65387018d599e610aa`
+
+Its unique tag is `dev-324d2ee7dc4f0f9a1f7e44c52910cbbf572e3b06-37561741720-1`.
+UID 100, dropped capabilities, read-only root, 1 CPU, 256 MiB/no swap and 128 PIDs
+were verified. Both modes exited zero under SIGTERM in 72/78 ms, with zero
+memory/PID events and verified owned-resource cleanup. Enabled mode recovered
+from eight assemblies / 557,048 reserved bytes after sixty-second expiry while
+222 ordinary TCP/UDP rounds progressed. Promotion retained the tested digest.
+
+That image retains the old opt-in default. The separate default-enabled source
+policy and its new absent-setting/explicit-false fixture require their own full
+pipeline and image validation; track that gate in
+[unpaced/default acceptance](UNPACED_FRAGMENT_ACCEPTANCE.md).
+
+## Historical validation — 2026-10-05
 
 [Run 37359184215](https://github.com/irctrakz/wgslirp/actions/runs/37359184215)
 passed standard build/vet/unit/race/integration/fuzz checks, all sequential
@@ -125,14 +146,17 @@ and still requires separate migration to tested-artifact promotion.
 `TestReleaseImage` (tags `integration,releaseimage,linux`) starts the exact built
 image with its normal non-root entrypoint and default IPv6 policy.
 
-It runs two sequential subtests against the same digest: default rejection and
-opt-in `IPV4_REASSEMBLY=true`. The enabled mode sends reordered fragments and
+It runs two sequential subtests against the same digest: default enabled with
+`IPV4_REASSEMBLY` absent, and explicit `IPV4_REASSEMBLY=false` rejection.
+The enabled mode sends reordered fragments and
 exact duplicates through encrypted TCP/UDP, rejects conflicting overlaps and
 fills the per-source quota with eight incomplete datagrams from a forty-ID flood.
 Ordinary TCP/UDP continues during the real sixty-second expiry; afterward
 fragmented traffic must work again. Both modes verify clean SIGTERM under traffic.
-`runtime-default.json` records default behavior; `runtime.json` records enabled
-behavior. All runtime restrictions and overall 120/180-second deadlines remain.
+`runtime-default.json` records enabled default behavior; `runtime-disabled.json`
+records explicitly disabled behavior, including the environment-policy choice.
+Historical artifacts retain their original file names. All runtime restrictions
+and overall 120/180-second deadlines remain.
 
 Each subtest uses:
 

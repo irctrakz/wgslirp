@@ -79,11 +79,13 @@ Counts describe TUN write error callbacks, not necessarily individual packets:
 wireguard-go may batch packets. WGTun attempts the remaining packets after a
 failure and returns the first error; only accepted packets/bytes are counted.
 
-Incoming IPv4 reassembly is opt-in with `IPV4_REASSEMBLY: "true"` in Compose's
-environment. It keeps finite byte/datagram/source/range limits and shares the
-socket buffer budget. Bounded image acceptance passed; default enablement remains
-a separate deployment review. For opt-in testing,
-see [configuration, ownership and default-enablement gates](IPV4_FRAGMENT_REASSEMBLY.md).
+Incoming IPv4 reassembly is enabled by default in newly built images. Set
+`IPV4_REASSEMBLY: "false"` in Compose's environment to retain fragment rejection.
+Older pinned images retain their original default. Reassembly keeps finite
+byte/datagram/source/range limits and shares the socket buffer budget. The quota
+is per source IP, not authenticated peer: four sources can occupy all 32 slots.
+Watch quota refusals and expiry recovery before increasing traffic or limits;
+see [configuration, ownership and acceptance gates](IPV4_FRAGMENT_REASSEMBLY.md).
 
 Capture is off by default. Enabling `WG_PCAP` requires an explicitly writable
 path with private permissions and an appropriate `WG_PCAP_MAX_BYTES` cap. The

@@ -293,8 +293,11 @@ func TestIPv4FragmentsPromotedStorageDisposal(t *testing.T) {
 }
 
 func TestIPv4FragmentConfigurationAndShutdown(t *testing.T) {
-	if DefaultConfig().IPv4Reassembly {
-		t.Fatal("reassembly must remain opt-in")
+	if !DefaultConfig().IPv4Reassembly {
+		t.Fatal("default configuration must enable bounded reassembly")
+	}
+	if (Config{}).Effective().IPv4Reassembly {
+		t.Fatal("zero-value library configuration must preserve explicit false")
 	}
 	base := DefaultConfig()
 	for _, value := range []string{"true", "false", "invalid"} {

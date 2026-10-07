@@ -211,7 +211,7 @@ Socket interfaces are single-use: configure the packet processor before `Start`,
 
 Packet processing and TUN (userspace)
 
-Guest IPv4 datagrams are validated before forwarding: header and total lengths must be consistent, TCP header offsets must fit, and UDP length must match the IP payload. Bytes beyond the declared IP length are ignored as padding. Incoming fragments are rejected by default; opt-in `IPV4_REASSEMBLY=true` enables [bounded TCP/UDP/ICMP reassembly](IPV4_FRAGMENT_REASSEMBLY.md). Configure guest MTU to avoid unnecessary fragmentation. Fragmentation of synthesized host-to-guest UDP replies remains supported. IPv4, TCP and ICMP checksums and nonzero UDP checksums are verified; IPv4 UDP checksum omission remains accepted. All IPv4 options are rejected. Malformed packets return `socket.ErrMalformedPacket`; checksum failures also match `socket.ErrInvalidChecksum`. Unsupported fragments/options match `socket.ErrUnsupportedFragment` / `socket.ErrUnsupportedIPOptions`, available through `errors.Is`. See [packet validation policy](PACKET_VALIDATION.md) for compatibility, offload requirements and TCP sequence-wrap limits.
+Guest IPv4 datagrams are validated before forwarding: header and total lengths must be consistent, TCP header offsets must fit, and UDP length must match the IP payload. Bytes beyond the declared IP length are ignored as padding. Incoming fragments use [bounded TCP/UDP/ICMP reassembly](IPV4_FRAGMENT_REASSEMBLY.md) by default; explicit `IPV4_REASSEMBLY=false` preserves rejection. Zero-value library configuration also stays disabled. Configure guest MTU to avoid unnecessary fragmentation. Fragmentation of synthesized host-to-guest UDP replies remains supported. IPv4, TCP and ICMP checksums and nonzero UDP checksums are verified; IPv4 UDP checksum omission remains accepted. All IPv4 options are rejected. Malformed packets return `socket.ErrMalformedPacket`; checksum failures also match `socket.ErrInvalidChecksum`. Unsupported fragments/options match `socket.ErrUnsupportedFragment` / `socket.ErrUnsupportedIPOptions`, available through `errors.Is`. See [packet validation policy](PACKET_VALIDATION.md) for compatibility, offload requirements and TCP sequence-wrap limits.
 
 - `PROCESSOR_WORKERS`: inactive in the executable; warns at startup. Library processor only: default 4, range 1-256.
 - `PROCESSOR_QUEUE_CAP`: inactive in the executable; warns at startup. Library processor only: default 1000, range 1-65536.
@@ -227,7 +227,7 @@ Resource controls are parsed once before socket startup. Invalid, empty, negativ
 | `TCP_FLOW_LIFETIME_SEC` | 120 | Idle TCP lifetime; zero uses the default. |
 | `UDP_FLOW_LIFETIME_SEC` | 60 | Idle UDP lifetime; zero uses the default. |
 | `TCP_REASSEMBLY_CAP_BYTES` | 131072 | Out-of-order storage threshold per TCP flow; zero uses the default. |
-| `IPV4_REASSEMBLY` | false | Opt-in incoming TCP/UDP/ICMP fragment reassembly; see [limits and acceptance gates](IPV4_FRAGMENT_REASSEMBLY.md). |
+| `IPV4_REASSEMBLY` | true | Bounded incoming TCP/UDP/ICMP fragment reassembly; explicit false disables it. See [limits and acceptance gates](IPV4_FRAGMENT_REASSEMBLY.md). |
 | `IPV4_FRAGMENT_BUFFER_CAP_BYTES` | 4194304 | Finite fragment storage cap sharing the socket budget; zero uses the default. Fixed datagram/source/range quotas also apply. |
 | `MAX_TCP_FLOWS` | 64 | Maximum registered TCP flows; explicit zero is unlimited. |
 | `MAX_UDP_FLOWS` | 256 | Maximum registered UDP flows; explicit zero is unlimited. |
@@ -261,7 +261,7 @@ fallback. Booleans accept true/false, 1/0, yes/no and on/off (case-insensitive).
 | `TCP_INIT_CWND_MSS` | 0 | Positive values reduce the RFC 6928 initial window to at most this many MSS; zero uses the RFC default. |
 | `TCP_SOCK_RCVBUF` | 0 | Requested host receive-buffer bytes; zero uses OS defaults. |
 | `TCP_SOCK_SNDBUF` | 0 | Requested host send-buffer bytes; zero uses OS defaults. |
-| `TCP_WS_OUT` | 7 | Advertised TCP window scale, 0-14. |
+| `TCP_WS_OUT` | 7 | Preferred TCP window scale, 0-14, negotiated only when offered. Receive space stays bounded by `TCP_REASSEMBLY_CAP_BYTES`; small caps lower the scale. See [receive recovery](TCP_RECEIVE_RECOVERY.md). |
 | `TCP_ENABLE_SACK` | false | Legacy force-SACK option; peer-offered SACK is still honored when false. |
 | `COPY_TOS` | false | Preserve guest DSCP/ECN in supported synthesized reply paths. |
 | `IP_TTL` | 64 | Synthesized reply TTL, 1-255. |

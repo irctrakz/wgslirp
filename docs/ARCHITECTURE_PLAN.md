@@ -702,7 +702,7 @@ commit only on `codex/architecture-hardening`; nothing pushed.
 
 The [implementation and acceptance checklist](IPV4_FRAGMENT_REASSEMBLY.md)
 tracks bounded reassembly, retained-buffer ownership, expiry, diagnostics,
-race/fuzz checks and actual-image acceptance. Default enablement remains a
+race/fuzz checks and actual-image acceptance. Default enablement was reserved as a
 separate decision after acceptance and deployment evidence, including per-source
 fairness and memory under fragmented production traffic. No private server tests
 or kernel routing privileges are required.
@@ -727,13 +727,38 @@ Remaining sequence and acceptance criteria are tracked in the
   unchanged regression and full bounded image gates.
   The [inline-storage implementation and before/after measurements](REASSEMBLY_ALLOCATION_CHURN.md)
   passed all 13 applicable jobs in run 37382676625, including actual-image
-  validation and same-digest development promotion. Quotas/default policy remain
-  unchanged; unpaced acceptance below is still open.
-- [ ] Establish separate, repeated unpaced ordinary/race acceptance with the
+  validation and same-digest development promotion. At that revision, quotas and
+  default policy were unchanged and unpaced acceptance was still open.
+- [x] Establish separate, repeated unpaced ordinary/race acceptance with the
   original traffic and resource/deadline limits; preserve failure evidence and
   validate/promote the same tested image artifact.
-- [ ] Review default policy separately, including per-source fairness and the
+- [x] Review default policy separately, including per-source fairness and the
   explicit `IPV4_REASSEMBLY=false` escape hatch.
+- [ ] Validate and promote the default-enabled policy's actual image with an
+  absent setting and explicit false, after all unchanged pipeline gates pass.
+
+All six unpaced samples and all 19 applicable jobs passed at `324d2ee` in
+[run 37561741720](https://github.com/irctrakz/wgslirp/actions/runs/37561741720).
+The [per-run evidence](UNPACED_FRAGMENT_ACCEPTANCE.md) retains the initial failures,
+wire regressions/negative controls, memory and cleanup measurements, and tested
+image identity. Default enablement is now implemented separately, retaining all
+quotas, expiry and zero-value library behavior; its final validation is pending.
+
+## Receive recovery follow-up discovered during unpaced acceptance
+
+Negotiated receiver SACK feedback now reports retained out-of-order TCP ranges;
+the unchanged unpaced workload determines acceptance. A separate change now
+bounds the advertised receive window by existing out-of-order storage across all
+flow packet paths. It preserves peer window-scale negotiation, unscaled SYN
+windows, sequence-wrap arithmetic and a stable receive-window right edge.
+No storage limits were increased. Wire regressions and disposable negative
+controls pass; independent-stack full CI remains the acceptance gate. See
+[receive recovery contracts](TCP_RECEIVE_RECOVERY.md).
+
+- [ ] In a separate cleanup, remove the now-unreferenced private TCP bridge
+  `buildIPv4TCPOpts` and `buildIPv4TCPWithIP` wrappers after a full call-site audit.
+  Preserve shared wire encoding, generic reset builders and independent test
+  helpers; run the normal contained checks. This is not an acceptance blocker.
 
 ## First implementation milestone
 

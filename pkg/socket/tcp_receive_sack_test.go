@@ -72,13 +72,13 @@ func TestTCPReceiveSACKBoundedAndWrapEdge(t *testing.T) {
 	b, f, c := concurrentFlow(t)
 	f.sackPermitted = true
 	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
 	for _, seq := range []uint32{200, 400, 600, 800, 1000, 202} {
 		if !b.queueFuture(f, seq, make([]byte, 4)) {
 			t.Fatal("queue refused")
 		}
 	}
 	b.sendCloseACKLocked(f)
-	f.stateMu.Unlock()
 	if got := receiveACKBlocks(t, c.snapshot()[0], 100); !reflect.DeepEqual(got, [][2]uint32{{200, 206}, {1000, 1004}, {800, 804}, {600, 604}}) {
 		t.Fatalf("bounded blocks=%v", got)
 	}

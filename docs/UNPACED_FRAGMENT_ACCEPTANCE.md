@@ -1,9 +1,11 @@
 # Unpaced encrypted IPv4 fragment acceptance
 
-Status: profile implemented; repeated acceptance and default-policy change pending.
+Status: repeated unpaced acceptance and full pipeline passed. Default enablement
+is implemented; its separate full pipeline and actual-image checks are pending.
 The original unpaced heap breach and diagnostic timeout remain recorded in
-[encrypted fragment evidence](ENCRYPTED_FRAGMENTS.md). Default reassembly remains
-disabled until this acceptance sequence passes.
+[encrypted fragment evidence](ENCRYPTED_FRAGMENTS.md). The executable and
+`DefaultConfig` now enable bounded reassembly; explicit false and zero-value
+library configuration preserve rejection.
 
 ## Declared profile and gates
 
@@ -81,16 +83,57 @@ The fixture now also records an earlier sampled resource breach if traffic fails
 so a subsequent deadline cannot hide the sampler's first error.
 
 - [x] Implement the separate zero-delay profile and repeated bounded CI gate.
-- [ ] Require all three ordinary and three race samples to pass; retain failure
+- [x] Require all three ordinary and three race samples to pass; retain failure
   evidence and investigate any failure before continuing.
-- [ ] Pass the remaining full pipeline and actual-image validation/promotion for
+- [x] Pass the remaining full pipeline and actual-image validation/promotion for
   that commit before marking unpaced acceptance complete.
-- [ ] Make a separate default-policy commit enabling `DefaultConfig` and normal
+- [x] Make a separate default-policy commit enabling `DefaultConfig` and normal
   executable startup, preserving explicit `IPV4_REASSEMBLY=false` and zero-value
   library configuration behavior.
 - [ ] Validate normal default-enabled image startup with no environment override
   and the explicitly disabled image, then pass all unchanged pipeline gates and
   promote that exact tested artifact.
+
+## Receive-recovery acceptance measurements
+
+[Run 37561741720](https://github.com/irctrakz/wgslirp/actions/runs/37561741720)
+tests source/fixture `324d2ee7dc4f0f9a1f7e44c52910cbbf572e3b06` without changing
+the declared traffic, deadlines or resource limits. All six samples and all 19
+applicable pipeline jobs passed; the table retains each sample.
+Byte columns are exact reported bytes, not simultaneous peaks or cold-baseline
+memory guarantees. Cgroup peaks include compilation and tmpfs caches.
+
+| Mode/sample | Mixed ms | Handshake p95/max µs | Heap peak | RSS peak/final | Total allocation bytes/objects | Natural GC | Cgroup peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ordinary 1 | 10471 | 4886 / 5810 | 161559008 | 157425664 / 151236608 | 374856888 / 670474 | 10 | 519192576 |
+| Ordinary 2 | 10583 | 9577 / 12190 | 180386208 | 204029952 / 146112512 | 390834496 / 670590 | 9 | 566816768 |
+| Ordinary 3 | 10425 | 5060 / 7462 | 190015264 | 201928704 / 143327232 | 391323600 / 669864 | 9 | 564617216 |
+| Race 1 | 15922 | 135897 / 194837 | 192832392 | 640626688 / 292888576 | 1849464472 / 4527065 | 30 | 1040236544 |
+| Race 2 | 13155 | 65042 / 79934 | 188634384 | 640151552 / 342589440 | 1846606064 / 4537441 | 32 | 1053614080 |
+| Race 3 | 15788 | 119471 / 152315 | 186072392 | 631230464 / 297758720 | 1847613288 / 4493562 | 30 | 1048559616 |
+
+Completed samples have exact traffic checks, zero forced GC, 66 expiries, source
+and global refusal counts 2/4, live/source peaks 32/8, 55 duplicates and zero final
+reservations. Resource readback, zero memory/PID events and owned cleanup are
+independently checked from their artifacts. All six fresh samples passed on their
+first attempts at this commit. Mixed, sustained, WAN and capacity ordinary/race
+checks also passed, including real four-minute TIME-WAIT retention and recovery.
+
+The actual image passed both the old default-rejection and explicitly enabled
+fragment modes as UID 100, with all capabilities dropped, read-only root, 1 CPU,
+256 MiB/no swap and 128 PIDs. SIGTERM exit zero took 72/78 ms. Enabled mode retained
+eight assemblies / 557,048 reserved bytes, continued 222 ordinary rounds during
+real expiry, released reservations and restored fragmented admission. All
+memory/PID events were zero and owned runtime containers, networks, builder,
+cache volume and local image were removed. The tested and promoted digest was:
+
+`ghcr.io/irctrakz/wgslirp@sha256:e9b6cd3df48e1976828f7c76a5ba78c87ad1ab947a0b6e65387018d599e610aa`
+
+Promotion retained that manifest without rebuilding under
+`dev-324d2ee7dc4f0f9a1f7e44c52910cbbf572e3b06-37561741720-1`.
+This closes unpaced acceptance for the receive-recovery commit. The separate
+default-policy commit must repeat all gates and test an absent setting plus
+explicit false on its own actual image before promotion.
 
 ## Default-policy scope
 
@@ -102,7 +145,7 @@ new-slot admission. Source/global/storage/aggregate refusal counters and expiry
 recovery remain the deployment signals; do not treat them as packet loss on the
 physical uplink or raise caps without sizing the aggregate budget.
 
-The policy decision will retain an explicit disable switch for deployments that
+The policy decision retains an explicit disable switch for deployments that
 prefer fragment rejection. It does not promise reliable UDP delivery when a
 fragment is genuinely lost, unbounded traffic capacity, or RSS return to a cold
 baseline. Private-server testing remains paused. Only the development branch is
