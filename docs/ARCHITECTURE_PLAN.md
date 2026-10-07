@@ -716,8 +716,9 @@ The declared finite-uplink profile passed ordinary/race fragment gates without
 raising memory/resource limits or forcing GC; full-chain acceptance is tracked
 in the linked evidence document and passed run 37376714607, including the actual
 image and same-digest development promotion. The reassembly allocation-churn
-follow-up is now accepted as recorded below; unpaced/high-rate acceptance remains
-open. Neither result authorizes a default-policy change by itself.
+follow-up was accepted as recorded below; at that revision unpaced/high-rate
+acceptance remained open. Neither result authorized a default-policy change by
+itself; the subsequent acceptance and separate policy decision are recorded below.
 
 Remaining sequence and acceptance criteria are tracked in the
 [allocation-churn and unpaced acceptance checklist](ENCRYPTED_FRAGMENTS.md#remaining-work-allocation-churn-and-unpaced-acceptance):
@@ -734,7 +735,7 @@ Remaining sequence and acceptance criteria are tracked in the
   validate/promote the same tested image artifact.
 - [x] Review default policy separately, including per-source fairness and the
   explicit `IPV4_REASSEMBLY=false` escape hatch.
-- [ ] Validate and promote the default-enabled policy's actual image with an
+- [x] Validate and promote the default-enabled policy's actual image with an
   absent setting and explicit false, after all unchanged pipeline gates pass.
 
 All six unpaced samples and all 19 applicable jobs passed at `324d2ee` in
@@ -742,7 +743,15 @@ All six unpaced samples and all 19 applicable jobs passed at `324d2ee` in
 The [per-run evidence](UNPACED_FRAGMENT_ACCEPTANCE.md) retains the initial failures,
 wire regressions/negative controls, memory and cleanup measurements, and tested
 image identity. Default enablement is now implemented separately, retaining all
-quotas, expiry and zero-value library behavior; its final validation is pending.
+quotas, expiry and zero-value library behavior. Final validation passed all 19
+applicable jobs at `7fc97fb` in
+[run 37571042489](https://github.com/irctrakz/wgslirp/actions/runs/37571042489),
+including six new unpaced samples, all bounded workloads, actual-image default
+enabled/explicit disabled startup and exact-tested-digest development promotion.
+The record retains subsequent memory-gate failures and bounded assembly reuse /
+ready-frame batching changes; no traffic, quota, GC or acceptance limits were
+relaxed. Ordinary heap headroom remains modest; this is bounded evidence, not an
+unrestricted capacity or per-peer fairness guarantee.
 
 ## Receive recovery follow-up discovered during unpaced acceptance
 

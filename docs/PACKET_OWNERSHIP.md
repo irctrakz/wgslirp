@@ -24,6 +24,17 @@ before `WritePacket` returns. Completion passes the same reserved allocation to
 synchronous transport dispatch; it remains charged until dispatch returns.
 Expiry detaches entries under the cache lock, delivers feedback outside that lock
 and then releases ownership. Joined shutdown releases any remaining cached entries.
+Released small assembly objects can be reused only after that boundary; full-size
+promoted payloads are never cached. The bounded idle-object cache is described in
+[allocation accounting](REASSEMBLY_ALLOCATION_CHURN.md#released-object-reuse-during-default-policy-validation).
+
+`WGTun.Read` copies queue-owned frames into WireGuard-owned buffers at the supplied
+offset. It waits for the first frame, then drains only already ready frames up to
+128, with no delay to fill a batch. Each dequeued frame releases its reservation
+after copying or local size rejection. A partial error reports the number already
+copied; Close releases every frame not dequeued. Batching does not transfer the
+queued allocation to WireGuard or change packet ordering, queue caps or byte
+metrics, which count successful enqueue rather than read completion.
 
 Successful `ProcessPacket` transfers ownership. On rejection, the caller retains
 release responsibility; sequential repeated release of built-in pooled packets

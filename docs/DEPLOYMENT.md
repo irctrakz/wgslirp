@@ -10,11 +10,12 @@ operation; the application receives no Docker socket or host network access.
 Use Linux/amd64 and a digest from a successful development CI run. Candidate tags
 are not validation evidence. See [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md)
 for the current tested source/digest and run reports. The example below uses the
-validated automatic-peer-discovery, log-aggregation and opt-in reassembly image. Arm64 runtime
+validated automatic-peer-discovery, log-aggregation and default-enabled bounded
+reassembly image. Older digest pins retain their own defaults. Arm64 runtime
 validation remains separate.
 
 ```sh
-export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:e5a746f0737361e523fd052dc8525fd5b43bc93ec599baf34fe05c93517421be
+export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:95cd84d6aa89b50efcc8a02a9fa00ea36ba81f857505773fcdcddf7790913efc
 ```
 
 ## Keep credentials in a private local file

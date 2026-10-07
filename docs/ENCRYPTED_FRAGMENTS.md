@@ -1,8 +1,9 @@
 # Bounded encrypted fragment evidence
 
 Status: finite-rate and six repeated unpaced ordinary/race samples, full pipeline
-and actual-image promotion accepted. Default enablement is implemented separately;
-its actual-image/full-pipeline validation remains pending.
+and actual-image promotion accepted. The separate default-enabled policy also
+passed all 19 applicable jobs and actual-image absent-setting/explicit-false
+checks in [run 37571042489](https://github.com/irctrakz/wgslirp/actions/runs/37571042489).
 
 ## Profile and preselected gates
 
@@ -225,6 +226,9 @@ The original failures remain historical evidence. The separate default-policy
 change now enables the executable and `DefaultConfig`, preserving
 `IPV4_REASSEMBLY=false` and zero-value library rejection. Its image fixture tests
 normal startup with the setting absent and explicit disabled startup, followed by
-the unchanged full pipeline and same-digest promotion. Arrival-order IP fairness
+the unchanged full pipeline and same-digest promotion; all passed at `7fc97fb`.
+The [acceptance record](UNPACED_FRAGMENT_ACCEPTANCE.md#default-policy-unpaced-measurements)
+retains all six fresh measurements, narrow ordinary heap headroom and the earlier
+failed policy-validation runs. Arrival-order IP fairness
 remains limited: this is not a production capacity claim, authenticated-peer
 scheduling guarantee or promise of successful UDP delivery when a fragment is lost.

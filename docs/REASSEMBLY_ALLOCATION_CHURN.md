@@ -1,8 +1,9 @@
 # IPv4 reassembly allocation churn
 
 Status: implemented and accepted through the full bounded Linux pipeline,
-actual-image validation and same-digest development promotion. Unpaced acceptance
-and default enablement remain separate work.
+actual-image validation and same-digest development promotion. The separate
+[unpaced/default-policy acceptance](UNPACED_FRAGMENT_ACCEPTANCE.md) also passed;
+the later bounded reuse follow-up and retained failures are recorded below.
 
 ## Measured problem and selected change
 
@@ -189,4 +190,13 @@ cycle. These isolate churn savings; they do not prove full-workload peak reducti
 Regression checks retain dispatch output until release, reset reused state,
 discard promoted payloads and verify an old idempotent release callback cannot
 release a new owner of the same object. Native socket checks, Linux cross-build
-and tagged vet passed; bounded Linux CI and actual-image validation remain pending.
+and tagged vet passed. The later bounded Linux CI and actual-image validation
+passed all 19 applicable jobs at `7fc97fb` in
+[run 37571042489](https://github.com/irctrakz/wgslirp/actions/runs/37571042489),
+including six fresh unpaced samples and same-digest default-enabled image promotion.
+The [full evidence](UNPACED_FRAGMENT_ACCEPTANCE.md#default-policy-unpaced-measurements)
+retains each measurement and the failed runs preceding acceptance. Reuse alone
+did not resolve the peak gate in its validation run; the accepted commit also
+includes ready-frame batching. The
+isolated allocation saving does not establish which change caused each observed
+full-workload peak difference.

@@ -1,7 +1,8 @@
 # Unpaced encrypted IPv4 fragment acceptance
 
-Status: repeated unpaced acceptance and full pipeline passed. Default enablement
-is implemented; its separate full pipeline and actual-image checks are pending.
+Status: repeated unpaced acceptance, separate default enablement, full pipeline
+and actual-image checks/promotion passed in run 37571042489. The tested source is
+`7fc97fbabec572771deba26c1fa38994baa67403`.
 The original unpaced heap breach and diagnostic timeout remain recorded in
 [encrypted fragment evidence](ENCRYPTED_FRAGMENTS.md). The executable and
 `DefaultConfig` now enable bounded reassembly; explicit false and zero-value
@@ -11,8 +12,9 @@ library configuration preserve rejection.
 
 `TestEncryptedFragmentsUnpaced` shares the entire existing fragment fixture with
 `TestEncryptedFragments`; its original-packet read delay is zero instead of one
-millisecond. It adds no replacement pacing, GC tuning, buffer pool or production
-change. Finite traffic is unchanged: 128 short requests, two bulk connections
+millisecond. The profile adds no replacement pacing or GC tuning. Subsequent
+receive-recovery, bounded object reuse and ready-frame batching changes are
+recorded below. Finite traffic is unchanged: 128 short requests, two bulk connections
 with 8 MiB in each direction, 512 UDP round trips, duplicate/reordered fragment
 bursts and two deliberately lost ranges. Large datagrams at MTUs 1200/1380,
 late duplicates, 66 natural expiries, competing sources and two quota cycles
@@ -90,7 +92,7 @@ so a subsequent deadline cannot hide the sampler's first error.
 - [x] Make a separate default-policy commit enabling `DefaultConfig` and normal
   executable startup, preserving explicit `IPV4_REASSEMBLY=false` and zero-value
   library configuration behavior.
-- [ ] Validate normal default-enabled image startup with no environment override
+- [x] Validate normal default-enabled image startup with no environment override
   and the explicitly disabled image, then pass all unchanged pipeline gates and
   promote that exact tested artifact.
 
@@ -131,11 +133,66 @@ cache volume and local image were removed. The tested and promoted digest was:
 
 Promotion retained that manifest without rebuilding under
 `dev-324d2ee7dc4f0f9a1f7e44c52910cbbf572e3b06-37561741720-1`.
-This closes unpaced acceptance for the receive-recovery commit. The separate
-default-policy commit must repeat all gates and test an absent setting plus
-explicit false on its own actual image before promotion.
+This closed unpaced acceptance for the receive-recovery commit. The subsequent
+default-policy source repeated all gates and tested an absent setting plus
+explicit false on its own actual image before promotion, as recorded below.
 
 ## Default-policy scope
+
+### Default-policy unpaced measurements
+
+[Run 37571042489](https://github.com/irctrakz/wgslirp/actions/runs/37571042489)
+tests `7fc97fbabec572771deba26c1fa38994baa67403`. All six fresh unpaced samples
+passed on their first attempts at this commit, without changing traffic, loss,
+pacing settings, GC policy, resource limits or deadlines. All 19 applicable jobs,
+including the full workload chain and actual-image/default-policy promotion,
+passed for that exact source and fixture commit.
+
+| Mode/sample | Mixed ms | Handshake p95/max µs | Heap peak | RSS peak/final | Total allocation bytes/objects | Natural GC | Cgroup peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ordinary 1 | 10532 | 6354 / 11494 | 194596680 | 189427712 / 146436096 | 352416032 / 621399 | 9 | 556457984 |
+| Ordinary 2 | 10520 | 7103 / 8272 | 196340512 | 189255680 / 176476160 | 353311088 / 620154 | 9 | 553484288 |
+| Ordinary 3 | 10485 | 5782 / 8382 | 196015120 | 189157376 / 174542848 | 352895536 / 620377 | 9 | 551870464 |
+| Race 1 | 13805 | 89877 / 128834 | 188079648 | 648097792 / 581287936 | 1615629840 / 2405416 | 25 | 1044410368 |
+| Race 2 | 13702 | 73823 / 119418 | 172231616 | 611909632 / 611696640 | 1615947408 / 2407796 | 26 | 1010888704 |
+| Race 3 | 12445 | 52447 / 97660 | 187883792 | 640270336 / 584712192 | 1614218192 / 2389825 | 26 | 1044348928 |
+
+Every sample completed the original mixed traffic and two deliberate losses,
+130 host connections / zero empty connections, all large datagrams, 66 expiries,
+source/global refusal counts 2/4, live/source peaks 32/8 and 55 duplicates.
+Forced GC and final reservations were zero, workers joined, enforced resource
+limits were verified, memory/PID events were zero and owned cleanup passed.
+Race asynchronous dial handoffs were 47/42/30, with no extra host connections.
+Ordinary heap peaks of 185.6–187.2 MiB meet the 192 MiB gate with modest headroom;
+these samples are not a general production-capacity guarantee. RSS remained above
+the cold baseline during the three-second idle window. Allocation/peak changes
+cannot be attributed solely to one optimization across different runner samples.
+
+The remaining mixed, sustained, WAN and capacity ordinary/race jobs passed with
+independently verified limits, zero memory/PID events and owned cleanup. Capacity
+retained TIME-WAIT for 240,090 / 240,129 ms and recovered admission. All sixteen
+workload artifacts passed review; their largest cgroup peak was 1,044,410,368 bytes,
+including compilation and tmpfs caches.
+
+The actual linux/amd64 image passed default-enabled startup with
+`IPV4_REASSEMBLY` absent and explicit disabled startup with `IPV4_REASSEMBLY=false`.
+Both used UID 100, all capabilities dropped, no-new-privileges, read-only root,
+1 CPU, 256 MiB/no swap and 128 PIDs. Both verified eight encrypted TCP/UDP rounds
+and exited zero under SIGTERM in 76 / 68 ms. Default-enabled mode retained eight
+assemblies / 557,048 reserved bytes under flood, expired all eight while 223
+ordinary rounds progressed, and restored fragmented admission. Reported memory
+peaks after the eight rounds were 59,838,464 / 24,662,016 bytes. Memory/PID events
+were zero; owned runtime containers, networks, builder, cache volume and local
+candidate image were removed. Source/fixture and both container image IDs match.
+
+Tested and promoted artifact:
+
+`ghcr.io/irctrakz/wgslirp@sha256:95cd84d6aa89b50efcc8a02a9fa00ea36ba81f857505773fcdcddf7790913efc`
+
+Promotion retained that exact manifest, without rebuilding, as
+`dev-7fc97fbabec572771deba26c1fa38994baa67403-37571042489-1`.
+This completes the separate default-policy acceptance gate. Older pinned images
+retain their own defaults; these measurements do not apply to them automatically.
 
 ### Default-policy validation failure and bounded reuse
 
@@ -155,8 +212,9 @@ diagnostics now retain allocation totals, natural GC count and next GC target.
 Reassembly's independently measured per-datagram allocation churn is reduced by
 reusing released small assembly objects in a cache bounded by the existing
 32-datagram limit. No packet or expiry owner relinquishes storage before release;
-large promoted payloads are never cached. The unchanged full pipeline must pass
-again before default-policy acceptance or promotion is marked complete.
+large promoted payloads are never cached. At that point, the unchanged full
+pipeline still had to pass before default-policy acceptance or promotion; the
+later accepted run is recorded above.
 
 [Run 37568200098](https://github.com/irctrakz/wgslirp/actions/runs/37568200098)
 at `05dbf322782be2168259acbfe9cf7e81d82eeac0` passed baseline and finite-rate
@@ -200,7 +258,8 @@ frame not dequeued by Read. Regression cases cover a partial ready batch, partia
 failure, the 128-frame bound and budget recovery; concurrent close coverage is
 retained. Native checks passed except the unrelated Windows POSIX PCAP-mode
 assertion (covered by Linux baseline); cross-build and tagged vet passed.
-The unchanged full bounded Linux acceptance and image gates remain pending.
+The subsequent unchanged full bounded Linux acceptance and image gates passed
+in the run recorded above.
 
 Default enablement does not increase byte/datagram/source/range quotas, extend
 expiry, add privileges or enable kernel routing. The source quota is an IP quota,

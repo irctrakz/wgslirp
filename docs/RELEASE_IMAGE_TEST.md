@@ -6,7 +6,40 @@ same commit. The candidate is published to GHCR, pulled by immutable digest and
 tested. Only a successful validation job (including cleanup) permits promotion
 of that digest to a unique development tag. Promotion does not rebuild the image.
 
-## Latest validated receive recovery — 2026-10-06
+## Latest validated default-enabled reassembly — 2026-10-07 UTC
+
+[Run 37571042489](https://github.com/irctrakz/wgslirp/actions/runs/37571042489)
+passed all 19 applicable jobs at `7fc97fbabec572771deba26c1fa38994baa67403`,
+including six fresh unpaced ordinary/race samples, every bounded encrypted
+workload and the actual-image checks. Source and fixture match that commit.
+The tested and promoted linux/amd64 image is:
+
+`ghcr.io/irctrakz/wgslirp@sha256:95cd84d6aa89b50efcc8a02a9fa00ea36ba81f857505773fcdcddf7790913efc`
+
+Unique development tag:
+
+`dev-7fc97fbabec572771deba26c1fa38994baa67403-37571042489-1`
+
+Both reports identify image ID
+`sha256:b28277e9210d9ed30490f7cee5b76752ba021f362f64702f4c9edb189d40b997`.
+`runtime-default.json` verifies reassembly enabled with the environment setting
+absent; `runtime-disabled.json` verifies explicit false. Both ran as UID 100,
+with all capabilities dropped, no-new-privileges, read-only root, 1 CPU,
+256 MiB/no swap and 128 PIDs. Each verified eight encrypted TCP/UDP rounds.
+SIGTERM under traffic exited zero in 76 / 68 ms; memory/PID events were zero.
+Default-enabled mode recovered from eight assemblies / 557,048 reserved bytes
+after real sixty-second expiry while 223 ordinary rounds progressed. Reported
+memory peaks after eight rounds were 59,838,464 / 24,662,016 bytes.
+
+Owned runtime containers, networks, builder, cache volume and local candidate
+image were removed. Promotion's manifest digest matches the tested digest
+exactly; no rebuild occurred. GHCR candidate/development artifacts are retained
+deliberately. Main/master and latest were not published and the private server
+was not used. [Full acceptance](UNPACED_FRAGMENT_ACCEPTANCE.md) preserves every
+unpaced measurement, prior failed runs and the ordinary heap headroom limitation.
+Older digest pins retain their original defaults.
+
+## Historical validated receive recovery — 2026-10-06
 
 [Run 37561741720](https://github.com/irctrakz/wgslirp/actions/runs/37561741720)
 passed all 19 applicable jobs at `324d2ee7dc4f0f9a1f7e44c52910cbbf572e3b06`,
@@ -22,10 +55,9 @@ memory/PID events and verified owned-resource cleanup. Enabled mode recovered
 from eight assemblies / 557,048 reserved bytes after sixty-second expiry while
 222 ordinary TCP/UDP rounds progressed. Promotion retained the tested digest.
 
-That image retains the old opt-in default. The separate default-enabled source
-policy and its new absent-setting/explicit-false fixture require their own full
-pipeline and image validation; track that gate in
-[unpaced/default acceptance](UNPACED_FRAGMENT_ACCEPTANCE.md).
+That image retains the old opt-in default. The later default-enabled source and
+absent-setting/explicit-false fixture passed their own full pipeline and image
+validation as recorded above.
 
 ## Historical validation — 2026-10-05
 

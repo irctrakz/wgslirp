@@ -29,6 +29,10 @@ once to full storage, with both tiers covered by that same reservation.
 Completion transfers the active storage tier to synchronous transport dispatch.
 Reservations include completed datagrams still being dispatched, and release
 exactly once after dispatch, rejection, expiry or shutdown.
+Released small assembly objects are reused within a fixed 32-object ceiling,
+including live and idle objects. Promoted payload allocations are dropped on
+release; close clears idle objects. Idle metadata retention is bounded separately
+from live reservations; see [allocation accounting](REASSEMBLY_ALLOCATION_CHURN.md#released-object-reuse-during-default-policy-validation).
 
 Keep stateless parsing in `internal/packetwire` and lifetime/state in `pkg/socket`.
 Reassembly is independent of TCP stream reassembly and of overlay peer routing.
@@ -126,8 +130,10 @@ the original unpaced failures. Later, six repeated unpaced samples and the full
 pipeline passed at `324d2ee`, including actual-image validation/promotion; see
 [acceptance measurements](UNPACED_FRAGMENT_ACCEPTANCE.md). The default-policy
 change is separate: executable/`DefaultConfig` enablement is implemented, with
-explicit false and zero-value library rejection retained. Its final image and
-pipeline checks remain pending.
+explicit false and zero-value library rejection retained. Its final image and all
+19 applicable pipeline jobs passed at `7fc97fb` in
+[run 37571042489](https://github.com/irctrakz/wgslirp/actions/runs/37571042489),
+including absent-setting/explicit-false startup and same-digest development promotion.
 
 - [x] Expand bounded encrypted evidence to realistic MTU-sized fragments and
   larger datagrams, mixed short/bulk/UDP traffic, loss/reordering and multiple
@@ -140,7 +146,7 @@ pipeline checks remain pending.
 - [x] Establish separate [unpaced encrypted acceptance](ENCRYPTED_FRAGMENTS.md#2-unpaced-encrypted-acceptance).
 - [x] Review deployment counters and per-source fairness, then make a separate
   default-policy change preserving an explicit `IPV4_REASSEMBLY=false` escape hatch.
-- [ ] Pass all unchanged gates for that policy commit, validate the actual image
+- [x] Pass all unchanged gates for that policy commit, validate the actual image
   with an absent setting and explicit false, then promote the same tested digest.
 
 The feature does not promise reliable forwarding of every possible fragmented
