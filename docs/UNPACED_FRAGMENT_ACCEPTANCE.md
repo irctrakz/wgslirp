@@ -179,6 +179,29 @@ All traffic, per-original pacing settings, loss injection, memory/resource gates
 GC policy and deadlines remain unchanged. Acceptance still requires six fresh
 unpaced samples, the full workload chain and actual-image validation/promotion.
 
+[Run 37569525253](https://github.com/irctrakz/wgslirp/actions/runs/37569525253)
+at `23f27f7b63f3c3809b94ce8c396fb24106383bbb` passed baseline, finite-rate
+ordinary/race and the first unpaced ordinary sample (heap peak 194,514,424 bytes).
+Unpaced sample two completed mixed traffic in 10,556 ms but failed during the
+separate datagram-device setup: heap 202,676,736, RSS 182,738,944, next-GC target
+204,394,056 bytes, seven natural collections and no forced GC. Message buffers
+again dominated the sampled in-use profile (87.23 MiB / 85.1%). Events were zero
+and owned cleanup passed; remaining gates and promotion were skipped/cancelled.
+Batching the guest fragment ranges alone did not establish the six-sample gate.
+
+Production `WGTun.Read` now copies up to 128 already queued frames into the
+buffers supplied by WireGuard. Its first receive can block; subsequent receives
+do not wait to fill a batch. This uses the existing standard bind batch size and
+avoids handing every queued frame to upstream encryption as a separate container.
+It adds no pacing, queue slots, goroutines, privileges or memory quota. Each
+queue reservation is released only after copying, or when rejecting its too-small
+destination; partial errors return the number already copied. Close owns every
+frame not dequeued by Read. Regression cases cover a partial ready batch, partial
+failure, the 128-frame bound and budget recovery; concurrent close coverage is
+retained. Native checks passed except the unrelated Windows POSIX PCAP-mode
+assertion (covered by Linux baseline); cross-build and tagged vet passed.
+The unchanged full bounded Linux acceptance and image gates remain pending.
+
 Default enablement does not increase byte/datagram/source/range quotas, extend
 expiry, add privileges or enable kernel routing. The source quota is an IP quota,
 not authenticated-peer fairness: four sources can occupy all 32 assembly slots.

@@ -206,6 +206,48 @@ func TestProcessorAndTUNShareSocketQueueBudget(t *testing.T) {
 	assertAllQueueBudgetAvailable(t, s, 300)
 }
 
+func TestTUNBatchReadOwnershipAndPartialFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		packets, buffers, read int
+		undersized             bool
+	}{{"partial-ready", 3, 4, 3, false}, {"partial-error", 3, 4, 1, true}, {"batch-cap", 129, 130, 128, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := socket.NewSocketInterface(socket.Config{SocketBufferCapBytes: 65536})
+			tun := NewWGTun("batch", 1380, s)
+			defer tun.Close()
+			for i := 1; i <= tc.packets; i++ {
+				if err := tun.InjectToPeer(bytes.Repeat([]byte{byte(i)}, 20)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			buffers := make([][]byte, tc.buffers)
+			for i := range buffers {
+				buffers[i] = make([]byte, 36)
+			}
+			if tc.undersized {
+				buffers[1] = make([]byte, 17)
+			}
+			sizes := make([]int, len(buffers))
+			n, err := tun.Read(buffers, sizes, 16)
+			if tc.undersized {
+				if n != 1 || err == nil || len(tun.outCh) != 1 {
+					t.Fatal("partial failure lost ownership/count", n, err, len(tun.outCh))
+				}
+			} else if n != tc.read || err != nil || len(tun.outCh) != tc.packets-n {
+				t.Fatal("ready batch waited/lost count", n, err)
+			}
+			for i := 0; i < n; i++ {
+				if sizes[i] != 20 || !bytes.Equal(buffers[i][16:], bytes.Repeat([]byte{byte(i + 1)}, 20)) {
+					t.Fatal("copied packet/offset mismatch")
+				}
+			}
+			_ = tun.Close()
+			assertAllQueueBudgetAvailable(t, s, 65536)
+		})
+	}
+}
+
 func TestTUNConcurrentReadInjectAndCloseReleasesBudget(t *testing.T) {
 	s := socket.NewSocketInterface(socket.Config{SocketBufferCapBytes: 4096})
 	tun := NewWGTun("concurrent", 1380, s)
