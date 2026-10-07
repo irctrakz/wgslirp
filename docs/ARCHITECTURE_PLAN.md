@@ -780,11 +780,18 @@ controls pass; independent-stack full CI remains the acceptance gate. See
   favor throughput and latency, accepting higher memory use for repeatable gains;
   CPU consumption supports the decision rather than independently vetoing it.
   No runtime policy, image, main branch or private server was changed.
-- [ ] Extend paired pooling evidence to sustained throughput and short-request
+- [x] Extend paired pooling evidence to sustained throughput and short-request
   tail latency under concurrent short/bulk/UDP load, using equal finite budgets.
   Record larger-budget experiments separately; even marginal repeatable performance
   gains can justify higher memory use. Review the default after those measurements,
   with actual-image acceptance required for a runtime policy change.
+  [Sustained results](POOLING_SUSTAINED_ACCEPTANCE.md): runs 37693103205 and
+  37694066819 passed at identical source/bounds. Twelve pairs showed median
+  throughput +0.78%, short completion p95 -1.53%, p99 +0.38%. Memory is not a
+  blocker; the small throughput tendency and mixed tails support opt-in trials
+  without establishing a consistent overall advantage. Default remains unchanged.
+- [ ] If selecting default-on, validate/promote that separate candidate's actual
+  release image under existing deployment, ownership and shutdown gates.
 - [ ] Optional future reconsideration: only if deployment profiling supports it,
   evaluate a separate policy avoiding tiny control-packet pooling, then repeat
   paired evidence and actual-image acceptance. This is not a current blocker.

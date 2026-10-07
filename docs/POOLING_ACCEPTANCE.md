@@ -80,6 +80,12 @@ performance measurement; additional CPU or memory use alone would not rule out
 default enablement. The current results do not establish that pooling is slower
 for every workload or that the opt-in setting is unsafe.
 
+The subsequent [sustained comparison and independent confirmation](POOLING_SUSTAINED_ACCEPTANCE.md)
+completed twelve pairs: median paired throughput +0.78%, short completion p95
+-1.53%, p99 +0.38%. Memory is not a blocker under the updated priorities, but the
+confirmation did not reproduce the initial tail-latency benefit. Default remains
+unchanged; any default-on candidate needs separate actual-image acceptance.
+
 The first attempt passed in [run 37689880492](https://github.com/irctrakz/wgslirp/actions/runs/37689880492)
 at source `43863889d2fb781a00955bc6f3a1cedeabcfa11b`, using Go 1.23.12 linux/amd64
 and toolchain digest `sha256:167053a2bb901972bf2c1611f8f52c44d5fe7e762e5cab213708d82c421614db`.
@@ -177,15 +183,18 @@ have independent entry limits; no encrypted workload refusal was observed here.
 
 ## Next performance evidence
 
-- [ ] Compare sustained encrypted bulk throughput and short-request completion
+- [x] Compare sustained encrypted bulk throughput and short-request completion
   latency under concurrent short/bulk/UDP load, with equal finite budgets and
   enough transfer volume to exercise sustained load rather than brief bursts.
   Separate deliberately paced traffic from throughput measurements, repeat pairs,
   and measure tail latency under load. Attribute router versus fixture CPU where
   practical. If testing a larger memory budget, run both policies under that same
   budget and preserve the original measurements as a separate profile.
-- [ ] Review a default change using the performance-first priorities above;
-  require actual release-image acceptance if changing the runtime default.
+- [x] Review the measurements using the performance-first priorities above:
+  a modest throughput tendency supports opt-in trials, while tail-latency results
+  remain mixed. See the linked sustained evidence; the default is unchanged.
+- [ ] If selecting default-on, require actual release-image acceptance of that
+  separate candidate before promotion.
 
 ## Sustained comparison protocol (declared before its first run)
 
@@ -224,7 +233,8 @@ unit/race and integration/race remain required. Record resource events and verif
 cleanup even if the comparison fails. A runtime default change still needs a
 separate actual-image acceptance run.
 
-Results pending. Original basic-study results above remain a separate profile.
+Both sustained runs passed; [results and remaining decisions](POOLING_SUSTAINED_ACCEPTANCE.md)
+retain all pairs. Original basic-study results above remain a separate profile.
 
 ## Optional implementation follow-up
 
