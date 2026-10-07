@@ -276,6 +276,9 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		if !bytes.Equal(got, payload) {
 			return fmt.Errorf("TCP byte mismatch: got=%d want=%d", len(got), len(payload))
 		}
+		if len(payload) >= 4*1024*1024 {
+			t.Logf("MIXED_BULK bytes_each_direction=%d elapsed_us=%d", len(payload), time.Since(started).Microseconds())
+		}
 		return nil
 	}
 	start := make(chan struct{})
@@ -366,6 +369,7 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		t.Fatal(err)
 	}
 	m := s.DetailedMetrics()
+	t.Logf("MIXED_ADMISSION counters=%v", m.Admission)
 	if m.TCP.ActiveFlows != 0 || m.UDP.ActiveFlows != 0 || m.TCPExt["socket_buffer_bytes"] != 0 || m.TCPExt["dial_reserved"] != 0 || m.TCP.DeliveryRefused != 0 {
 		t.Fatalf("unclean metrics: %+v", m)
 	}

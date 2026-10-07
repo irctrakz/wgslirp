@@ -2,6 +2,11 @@ name: Docker build & push to GHCR
 
 on:
   workflow_dispatch:
+    inputs:
+      pooling-study:
+        description: Run only the bounded pooling comparison (no image publishing)
+        type: boolean
+        default: false
   push:
     branches: [master, codex/architecture-hardening]
   pull_request:                 # PRs = build-only
@@ -10,7 +15,12 @@ permissions:
   contents: read
 
 jobs:
+  pooling-study:
+    if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && github.ref == 'refs/heads/codex/architecture-hardening'
+    uses: ./.github/workflows/pooling.yml
+
   test:
+    if: github.event_name != 'workflow_dispatch' || !inputs.pooling-study
     uses: ./.github/workflows/go.yml
 
   encrypted-capacity:

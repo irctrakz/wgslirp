@@ -1,0 +1,76 @@
+name: Bounded paired pooling evidence
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CONTAINER: wgslirp-pooling-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Compare fresh processes on the same bounded runner
+        timeout-minutes: 17
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/source-commit.txt
+          docker pull golang:1.23.12-bookworm
+          docker image inspect golang:1.23.12-bookworm --format '{{json .RepoDigests}}' > evidence/toolchain-image.json
+          docker create --name "$CONTAINER" --user "$(id -u):$(id -g)" \
+            --cpus=1 --memory=2g --memory-swap=2g --pids-limit=128 \
+            --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /work:rw,exec,nosuid,nodev,size=768m,mode=1777 \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/evidence,dst=/evidence" \
+            --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
+            -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
+            -e GOCACHE=/work/cache -e GOPATH=/work/gopath -e GOTMPDIR=/work/build \
+            golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 900s bash /src/.github/scripts/pooling-evidence.sh
+          docker inspect "$CONTAINER" --format '{{json .HostConfig}}' > evidence/limits.json
+          python3 - <<'PY'
+          import json
+          c = json.load(open('evidence/limits.json'))
+          assert c['Memory'] == c['MemorySwap'] == 2147483648
+          assert c['NanoCpus'] == 1000000000 and c['PidsLimit'] == 128
+          assert c['ReadonlyRootfs'] and c['CapDrop'] == ['ALL']
+          assert 'no-new-privileges' in c['SecurityOpt']
+          PY
+          timeout --signal=TERM --kill-after=15s 920s docker start --attach "$CONTAINER" 2>&1 | tee evidence/container.log
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER")" = 0
+          test "$(docker inspect --format '{{.State.OOMKilled}}' "$CONTAINER")" = false
+          grep -q 'POOLING_STUDY_ACCEPTED' evidence/container.log
+      - name: Remove owned container and toolchain image
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+            docker logs "$CONTAINER" > evidence/container.log 2>&1
+            docker inspect "$CONTAINER" --format '{{json .State}}' > evidence/final-state.json
+            docker rm -f "$CONTAINER"
+          fi
+          test -z "$(docker ps -aq --filter "name=^/$CONTAINER$")"
+          if docker image inspect golang:1.23.12-bookworm >/dev/null 2>&1; then
+            image_id=$(docker image inspect golang:1.23.12-bookworm --format '{{.Id}}')
+            docker image rm golang:1.23.12-bookworm
+            if docker image inspect "$image_id" >/dev/null 2>&1; then exit 1; fi
+          fi
+          echo 'Owned container, tmpfs and toolchain image removed; no owned network or persistent volume created.' > evidence/cleanup.txt
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pooling-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          retention-days: 14
+          if-no-files-found: error
