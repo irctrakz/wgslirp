@@ -50,11 +50,15 @@ type fragmentDatagram struct {
 // The mutex protects cache membership, live dispatch reservations and counters.
 // It may acquire the aggregate budget lock, never a flow lock or callback.
 type ipv4Fragments struct {
-	mu                                                     sync.Mutex
-	budget                                                 *resourceBudget
-	limit, used, live                                      int
-	entries                                                map[fragmentKey]*fragmentDatagram
-	sources                                                map[[4]byte]int
+	mu                sync.Mutex
+	budget            *resourceBudget
+	limit, used, live int
+	entries           map[fragmentKey]*fragmentDatagram
+	sources           map[[4]byte]int
+	// Reuse only released inline assemblies, never promoted payload storage.
+	// Cached plus live objects cannot exceed the 32-datagram admission cap.
+	free                                                   [ipv4FragmentDatagrams]*fragmentDatagram
+	freeCount                                              int
 	received, completed, duplicates, rejected, expired     uint64
 	sourceLimit, globalLimit, storageLimit, aggregateLimit uint64
 	livePeak, sourcePeak                                   uint64
@@ -131,7 +135,14 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 			r.rejected++
 			return nil, nil, ErrBufferLimit
 		}
-		d = &fragmentDatagram{key: k, end: -1, dscp: p[1] & 0xfc, deadline: now.Add(ipv4FragmentLifetime)}
+		if r.freeCount > 0 {
+			r.freeCount--
+			d = r.free[r.freeCount]
+			r.free[r.freeCount] = nil
+		} else {
+			d = new(fragmentDatagram)
+		}
+		*d = fragmentDatagram{key: k, end: -1, dscp: p[1] & 0xfc, deadline: now.Add(ipv4FragmentLifetime)}
 		d.data = d.inline[:]
 		r.entries[k] = d
 		r.live++
@@ -222,6 +233,12 @@ func (r *ipv4Fragments) releaseLocked(d *fragmentDatagram) {
 		delete(r.sources, d.key.src)
 	}
 	r.budget.release(ipv4FragmentCharge)
+	// Completion and expiry callers retain ownership until this point. Drop
+	// any full-size payload before caching the small object; output must not
+	// be used after release. The admission cap also bounds idle cache storage.
+	d.data = nil
+	r.free[r.freeCount] = d
+	r.freeCount++
 }
 
 // expire detaches ownership under the cache lock; delivery/release occurs outside
@@ -253,6 +270,8 @@ func (r *ipv4Fragments) close() {
 		delete(r.entries, k)
 		r.releaseLocked(d)
 	}
+	clear(r.free[:])
+	r.freeCount = 0
 }
 
 func (r *ipv4Fragments) snapshot() map[string]uint64 {

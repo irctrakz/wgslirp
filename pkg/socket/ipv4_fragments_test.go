@@ -36,6 +36,58 @@ func fragmentChecksum(p []byte) {
 	binary.BigEndian.PutUint16(p[10:12], packetwire.Checksum(p[:20]))
 }
 
+func TestIPv4FragmentsReuseAfterRelease(t *testing.T) {
+	budget := &resourceBudget{limit: 3 * ipv4FragmentCharge}
+	r := newIPv4Fragments(budget, budget.limit)
+	defer r.close()
+	now := time.Now()
+	complete := func(id uint16, body []byte) ([]byte, func()) {
+		t.Helper()
+		if _, _, err := r.add(fragmentFixture(17, id, 0, true, body[:8]), now); err != nil {
+			t.Fatal(err)
+		}
+		out, release, err := r.add(fragmentFixture(17, id, 8, false, body[8:]), now)
+		if err != nil || !bytes.Equal(out[20:], body) {
+			t.Fatal("assembly", err)
+		}
+		return out, release
+	}
+	first, releaseFirst := complete(1, []byte("first payload!!!"))
+	_, releaseSecond := complete(2, []byte("second payload!!"))
+	if !bytes.Equal(first[20:], []byte("first payload!!!")) || r.freeCount != 0 {
+		t.Fatal("dispatch storage reused before release")
+	}
+	releaseSecond()
+	if r.freeCount != 1 || r.free[0].data != nil {
+		t.Fatal("released storage not cached safely")
+	}
+	reused := r.free[0]
+	if _, _, err := r.add(fragmentFixture(17, 3, 0, true, []byte("abcdefgh")), now); err != nil {
+		t.Fatal(err)
+	}
+	key := reused.key
+	if r.entries[key] != reused || r.freeCount != 0 || reused.count != 1 || reused.end != -1 {
+		t.Fatal("assembly object not reset/reused")
+	}
+	releaseSecond() // An old idempotent callback cannot release the new owner.
+	assertBudget(t, budget, 2*ipv4FragmentCharge)
+	if !bytes.Equal(first[20:], []byte("first payload!!!")) {
+		t.Fatal("another dispatch changed retained output")
+	}
+	releaseFirst()
+	r.close()
+	assertBudget(t, budget, 0)
+	if r.freeCount != 0 {
+		t.Fatal("close retained idle cache")
+	}
+	// A promoted payload must never be kept in the idle cache.
+	_, releaseLarge := complete(4, make([]byte, 4096))
+	releaseLarge()
+	if r.freeCount != 1 || r.free[0].data != nil {
+		t.Fatal("idle cache retained promoted payload")
+	}
+}
+
 func TestIPv4FragmentsOwnershipOrderingAndDuplicate(t *testing.T) {
 	for _, proto := range []byte{1, 6, 17} {
 		t.Run(string(rune('A'+proto)), func(t *testing.T) {

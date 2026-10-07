@@ -137,6 +137,27 @@ explicit false on its own actual image before promotion.
 
 ## Default-policy scope
 
+### Default-policy validation failure and bounded reuse
+
+[Run 37566970665](https://github.com/irctrakz/wgslirp/actions/runs/37566970665)
+at `259cc5f389d43fcb015e2310e06117f2b62be16f` passed baseline and both finite-rate
+checks, then failed the first unpaced ordinary sample's unchanged 192 MiB heap
+gate: 209,461,408 heap bytes, 192,806,912 RSS bytes. Mixed traffic completed in
+10,502 ms with 130 accepted connections, no empty connections and no admission
+refusals. The remaining repetitions were cancelled; no image was promoted.
+Cgroup peak was 559,501,312 bytes, all memory/PID events were zero and owned
+cleanup passed. This failure remains evidence rather than being retried away.
+
+The sampled heap profile attributes most reported storage to upstream WireGuard
+message buffers, but its 56.88 MiB in-use total lags the failing runtime sample;
+it cannot establish the full live/garbage breakdown at that instant. Failure
+diagnostics now retain allocation totals, natural GC count and next GC target.
+Reassembly's independently measured per-datagram allocation churn is reduced by
+reusing released small assembly objects in a cache bounded by the existing
+32-datagram limit. No packet or expiry owner relinquishes storage before release;
+large promoted payloads are never cached. The unchanged full pipeline must pass
+again before default-policy acceptance or promotion is marked complete.
+
 Default enablement does not increase byte/datagram/source/range quotas, extend
 expiry, add privileges or enable kernel routing. The source quota is an IP quota,
 not authenticated-peer fairness: four sources can occupy all 32 assembly slots.

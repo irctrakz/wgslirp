@@ -167,3 +167,26 @@ main/master or latest publication occurred.
 
 See the [remaining acceptance sequence](ENCRYPTED_FRAGMENTS.md#remaining-work-allocation-churn-and-unpaced-acceptance).
 This change does not establish unpaced acceptance or authorize default enablement.
+
+## Released-object reuse during default-policy validation
+
+The later default-policy run hit the unchanged unpaced heap gate; see
+[failure evidence](UNPACED_FRAGMENT_ACCEPTANCE.md#default-policy-validation-failure-and-bounded-reuse).
+The reassembler now reuses small assembly objects only after dispatch/expiry
+release. An explicit cache under the existing mutex holds at most 32 objects;
+cached plus live objects remain bounded by the admission limit. Its maximum idle
+object storage on amd64 is 93,184 bytes, plus the fixed pointer array and allocator
+overhead. Idle objects have no live buffer reservation; this bounded metadata
+retention is separate from reserved packet bytes. Full-size promoted payloads
+are dropped on release, never cached, and close clears the idle cache.
+
+Native Windows/amd64 isolated benchmarks (`-benchtime=100ms`, no forced GC)
+measure small/MTU completion at 48 B / 2 allocations versus 3,120 B / 3 previously;
+large/maximum completion at 65,584 B / 3 versus 68,656 B / 4; and expiry at
+8 B / 1 versus 3,080 B / 2. Quota-saturation inline cycles report about 527 B /
+6 allocations amortized, retaining the same 93,184 owned assembly bytes per
+cycle. These isolate churn savings; they do not prove full-workload peak reduction.
+Regression checks retain dispatch output until release, reset reused state,
+discard promoted payloads and verify an old idempotent release callback cannot
+release a new owner of the same object. Native socket checks, Linux cross-build
+and tagged vet passed; bounded Linux CI and actual-image validation remain pending.

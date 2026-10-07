@@ -119,7 +119,7 @@ func (m *fragmentResourceSamples) sample(s *socket.SocketInterface) error {
 		heapCap, rssCap = 256<<20, 768<<20
 	}
 	if current.HeapAlloc > heapCap || rss > rssCap || runtime.NumGoroutine() > 512 || current.NumForcedGC != m.initial.NumForcedGC {
-		m.err = fmt.Errorf("fragment resource bound: heap=%d rss=%d workers=%d forced_gc=%d", current.HeapAlloc, rss, runtime.NumGoroutine(), current.NumForcedGC-m.initial.NumForcedGC)
+		m.err = fmt.Errorf("fragment resource bound: heap=%d rss=%d workers=%d forced_gc=%d next_gc=%d natural_gc=%d allocation_bytes=%d allocation_objects=%d", current.HeapAlloc, rss, runtime.NumGoroutine(), current.NumForcedGC-m.initial.NumForcedGC, current.NextGC, current.NumGC-m.initial.NumGC, current.TotalAlloc-m.initial.TotalAlloc, current.Mallocs-m.initial.Mallocs)
 		if dir := os.Getenv("WGSLIRP_FRAGMENT_PROFILE_DIR"); dir != "" {
 			// Capture the violating sample without forcing GC or changing limits.
 			if err := writeFragmentHeapProfile(dir); err != nil {
