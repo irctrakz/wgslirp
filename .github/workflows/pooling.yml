@@ -2,6 +2,10 @@ name: Bounded paired pooling evidence
 
 on:
   workflow_call:
+    inputs:
+      profile:
+        type: string
+        default: basic
 
 permissions:
   contents: read
@@ -12,6 +16,7 @@ jobs:
     timeout-minutes: 20
     env:
       CONTAINER: wgslirp-pooling-${{ github.run_id }}-${{ github.run_attempt }}
+      STUDY_PROFILE: ${{ inputs.profile }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -33,7 +38,7 @@ jobs:
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/evidence,dst=/evidence" \
             --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
-            -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
+            -e STUDY_PROFILE -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
             -e GOCACHE=/work/cache -e GOPATH=/work/gopath -e GOTMPDIR=/work/build \
             golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 900s bash /src/.github/scripts/pooling-evidence.sh
           docker inspect "$CONTAINER" --format '{{json .HostConfig}}' > evidence/limits.json

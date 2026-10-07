@@ -11,6 +11,23 @@ Any payload, race, ownership, reservation recovery or resource-gate failure bloc
 default promotion. Actual release-image validation remains necessary for a default
 change; this study makes no default change and publishes no image.
 
+## Updated priorities after review (2026-10-07)
+
+The deployment owner prioritizes throughput and performance over minimizing
+memory. Evaluate useful payload throughput, completion time and tail latency
+first. Small repeatable improvements count; there is no required minimum gain.
+Higher memory use or buffer budgets are acceptable when they buy performance.
+CPU consumption is supporting evidence, not an automatic veto when useful
+throughput or latency improves. Lower allocations or memory alone do not justify
+a default change.
+
+Memory remains a finite resource constraint: compare policies with equal,
+explicitly declared budgets and retain ownership, recovery, containment and
+cleanup gates. Increasing a budget for a new experiment must be recorded as a
+different profile, rather than retroactively changing a failed acceptance gate.
+The original decision rule above preserves the first study's predeclared method;
+these updated priorities govern the next policy review.
+
 ## Method
 
 The existing Docker workflow has an explicit `pooling-study` dispatch input on
@@ -55,12 +72,12 @@ the full class capacity plus the existing 128-byte entry allowance.
 
 ## Results
 
-**Decision: retain default off; keep `POOLING=1` as an explicit option.** Pooling
-reduces some allocations and sampled memory, but the independent encrypted mixed
-profile shows no repeatable bulk speedup and uses more CPU in all three pairs.
-The larger-buffer microbenchmark benefit does not carry through to encrypted
-traffic sufficiently to justify changing the general deployment default.
-This is a policy decision from bounded evidence, not proof that pooling is slower
+**Current policy: retain default off provisionally; keep `POOLING=1` as an explicit
+option.** The first study does not establish a bulk throughput improvement, but
+handshake p95 improved in all three pairs and larger-buffer allocation was faster
+in isolation. Under the updated priorities, those latency results warrant further
+performance measurement; additional CPU or memory use alone would not rule out
+default enablement. The current results do not establish that pooling is slower
 for every workload or that the opt-in setting is unsafe.
 
 The first attempt passed in [run 37689880492](https://github.com/irctrakz/wgslirp/actions/runs/37689880492)
@@ -158,7 +175,58 @@ have independent entry limits; no encrypted workload refusal was observed here.
 - No pooling default, routing behavior or resource limit changed. No release
   image was published by this evidence workflow, and main was untouched.
 
-## Optional future reconsideration
+## Next performance evidence
+
+- [ ] Compare sustained encrypted bulk throughput and short-request completion
+  latency under concurrent short/bulk/UDP load, with equal finite budgets and
+  enough transfer volume to exercise sustained load rather than brief bursts.
+  Separate deliberately paced traffic from throughput measurements, repeat pairs,
+  and measure tail latency under load. Attribute router versus fixture CPU where
+  practical. If testing a larger memory budget, run both policies under that same
+  budget and preserve the original measurements as a separate profile.
+- [ ] Review a default change using the performance-first priorities above;
+  require actual release-image acceptance if changing the runtime default.
+
+## Sustained comparison protocol (declared before its first run)
+
+The `pooling-profile=sustained` dispatch selection runs six counterbalanced
+off/on pairs on one runner/container with the original CPU, memory, Go memory,
+socket buffer, PID, tmpfs, logging and deadline limits. Memory budgets remain
+equal, not minimized; no production limits or default policy change.
+
+Two independent-guest TCP echo streams each deliver 256 MiB in each direction
+(512 MiB upload plus 512 MiB download per process). Generation and verification
+use fixed 64 KiB blocks rather than accumulating a bulk payload in memory.
+Four short-request workers (1 KiB requests, 25 ms between completions) and one
+UDP worker (1 KiB datagrams, 5 ms between completions) continue until bulk ends.
+These are closed-loop background clients, not a fixed offered request rate.
+Their counts can differ with bulk duration; record the counts alongside latency.
+
+Measure aggregate verified bulk MiB/s **per direction** using the interval from
+the shared start barrier until both bulk streams complete. Compare paired short
+request completion p50/p95/p99/max (including dialing, upload, echoed response
+and EOF) and UDP round-trip p95/p99. Require at least 64 short/UDP completions and
+short-request starts covering at least 80% of the bulk interval, exact payloads,
+no admission refusal, returned reservations and joined workers. Client iteration
+ceilings and a 90-second traffic deadline bound failure paths.
+
+Keep allocation/GC/heap/RSS and process CPU as supporting evidence. Capture CPU
+profiles for every ordinary run, with top-function reports; fixture and router
+remain in one process, so shared crypto/runtime costs cannot be wholly separated.
+Profiling overhead applies equally to both modes. Compare repeatability across
+six pairs rather than treating one marginal positive result as sufficient.
+
+Race correctness runs use 32 MiB per bulk connection/direction, with the same
+concurrency and budgets; exclude them from performance comparisons. Also run the
+legacy mixed acceptance in both modes, ordinary/race, and explicit verifier
+controls rejecting corrupted, truncated and extra bytes. Baseline build/vet,
+unit/race and integration/race remain required. Record resource events and verify
+cleanup even if the comparison fails. A runtime default change still needs a
+separate actual-image acceptance run.
+
+Results pending. Original basic-study results above remain a separate profile.
+
+## Optional implementation follow-up
 
 Before revisiting the default, profile a demonstrated deployment bottleneck or
 evaluate a separately reviewed policy that avoids pooling tiny control packets.

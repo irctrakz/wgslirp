@@ -7,6 +7,11 @@ on:
         description: Run only the bounded pooling comparison (no image publishing)
         type: boolean
         default: false
+      pooling-profile:
+        description: Pooling comparison profile
+        type: choice
+        options: [basic, sustained]
+        default: basic
   push:
     branches: [master, codex/architecture-hardening]
   pull_request:                 # PRs = build-only
@@ -18,6 +23,8 @@ jobs:
   pooling-study:
     if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/pooling.yml
+    with:
+      profile: ${{ inputs.pooling-profile }}
 
   test:
     if: github.event_name != 'workflow_dispatch' || !inputs.pooling-study

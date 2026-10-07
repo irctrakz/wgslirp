@@ -31,8 +31,10 @@ func TestPoolingEvidence(t *testing.T) {
 		run = TestEncryptedMixed
 	case "wan":
 		run = TestEncryptedWANRecovery
+	case "sustained-mixed":
+		run = testEncryptedPoolingSustained
 	default:
-		t.Fatal("POOLING_WORKLOAD must be mixed or wan")
+		t.Fatal("POOLING_WORKLOAD must be mixed, wan or sustained-mixed")
 	}
 	readRSS := func() uint64 {
 		data, err := os.ReadFile("/proc/self/statm")
@@ -85,5 +87,29 @@ func TestPoolingEvidence(t *testing.T) {
 	t.Logf("POOLING_RESULT enabled=%s workload=%s elapsed_ms=%d cpu_us=%d allocated_bytes=%d allocations=%d gc_cycles=%d gc_pause_ns=%d heap_peak=%d rss_peak=%d heap_final=%d rss_final=%d", value, workload, time.Since(started).Milliseconds(), cpuUS(usageAfter)-cpuUS(usageBefore), after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs, after.NumGC-before.NumGC, after.PauseTotalNs-before.PauseTotalNs, heapPeak, rssPeak, after.HeapAlloc, readRSS())
 	if ok {
 		t.Log("POOLING_ACCEPTED")
+	}
+}
+
+func testEncryptedPoolingSustained(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+	repeats := 4096 // Two streams, each 256 MiB in each direction, with bounded scratch.
+	if os.Getenv("POOLING_EVIDENCE_RACE") == "true" {
+		repeats = 512
+	} // Correctness only: 32 MiB per stream.
+	ok := t.Run("traffic", func(t *testing.T) {
+		runEncryptedMixedProfile(t, mixedTestLink, mixedProfile{
+			shortRounds: 2048, udpRounds: 16384, bulkBytes: 64 << 10, bulkRepeats: repeats,
+			shortPause: 25 * time.Millisecond, udpPause: 5 * time.Millisecond, deadline: 90 * time.Second, sustained: true,
+		})
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > baseline+4 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if runtime.NumGoroutine() > baseline+4 {
+		t.Fatal("workers survived sustained mixed cleanup")
+	}
+	if ok {
+		t.Log("SUSTAINED_POOLING_ACCEPTED")
 	}
 }

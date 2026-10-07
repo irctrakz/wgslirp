@@ -19,32 +19,59 @@ go test -c -tags="$tags" -o /work/traffic.test ./pkg/wireguard
 go test -c -race -tags="$tags" -o /work/traffic-race.test ./pkg/wireguard
 go test -c -tags=pooling -o /work/packets.test ./pkg/socket
 go test -c -race -tags=pooling -o /work/packets-race.test ./pkg/socket
+go vet -tags="$tags" ./pkg/wireguard
+printf '%s\n' "$STUDY_PROFILE" > /evidence/study-profile.txt
+case "$STUDY_PROFILE" in
+  basic) repetitions='1 2 3'; workloads='mixed wan' ;;
+  sustained)
+    repetitions='1 2 3 4 5 6'; workloads='sustained-mixed'
+    for binary in traffic traffic-race; do
+      /work/$binary.test -test.v -test.run='^TestMixedStreamingVerifier$' -test.timeout=30s > "/evidence/verifier-$binary.log" 2>&1
+      for pooling in false true; do
+        POOLING="$pooling" POOLING_WORKLOAD=mixed /work/$binary.test \
+          -test.v -test.run='^TestPoolingEvidence$' -test.timeout=120s -test.parallel=1 \
+          > "/evidence/legacy-$binary-$pooling.log" 2>&1
+        grep -q POOLING_ACCEPTED "/evidence/legacy-$binary-$pooling.log"
+      done
+    done
+    ;;
+  *) echo 'Unknown pooling study profile' >&2; exit 1 ;;
+esac
 # Counterbalance order; never mix policies within a process. Race is a correctness
 # control only, and is excluded from performance comparisons.
-for repetition in 1 2 3; do
+for repetition in $repetitions; do
   order='false true'
-  if [ "$repetition" = 2 ]; then order='true false'; fi
+  if (( repetition % 2 == 0 )); then order='true false'; fi
   for pooling in $order; do
     export POOLING="$pooling"
-    for workload in mixed wan; do
+    for workload in $workloads; do
       export POOLING_WORKLOAD="$workload"
       log="/evidence/ordinary-$repetition-$pooling-$workload.log"
-      /work/traffic.test -test.v -test.run='^TestPoolingEvidence$' -test.timeout=120s -test.count=1 -test.parallel=1 > "$log" 2>&1
+      profile_flags=()
+      if [ "$STUDY_PROFILE" = sustained ]; then profile_flags=("-test.cpuprofile=/evidence/cpu-$repetition-$pooling.pprof"); fi
+      /work/traffic.test -test.v -test.run='^TestPoolingEvidence$' -test.timeout=120s -test.count=1 -test.parallel=1 "${profile_flags[@]}" > "$log" 2>&1
       grep -q POOLING_ACCEPTED "$log"
-      grep -E 'POOLING_RESULT|MIXED_RESULTS|MIXED_BULK|WAN_PROFILE|ADMISSION' "$log"
+      grep -E 'POOLING_RESULT|MIXED_RESULTS|MIXED_BULK|WAN_PROFILE|ADMISSION|SUSTAINED_POOLING_RESULTS' "$log"
+      if [ "$STUDY_PROFILE" = sustained ]; then
+        grep -q SUSTAINED_POOLING_ACCEPTED "$log"
+        go tool pprof -top /work/traffic.test "/evidence/cpu-$repetition-$pooling.pprof" > "/evidence/cpu-$repetition-$pooling.txt"
+      fi
     done
-    /work/packets.test -test.v -test.run='^TestPoolingQueueCapacityEvidence$' \
+    if [ "$STUDY_PROFILE" = basic ]; then
+      /work/packets.test -test.v -test.run='^TestPoolingQueueCapacityEvidence$' \
       -test.bench='^BenchmarkPoolingPackets$' -test.benchmem -test.benchtime=500ms \
       -test.timeout=60s -test.parallel=1 > "/evidence/packets-$repetition-$pooling.log" 2>&1
+    fi
   done
 done
 for pooling in false true; do
   export POOLING="$pooling"
-  for workload in mixed wan; do
+  for workload in $workloads; do
     export POOLING_WORKLOAD="$workload"
     log="/evidence/race-$pooling-$workload.log"
-    /work/traffic-race.test -test.v -test.run='^TestPoolingEvidence$' -test.timeout=120s -test.parallel=1 > "$log" 2>&1
+    POOLING_EVIDENCE_RACE=true /work/traffic-race.test -test.v -test.run='^TestPoolingEvidence$' -test.timeout=120s -test.parallel=1 > "$log" 2>&1
     grep -q POOLING_ACCEPTED "$log"
+    if [ "$STUDY_PROFILE" = sustained ]; then grep -q SUSTAINED_POOLING_ACCEPTED "$log"; fi
   done
   /work/packets-race.test -test.v -test.run='^TestPoolingQueueCapacityEvidence$' \
     -test.timeout=60s > "/evidence/capacity-race-$pooling.log" 2>&1

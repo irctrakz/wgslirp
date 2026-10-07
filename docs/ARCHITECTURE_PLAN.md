@@ -774,10 +774,17 @@ controls pass; independent-stack full CI remains the acceptance gate. See
 - [x] Compare explicit pooling off/on in fresh processes on the same bounded CI
   runner: three counterbalanced encrypted mixed/WAN pairs, isolated allocations,
   retained queue saturation/recovery, separate race checks and verified cleanup.
-  [Results and decision](POOLING_ACCEPTANCE.md): run 37689880492 passed. Retain
-  default off: mixed allocations fell about 4% and peak heap about 6%, but CPU
-  increased about 4.6% and bulk completion showed no consistent improvement.
+  [Results and current policy](POOLING_ACCEPTANCE.md): run 37689880492 passed.
+  Default off remains provisional: bulk completion showed no consistent improvement,
+  while handshake p95 improved in all three pairs. Updated deployment priorities
+  favor throughput and latency, accepting higher memory use for repeatable gains;
+  CPU consumption supports the decision rather than independently vetoing it.
   No runtime policy, image, main branch or private server was changed.
+- [ ] Extend paired pooling evidence to sustained throughput and short-request
+  tail latency under concurrent short/bulk/UDP load, using equal finite budgets.
+  Record larger-budget experiments separately; even marginal repeatable performance
+  gains can justify higher memory use. Review the default after those measurements,
+  with actual-image acceptance required for a runtime policy change.
 - [ ] Optional future reconsideration: only if deployment profiling supports it,
   evaluate a separate policy avoiding tiny control-packet pooling, then repeat
   paired evidence and actual-image acceptance. This is not a current blocker.

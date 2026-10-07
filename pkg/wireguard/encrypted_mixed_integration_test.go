@@ -110,6 +110,21 @@ func runEncryptedMixed(t *testing.T) {
 }
 
 func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.SocketInterface, *netstack.Net)) {
+	runEncryptedMixedProfile(t, link, mixedProfile{
+		shortRounds: 32, udpRounds: 512, bulkBytes: 4 << 20, bulkRepeats: 1,
+		shortPause: 100 * time.Millisecond, udpPause: 20 * time.Millisecond, deadline: 45 * time.Second,
+	})
+}
+
+type mixedProfile struct {
+	shortRounds, udpRounds, bulkBytes, bulkRepeats int
+	shortPause, udpPause, deadline                 time.Duration
+	sustained                                      bool
+}
+
+// Sustained profiles stream a repeated bounded block, and keep short/UDP traffic
+// alive until both bulk streams finish. Legacy acceptance retains fixed counts.
+func runEncryptedMixedProfile(t *testing.T, link func(*testing.T) (*socket.SocketInterface, *netstack.Net), profile mixedProfile) {
 	// Use the container's ordinary IPv4 address: a remote loopback destination
 	// would depend on the guest stack's special loopback routing semantics.
 	addresses, err := net.InterfaceAddrs()
@@ -128,7 +143,7 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		t.Fatal("bounded container requires a non-loopback IPv4 address")
 	}
 	s, guest := link(t)
-	deadline := time.Now().Add(45 * time.Second)
+	deadline := time.Now().Add(profile.deadline)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	t.Cleanup(cancel)
 	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IP(host.AsSlice())})
@@ -160,6 +175,11 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 	}
 	t.Cleanup(func() { cancel(); listener.Close(); udp.Close(); workers.Wait() })
 	hostStop := make(chan struct{})
+	udpDone, bulkDone := make(chan struct{}), make(chan struct{})
+	var bulkRemaining atomic.Int32
+	bulkRemaining.Store(2)
+	var bulkElapsed atomic.Int64
+	var loadStarted time.Time
 	var accepted, empty atomic.Uint64
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -170,12 +190,13 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		var handlers sync.WaitGroup
 		defer handlers.Wait()
 		limit := make(chan struct{}, 6)
-		errors := make(chan error, 260)
+		maxAccepts := 2 * (4*profile.shortRounds + 2)
+		errors := make(chan error, maxAccepts)
 		// A timed-out fast dial can be accepted before cancellation reaches the
 		// host. Its asynchronous replacement is a second socket for one request.
 		// Serve until clients finish, with at most two accepts per intended flow.
 	acceptLoop:
-		for accepted.Load() < 260 {
+		for accepted.Load() < uint64(maxAccepts) {
 			select {
 			case limit <- struct{}{}:
 			case <-ctx.Done():
@@ -223,9 +244,14 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 	})
 	launch(func() error {
 		var p [1024]byte
-		for i := 0; i < 512; i++ {
+		for i := 0; i < profile.udpRounds; i++ {
 			n, from, err := udp.ReadFromUDP(p[:])
 			if err != nil {
+				select {
+				case <-udpDone:
+					return nil
+				default:
+				}
 				return err
 			}
 			if n != len(p) {
@@ -239,7 +265,9 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 	})
 	var mu sync.Mutex
 	var handshakes []time.Duration
-	transfer := func(payload []byte) error {
+	var shortLatencies, udpLatencies []time.Duration
+	var shortLastStart time.Duration
+	transfer := func(payload []byte, repeats int) error {
 		started := time.Now()
 		c, err := guest.DialContextTCPAddrPort(ctx, target)
 		if err != nil {
@@ -254,7 +282,11 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		}
 		written := make(chan error, 1)
 		go func() {
-			_, err := io.Copy(c, bytes.NewReader(payload))
+			var source io.Reader = bytes.NewReader(payload)
+			if repeats > 1 {
+				source = &mixedRepeatedReader{block: payload, remaining: int64(len(payload)) * int64(repeats)}
+			}
+			_, err := io.Copy(c, source)
 			if err == nil {
 				err = c.CloseWrite()
 			}
@@ -262,7 +294,16 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		}()
 		// Read concurrently with upload, so the echo service can apply real TCP
 		// backpressure without a fixture-induced write/write deadlock.
-		got, readErr := io.ReadAll(io.LimitReader(c, int64(len(payload)+1)))
+		var readErr error
+		if repeats > 1 {
+			readErr = mixedVerifyRepeated(c, payload, repeats)
+		} else {
+			var got []byte
+			got, readErr = io.ReadAll(io.LimitReader(c, int64(len(payload)+1)))
+			if readErr == nil && !bytes.Equal(got, payload) {
+				readErr = fmt.Errorf("TCP byte mismatch: got=%d want=%d", len(got), len(payload))
+			}
+		}
 		if readErr != nil {
 			c.Close()
 		}
@@ -273,11 +314,13 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		if writeErr != nil {
 			return writeErr
 		}
-		if !bytes.Equal(got, payload) {
-			return fmt.Errorf("TCP byte mismatch: got=%d want=%d", len(got), len(payload))
-		}
-		if len(payload) >= 4*1024*1024 {
-			t.Logf("MIXED_BULK bytes_each_direction=%d elapsed_us=%d", len(payload), time.Since(started).Microseconds())
+		if repeats > 1 || len(payload) >= 4*1024*1024 {
+			t.Logf("MIXED_BULK bytes_each_direction=%d elapsed_us=%d", len(payload)*repeats, time.Since(started).Microseconds())
+		} else {
+			mu.Lock()
+			shortLatencies = append(shortLatencies, time.Since(started))
+			shortLastStart = max(shortLastStart, started.Sub(loadStarted))
+			mu.Unlock()
 		}
 		return nil
 	}
@@ -286,12 +329,22 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		id := worker
 		launch(func() error {
 			<-start
-			for i := 0; i < 32; i++ {
+			for i := 0; i < profile.shortRounds; i++ {
+				if profile.sustained {
+					select {
+					case <-bulkDone:
+						return nil
+					default:
+					}
+				}
 				p := bytes.Repeat([]byte{byte(id), byte(i), 0x5a, 0xa5}, 256)
-				if err := transfer(p); err != nil {
+				if err := transfer(p, 1); err != nil {
 					return fmt.Errorf("short worker %d request %d: %w", id, i, err)
 				}
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(profile.shortPause)
+			}
+			if profile.sustained {
+				return fmt.Errorf("short request safety ceiling reached before bulk completion")
 			}
 			return nil
 		})
@@ -300,11 +353,17 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		id := worker
 		launch(func() error {
 			<-start
-			p := make([]byte, 4<<20)
+			defer func() {
+				if bulkRemaining.Add(-1) == 0 {
+					bulkElapsed.Store(time.Since(loadStarted).Nanoseconds())
+					close(bulkDone)
+				}
+			}()
+			p := make([]byte, profile.bulkBytes)
 			for i := range p {
 				p[i] = byte(i*31 + id*17)
 			}
-			if err := transfer(p); err != nil {
+			if err := transfer(p, profile.bulkRepeats); err != nil {
 				return fmt.Errorf("bulk %d: %w", id, err)
 			}
 			return nil
@@ -312,13 +371,22 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 	}
 	launch(func() error {
 		<-start
+		defer func() { close(udpDone); udp.Close() }()
 		c, err := guest.DialUDPAddrPort(netip.AddrPort{}, udpTarget)
 		if err != nil {
 			return err
 		}
 		defer c.Close()
 		var got [1024]byte
-		for i := 0; i < 512; i++ {
+		for i := 0; i < profile.udpRounds; i++ {
+			if profile.sustained {
+				select {
+				case <-bulkDone:
+					return nil
+				default:
+				}
+			}
+			begin := time.Now()
 			if err := c.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
 				return err
 			}
@@ -333,11 +401,16 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 			if !bytes.Equal(got[:n], p) {
 				return fmt.Errorf("UDP mismatch round %d", i)
 			}
-			time.Sleep(20 * time.Millisecond)
+			udpLatencies = append(udpLatencies, time.Since(begin))
+			time.Sleep(profile.udpPause)
+		}
+		if profile.sustained {
+			return fmt.Errorf("UDP safety ceiling reached before bulk completion")
 		}
 		return nil
 	})
 	started := time.Now()
+	loadStarted = started
 	close(start)
 	for i := 0; i < 8; i++ {
 		select {
@@ -355,14 +428,18 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 		t.Fatal(err)
 	}
 	workers.Wait()
-	if accepted.Load()-empty.Load() != 130 {
+	if !profile.sustained && (len(shortLatencies) != 4*profile.shortRounds || len(udpLatencies) != profile.udpRounds) {
+		t.Fatal("fixed mixed workload completion count mismatch")
+	}
+	wantConnections := uint64(len(shortLatencies) + 2)
+	if accepted.Load()-empty.Load() != wantConnections {
 		t.Fatalf("host payload connection count: accepted=%d empty=%d", accepted.Load(), empty.Load())
 	}
 	if empty.Load() != 0 {
 		t.Fatalf("single-dial handoff left empty host connections: %d", empty.Load())
 	}
 	sort.Slice(handshakes, func(i, j int) bool { return handshakes[i] < handshakes[j] })
-	if len(handshakes) != 130 || handshakes[129] > 5*time.Second {
+	if len(handshakes) != int(wantConnections) || handshakes[len(handshakes)-1] > 5*time.Second {
 		t.Fatalf("handshake bound/count: %v", handshakes)
 	}
 	if err := s.Stop(); err != nil {
@@ -370,8 +447,60 @@ func runEncryptedMixedWithLink(t *testing.T, link func(*testing.T) (*socket.Sock
 	}
 	m := s.DetailedMetrics()
 	t.Logf("MIXED_ADMISSION counters=%v", m.Admission)
-	if m.TCP.ActiveFlows != 0 || m.UDP.ActiveFlows != 0 || m.TCPExt["socket_buffer_bytes"] != 0 || m.TCPExt["dial_reserved"] != 0 || m.TCP.DeliveryRefused != 0 {
+	if m.TCP.ActiveFlows != 0 || m.UDP.ActiveFlows != 0 || m.TCPExt["socket_buffer_bytes"] != 0 || m.TCPExt["dial_reserved"] != 0 || m.TCP.DeliveryRefused != 0 || m.UDP.DeliveryRefused != 0 {
 		t.Fatalf("unclean metrics: %+v", m)
 	}
-	t.Logf("MIXED_RESULTS elapsed_ms=%d handshakes=130 handshake_p50_us=%d handshake_p95_us=%d handshake_max_us=%d buffer_peak=%d host_accepted=%d host_empty=%d async_dials=%d", time.Since(started).Milliseconds(), handshakes[64].Microseconds(), handshakes[123].Microseconds(), handshakes[129].Microseconds(), m.TCPExt["socket_buffer_peak"], accepted.Load(), empty.Load(), m.TCPExt["dial_start"])
+	t.Logf("MIXED_RESULTS elapsed_ms=%d handshakes=%d handshake_p50_us=%d handshake_p95_us=%d handshake_max_us=%d buffer_peak=%d host_accepted=%d host_empty=%d async_dials=%d", time.Since(started).Milliseconds(), len(handshakes), handshakes[(len(handshakes)-1)/2].Microseconds(), handshakes[len(handshakes)*95/100].Microseconds(), handshakes[len(handshakes)-1].Microseconds(), m.TCPExt["socket_buffer_peak"], accepted.Load(), empty.Load(), m.TCPExt["dial_start"])
+	if profile.sustained {
+		elapsed := time.Duration(bulkElapsed.Load())
+		if len(shortLatencies) < 64 || len(udpLatencies) < 64 || shortLastStart < elapsed*8/10 {
+			t.Fatal("insufficient mixed traffic overlap")
+		}
+		for reason, count := range m.Admission {
+			if reason != "tcp_retransmit_waits" && count != 0 {
+				t.Fatalf("unexpected admission refusal: %s=%d", reason, count)
+			}
+		}
+		sort.Slice(shortLatencies, func(i, j int) bool { return shortLatencies[i] < shortLatencies[j] })
+		sort.Slice(udpLatencies, func(i, j int) bool { return udpLatencies[i] < udpLatencies[j] })
+		bytesEachDirection := int64(2) * int64(profile.bulkBytes) * int64(profile.bulkRepeats)
+		t.Logf("SUSTAINED_POOLING_RESULTS bulk_bytes_each_direction=%d bulk_elapsed_us=%d bulk_mib_s_each_direction=%.3f short_requests=%d short_p50_us=%d short_p95_us=%d short_p99_us=%d short_max_us=%d short_last_start_us=%d udp_rounds=%d udp_p95_us=%d udp_p99_us=%d", bytesEachDirection, elapsed.Microseconds(), float64(bytesEachDirection)/(1<<20)/elapsed.Seconds(), len(shortLatencies), shortLatencies[(len(shortLatencies)-1)/2].Microseconds(), shortLatencies[(len(shortLatencies)-1)*95/100].Microseconds(), shortLatencies[(len(shortLatencies)-1)*99/100].Microseconds(), shortLatencies[len(shortLatencies)-1].Microseconds(), shortLastStart.Microseconds(), len(udpLatencies), udpLatencies[(len(udpLatencies)-1)*95/100].Microseconds(), udpLatencies[(len(udpLatencies)-1)*99/100].Microseconds())
+	}
+}
+
+type mixedRepeatedReader struct {
+	block     []byte
+	offset    int
+	remaining int64
+}
+
+func (r *mixedRepeatedReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.block[r.offset:])
+	if int64(n) > r.remaining {
+		n = int(r.remaining)
+	}
+	r.offset = (r.offset + n) % len(r.block)
+	r.remaining -= int64(n)
+	return n, nil
+}
+
+func mixedVerifyRepeated(reader io.Reader, block []byte, repeats int) error {
+	buffer := make([]byte, len(block))
+	for i := 0; i < repeats; i++ {
+		if _, err := io.ReadFull(reader, buffer); err != nil {
+			return err
+		}
+		if !bytes.Equal(buffer, block) {
+			return fmt.Errorf("TCP bulk block %d mismatch", i)
+		}
+	}
+	var extra [1]byte
+	n, err := reader.Read(extra[:])
+	if n != 0 || err != io.EOF {
+		return fmt.Errorf("TCP bulk trailing bytes or missing EOF: n=%d err=%v", n, err)
+	}
+	return nil
 }
