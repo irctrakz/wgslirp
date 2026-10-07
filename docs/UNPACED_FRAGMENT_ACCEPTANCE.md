@@ -158,6 +158,27 @@ reusing released small assembly objects in a cache bounded by the existing
 large promoted payloads are never cached. The unchanged full pipeline must pass
 again before default-policy acceptance or promotion is marked complete.
 
+[Run 37568200098](https://github.com/irctrakz/wgslirp/actions/runs/37568200098)
+at `05dbf322782be2168259acbfe9cf7e81d82eeac0` passed baseline and finite-rate
+ordinary/race checks but still failed the unpaced heap gate when starting the
+separate datagram fixture: heap 209,897,528, RSS 188,973,056, next-GC target
+228,385,320 bytes, seven natural GC cycles and zero forced GC. Mixed traffic
+completed in 10,474 ms with all 130 connections and no admission refusals.
+The profile's reported in-use storage was dominated by WireGuard message buffers
+(78.19 MiB, 86.6%). Resource events were zero and owned cleanup passed; remaining
+jobs were cancelled and no image was promoted. Reduced reassembly churn alone
+did not establish the required peak bound.
+
+The fragmenting guest fixture now returns the ready ranges of one original
+packet as a batch, using WireGuard's existing read-buffer contract. It never
+waits for another original packet, adds no delay, preserves emitted fragment
+order/duplicates/losses and copies each frame into WireGuard-owned buffers.
+Previously it emitted each ready range as a separate one-packet read, increasing
+queue/container overhead. A regression checks partial batches and ownership.
+All traffic, per-original pacing settings, loss injection, memory/resource gates,
+GC policy and deadlines remain unchanged. Acceptance still requires six fresh
+unpaced samples, the full workload chain and actual-image validation/promotion.
+
 Default enablement does not increase byte/datagram/source/range quotas, extend
 expiry, add privileges or enable kernel routing. The source quota is an IP quota,
 not authenticated-peer fairness: four sources can occupy all 32 assembly slots.

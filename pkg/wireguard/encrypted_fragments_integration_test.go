@@ -36,6 +36,29 @@ type fragmentGuestTUN struct {
 	fragmented, dropped atomic.Uint64
 }
 
+func TestFragmentGuestTUNReadyBatchOwnership(t *testing.T) {
+	original := encryptedPacket(6, 80, 1, 0, 0x18, bytes.Repeat([]byte{0x5a}, 1300))
+	frames := encryptedFragments(original, 1, 1176)
+	f := &fragmentGuestTUN{pending: frames}
+	buffers := [][]byte{make([]byte, 1216), make([]byte, 1216)}
+	sizes := make([]int, 2)
+	n, err := f.Read(buffers, sizes, 16)
+	if err != nil || n != 2 || len(f.pending) != 1 || !bytes.Equal(buffers[0][16:16+sizes[0]], buffers[1][16:16+sizes[1]]) {
+		t.Fatal("ready duplicate batch", n, err)
+	}
+	retained := append([]byte(nil), buffers[0][16:16+sizes[0]]...)
+	// There is no backing Device: a partial batch must consume only ready
+	// ranges, never block reading another original packet to fill the batch.
+	tail := [][]byte{make([]byte, 1216), make([]byte, 1216)}
+	n, err = f.Read(tail, sizes, 16)
+	if err != nil || n != 1 || len(f.pending) != 0 {
+		t.Fatal("partial ready batch", n, err)
+	}
+	if !bytes.Equal(retained, buffers[0][16:16+len(retained)]) || encryptedChecksum(tail[0][16:36]) != 0 || binary.BigEndian.Uint16(tail[0][22:24]) != 1176/8 {
+		t.Fatal("batch buffer ownership/header")
+	}
+}
+
 func (f *fragmentGuestTUN) Read(buffers [][]byte, sizes []int, offset int) (int, error) {
 	for len(f.pending) == 0 {
 		// Finite-rate and unpaced profiles share traffic and loss injection.
@@ -65,15 +88,22 @@ func (f *fragmentGuestTUN) Read(buffers [][]byte, sizes []int, offset int) (int,
 			f.pending = [][]byte{append([]byte(nil), p...)}
 		}
 	}
-	p := f.pending[0]
-	if len(p) > len(buffers[0])-offset {
-		return 0, fmt.Errorf("fragment test buffer too small")
+	// Return the already encoded ranges of this original packet as one batch.
+	// Never wait for another original packet or pace the batch. WireGuard owns
+	// the destination buffers; no frame is reused until its bytes are copied.
+	n := min(len(f.pending), min(len(buffers), len(sizes)))
+	for i, p := range f.pending[:n] {
+		if offset < 0 || offset > len(buffers[i]) || len(p) > len(buffers[i])-offset {
+			return 0, fmt.Errorf("fragment test buffer too small")
+		}
 	}
-	copy(buffers[0][offset:], p)
-	sizes[0] = len(p)
-	f.pending[0] = nil
-	f.pending = f.pending[1:]
-	return 1, nil
+	for i, p := range f.pending[:n] {
+		copy(buffers[i][offset:], p)
+		sizes[i] = len(p)
+		f.pending[i] = nil
+	}
+	f.pending = f.pending[n:]
+	return n, nil
 }
 
 type fragmentResourceSamples struct {
