@@ -19,7 +19,8 @@ func seqBefore(a, b uint32) bool { return int32(a-b) < 0 }
 func seqAfter(a, b uint32) bool  { return seqBefore(b, a) }
 
 func (b *tcpBridge) sendCloseACKLocked(f *tcpFlow) {
-	_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x10, nil))
+	var options [36]byte
+	_ = b.sendToGuest(f, b.buildIPv4TCPOpts(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x10, nil, f.receiveSACKLocked(&options)))
 }
 
 func (b *tcpBridge) beginCloseLocked(f *tcpFlow, now time.Time) {

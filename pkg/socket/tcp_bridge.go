@@ -177,7 +177,8 @@ type tcpFlow struct {
 		seq  uint32
 		data []byte
 	}
-	futureBytes int
+	futureBytes  int
+	recentFuture uint32 // stateMu: most recently retained out-of-order segment
 
 	// Peer receive window information (from client)
 	// Immutable after publication: peer MSS bounded by the initial MTU/clamp.

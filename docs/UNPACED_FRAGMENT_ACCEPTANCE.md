@@ -44,6 +44,23 @@ Successful acceptance is unprofiled; no limit is relaxed to turn failure into a 
 
 ## Sequence
 
+The first unpaced ordinary attempt (run
+[37401457360](https://github.com/irctrakz/wgslirp/actions/runs/37401457360),
+source `e37f132`) failed at the unchanged 45-second mixed-traffic deadline.
+TCP refused 653 out-of-order storage requests; IPv4 fragment admission refused
+none. Container OOM was false, memory/PID events were zero, and owned-resource
+cleanup passed. The remaining five samples were cancelled; this is not acceptance.
+
+Investigation found missing receiver-side SACK feedback for retained TCP bytes.
+ACKs now report at most four retained ranges, most recently received first, only
+with peer permission. Refused ranges never enter the feedback; cumulative ACKs,
+storage reservations and lock ownership are unchanged. Focused regressions cover
+refusal, duplicates, delayed ACKs, negotiation and wrap, and the regression fails
+against the previous code in a disposable source copy. This follows
+[RFC 2018](https://www.rfc-editor.org/rfc/rfc2018.html#section-4).
+The repeated unpaced workload remains the acceptance gate; no deadline, pacing,
+memory limit or storage quota has been relaxed.
+
 - [x] Implement the separate zero-delay profile and repeated bounded CI gate.
 - [ ] Require all three ordinary and three race samples to pass; retain failure
   evidence and investigate any failure before continuing.

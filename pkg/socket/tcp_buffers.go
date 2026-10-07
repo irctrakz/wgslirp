@@ -35,6 +35,7 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 		s := f.ooo[right]
 		sStart, sEnd := uint64(s.seq), uint64(s.seq)+uint64(len(s.data))
 		if sStart <= uint64(seq) && sEnd >= uint64(seq)+uint64(len(payload)) {
+			f.recentFuture = seq
 			return true
 		}
 		if sStart < start {
@@ -79,6 +80,7 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 		data []byte
 	}{uint32(start), merged}
 	f.futureBytes += size - oldBytes
+	f.recentFuture = seq
 	b.buffers.release(oldBytes + (right-left)*bufferEntryAllowance)
 	return true
 }
