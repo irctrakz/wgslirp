@@ -769,6 +769,19 @@ controls pass; independent-stack full CI remains the acceptance gate. See
   Preserve shared wire encoding, generic reset builders and independent test
   helpers; run the normal contained checks. This is not an acceptance blocker.
 
+## Packet pooling default evidence (2026-10-07)
+
+- [x] Compare explicit pooling off/on in fresh processes on the same bounded CI
+  runner: three counterbalanced encrypted mixed/WAN pairs, isolated allocations,
+  retained queue saturation/recovery, separate race checks and verified cleanup.
+  [Results and decision](POOLING_ACCEPTANCE.md): run 37689880492 passed. Retain
+  default off: mixed allocations fell about 4% and peak heap about 6%, but CPU
+  increased about 4.6% and bulk completion showed no consistent improvement.
+  No runtime policy, image, main branch or private server was changed.
+- [ ] Optional future reconsideration: only if deployment profiling supports it,
+  evaluate a separate policy avoiding tiny control-packet pooling, then repeat
+  paired evidence and actual-image acceptance. This is not a current blocker.
+
 ## First implementation milestone
 
 Complete Phase 0 and Phase 1 before beginning broad TCP refactoring. The milestone is reached when publishing is test-gated, sensitive diagnostics are repaired, lifecycle/health regressions pass, and invalid configuration cannot cause the identified panics. Then make resource controls effective before investing in structural cleanup.
