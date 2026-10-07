@@ -63,8 +63,8 @@ jobs:
                 wan) test_name=TestEncryptedWANRecovery; test_timeout=120s ;;
                 sustained) test_name=TestEncryptedSustainedLoss; test_timeout=330s ;;
                 mixed) test_name=TestEncryptedMixed; test_timeout=120s ;;
-                fragments) test_name='(TestEncryptedFragments|TestFragmentGuestTUNReadyBatchOwnership)'; test_timeout=300s ;;
-                fragments-unpaced) test_name='(TestEncryptedFragmentsUnpaced|TestFragmentGuestTUNReadyBatchOwnership)'; test_timeout=300s ;;
+                fragments) test_name="(TestEncryptedFragments|TestFragmentGuestTUNReadyBatchOwnership)"; test_timeout=300s ;;
+                fragments-unpaced) test_name="(TestEncryptedFragmentsUnpaced|TestFragmentGuestTUNReadyBatchOwnership)"; test_timeout=300s ;;
                 *) echo "Unknown workload" >&2; exit 1 ;;
               esac
               set +e
