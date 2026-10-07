@@ -171,9 +171,6 @@ func (s *SocketInterface) Start() error {
 		go s.dgram.listen(s, releaseRead)
 	}
 
-	// SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
-	logging.Infof("Simple mode active: bypassing FlowManager and egress limiter; inline delivery to processor")
-
 	// Initialize UDP/TCP slirp bridges
 	s.tosCopy = s.config.Transport.CopyTOS
 	s.ttlOverride = s.config.Transport.TTL
