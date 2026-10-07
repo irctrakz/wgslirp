@@ -137,6 +137,7 @@ artifact changed; main was untouched.
 
 - [ ] If selecting default-on, validate that separate candidate's actual release
   image under the deployment/ownership/shutdown gates before promotion.
-- [ ] Optional: compare a separate policy excluding tiny ACK/control packets
-  from pooling, with the same performance-first measurements and gates. The
-  earlier 40-byte microbenchmark motivates exploration but does not prove a win.
+- [x] Compare a separate policy excluding tiny ACK/control packets from pooling.
+  [Selective results](SELECTIVE_PACKET_POOLING.md) retain all six three-policy
+  groups: correctness/resource/cleanup gates passed, with faster isolated tiny
+  storage but no sustained throughput advantage over full pooling.

@@ -792,11 +792,15 @@ controls pass; independent-stack full CI remains the acceptance gate. See
   without establishing a consistent overall advantage. Default remains unchanged.
 - [ ] If selecting default-on, validate/promote that separate candidate's actual
   release image under existing deployment, ownership and shutdown gates.
-- [ ] Validate the implemented [selective packet pooling candidate](SELECTIVE_PACKET_POOLING.md):
+- [x] Validate the implemented [selective packet pooling candidate](SELECTIVE_PACKET_POOLING.md):
   exact storage below 512 bytes, existing pool classes for 512–16,384 bytes,
   shared allocation/reservation eligibility and captured release ownership.
-  Compare disabled/full/selective policies on one bounded runner before drawing
-  a performance conclusion. Any later default change requires actual-image acceptance.
+  Run 37697847115 passed disabled/full/selective comparisons and all ownership,
+  race, resource and cleanup gates. Selective vs disabled paired medians showed
+  throughput +0.24%, short p95 -0.86%, p99 -1.44%; vs full pooling throughput
+  -0.68% and short p95 +3.32%. Tiny storage is faster in isolation, but this
+  mixed-workload comparison does not establish a throughput win over full pooling.
+  Default remains off; any later default change requires actual-image acceptance.
 
 ## First implementation milestone
 

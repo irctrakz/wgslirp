@@ -240,6 +240,9 @@ retain all pairs. Original basic-study results above remain a separate profile.
 
 Before revisiting the default, profile a demonstrated deployment bottleneck or
 evaluate a separately reviewed policy that avoids pooling tiny control packets.
-Any such implementation needs fresh paired evidence, reservation/ownership/race
-controls and actual release-image acceptance at deployment resource limits. These
-are possible follow-ups, not outstanding prerequisites for retaining default off.
+The latter is now [implemented and measured](SELECTIVE_PACKET_POOLING.md), with
+all gates passing but no mixed-workload throughput win over full pooling.
+Fresh paired evidence and reservation/ownership/race controls are complete for
+that candidate. Deploying it still requires actual release-image acceptance at
+deployment resource limits. These are possible follow-ups, not outstanding
+prerequisites for retaining default off.

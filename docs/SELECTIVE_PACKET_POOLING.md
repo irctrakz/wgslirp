@@ -58,5 +58,81 @@ truncation/trailing-byte verifier controls remain required. Retain adverse resul
 and verify container/tmpfs/toolchain-image cleanup. The private server remains
 unused; no image publishing or main-branch change occurs in the comparison.
 
-Results pending. A later global default change still requires a separate policy
-decision and actual release-image acceptance.
+## Results (2026-10-07)
+
+[CI run 37697847115](https://github.com/irctrakz/wgslirp/actions/runs/37697847115)
+passed on source `7fcaa405323547889ac505e3a0154db758166614`, first attempt.
+All 18 ordinary processes verified 512 MiB in each direction while short TCP and
+UDP traffic overlapped bulk traffic. All three policies passed separate race
+workloads, baseline checks and legacy encrypted acceptance. Candidate capacity
+controls verified reservation, one intentional refusal, release and readmission.
+The full baseline's restored file hashes matched the pinned source.
+
+The table reports medians of six within-group percentage changes, not percentage
+changes between overall medians. Negative latency/CPU/allocation changes are
+better; positive throughput changes are better. Every adverse sample is retained
+in [ordinary samples](SELECTIVE_POOLING_SAMPLES.csv).
+
+| Measurement | Selective vs disabled | Selective vs full pooling |
+| --- | ---: | ---: |
+| Verified bulk throughput per direction | +0.24% | -0.68% |
+| Short TCP completion p95 | -0.86% | +3.32% |
+| Short TCP completion p99 | -1.44% | +1.65% |
+| UDP round-trip p95 | -0.27% | +2.43% |
+| UDP round-trip p99 | -3.72% | +0.10% |
+| CPU time | -0.22% | +0.73% |
+| Allocated bytes | -10.94% | -0.07% |
+| Allocation count | -2.71% | +0.06% |
+| GC cycles | -9.39% | -1.82% |
+| Sampled heap peak | +0.55% | -4.38% |
+| Sampled RSS peak | +1.50% | -3.62% |
+
+Selective throughput exceeded disabled in four of six groups. Full pooling
+exceeded selective in all six groups; short TCP p95 was lower with full pooling
+in five. These small differences on one runner do not establish deployment-wide
+superiority, but the result does **not** support claiming that skipping tiny
+packets improves sustained throughput over full pooling. Memory is not a veto:
+the performance-first assessment retains this adverse comparison explicitly.
+
+### Isolated packet storage
+
+Median timings below come from six fresh processes per policy, with identical
+fixtures. [All 180 allocation samples](SELECTIVE_POOLING_ALLOCATION_SAMPLES.csv)
+include intermediate sizes and the 511/512-byte boundary.
+
+| Buffer bytes | Disabled ns/op | Full ns/op | Selective ns/op |
+| --- | ---: | ---: | ---: |
+| 40 | 186.60 | 206.85 | 190.95 |
+| 80 | 189.15 | 211.10 | 192.95 |
+| 511 | 229.00 | 217.65 | 234.10 |
+| 512 | 229.70 | 217.80 | 224.30 |
+| 1,024 | 273.30 | 223.35 | 223.55 |
+| 1,380 | 290.95 | 225.60 | 223.60 |
+| 8,192 | 935.40 | 316.85 | 314.00 |
+| 20,000 | 1,501.00 | 1,535.00 | 1,533.00 |
+
+Selective storage is about 7.7% faster than full pooling for 40-byte packets and
+8.6% faster for 80-byte packets. Larger eligible storage keeps its substantial
+isolated benefit over disabled pooling. That isolated control-packet benefit
+does not translate into a demonstrated mixed-workload win. At 511 bytes, full
+pooling is already faster; the cutoff remains a conservative initial policy,
+not an experimentally optimal crossover.
+
+Under the fixed 64 KiB live budget, selective storage admits 390 40-byte packets,
+315 80-byte packets and 102 511-byte packets; 512/1,380-byte packets admit 30,
+charging their 2 KiB class plus queue allowance. Release returns the entire
+reservation and allows immediate readmission. This accounting benefit is distinct
+from measured throughput.
+
+### Resource and deployment boundary
+
+The container completed in 677 seconds within its existing 900-second deadline,
+with a 1,127,743,488-byte cgroup memory peak including compilation and tmpfs,
+exit zero, no OOM kill and zero memory/PID limit events. Cleanup verified removal of the
+owned container/tmpfs and toolchain image; no owned network or volume was created.
+The private server was unused and main was untouched.
+
+The requested selective implementation is available with `POOLING=true`;
+`POOLING=false` remains the global default. This run validates source and bounded
+fixtures, and does not publish a release image. A later global default change
+still requires a separate performance decision and actual release-image acceptance.
