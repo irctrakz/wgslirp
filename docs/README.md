@@ -216,7 +216,7 @@ Guest IPv4 datagrams are validated before forwarding: header and total lengths m
 - `PROCESSOR_WORKERS`: inactive in the executable; warns at startup. Library processor only: default 4, range 1-256.
 - `PROCESSOR_QUEUE_CAP`: inactive in the executable; warns at startup. Library processor only: default 1000, range 1-65536.
 - `WG_TUN_QUEUE_CAP`: capacity of the WGTun outbound queue to wireguard-go (default 1024, range 1-65536).
-- `POOLING`: enable pooled buffers (1/true/on) for lower GC when throughput is high.
+- `POOLING`: bounded packet pooling defaults on; set false/0/off to use exact-sized storage.
 
 TCP slirp (userspace)
 
@@ -322,7 +322,7 @@ Notes:
 
 | Environment Variable | Description | Default |
 |----------------------|-------------|---------|
-| `POOLING` | Enable pooled buffers to reduce alloc/GC (1/true) | off |
+| `POOLING` | Enable pooled buffers to reduce alloc/GC; false disables | on |
 | `PROCESSOR_WORKERS` | Library-only workers; inactive in executable | 4 |
 | `PROCESSOR_QUEUE_CAP` | Library-only queue; inactive in executable | 1000 |
 | `WG_TUN_QUEUE_CAP` | WGTun out queue capacity toward wireguard-go | 1024 |

@@ -16,7 +16,7 @@ var poolPolicy atomic.Pointer[PoolConfig]
 
 func PoolConfigFromEnv(lookup func(string) (string, bool)) (PoolConfig, error) {
 	r := envconfig.Reader{Lookup: lookup}
-	c := PoolConfig{r.Bool("POOLING", false), r.Bool("POOL_WRAP", false)}
+	c := PoolConfig{r.Bool("POOLING", true), r.Bool("POOL_WRAP", false)}
 	return c, r.Err
 }
 
@@ -35,19 +35,19 @@ func poolingPolicy() PoolConfig {
 	if c := poolPolicy.Load(); c != nil {
 		return *c
 	}
-	poolPolicy.CompareAndSwap(nil, &PoolConfig{})
+	poolPolicy.CompareAndSwap(nil, &PoolConfig{Enabled: true})
 	return *poolPolicy.Load()
 }
 func poolingEnabled() bool  { return poolingPolicy().Enabled }
 func poolWrapEnabled() bool { return poolingPolicy().Wrap }
 
-// shouldPoolPacket is shared by allocation and live-capacity accounting. Reading
-// the startup policy first also freezes it when the first packet is tiny.
+// shouldPoolPacket shares frozen-policy eligibility between allocation and
+// live-capacity accounting. Buffers above the largest cache class stay exact-sized.
 func shouldPoolPacket(n int) bool {
-	return poolingEnabled() && n >= packetPoolMinSize && n <= pktXL
+	return poolingEnabled() && n <= pktXL
 }
 
-// bufMaybePool returns exact-sized tiny/uncached storage, or an eligible pool class.
+// bufMaybePool returns an eligible pool class, or exact-sized uncached storage.
 func bufMaybePool(n int) []byte {
 	if shouldPoolPacket(n) {
 		return pktGet(n)

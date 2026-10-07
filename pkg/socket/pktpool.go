@@ -4,9 +4,6 @@ package socket
 // Four classes of 32 entries retain at most 960 KiB process-wide. Full pools
 // discard returned buffers; GC is not needed to enforce this retention limit.
 const (
-	// IPv4 TCP headers, including all options, fit in 80 bytes. Keep tiny
-	// control packets exact-sized; channel reuse is slower for ACK-sized storage.
-	packetPoolMinSize = 512
 	pktSmall          = 2048
 	pktMed            = 4096
 	pktLarge          = 8192

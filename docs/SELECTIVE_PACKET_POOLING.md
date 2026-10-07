@@ -1,5 +1,10 @@
 # Selective packet pooling
 
+Historical comparison of source `7fcaa40`. The subsequent
+[full-pooling default decision](POOLING_DEFAULT_ACCEPTANCE.md) removes this
+candidate's cutoff. Measurements below retain their original policy and source;
+the retired `selective` dispatch profile is available only at that revision.
+
 ## Implementation and predeclared comparison
 
 With `POOLING=true`, packet synthesis pools buffers from **512 through 16,384

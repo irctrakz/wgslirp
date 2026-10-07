@@ -39,14 +39,16 @@ Unknown variables are not rejected (the process inherits unrelated OS variables)
   variables from deployments. The optional library processor still supports
   them through the adapters below; it defaults to 4 workers and 1000 slots and
   accepts 1-256 workers and 1-65536 slots.
-- `POOLING` and `POOL_WRAP` default to false. Their process-wide policy is frozen
+- `POOLING` defaults to true; `POOL_WRAP` defaults to false. Their process-wide policy is frozen
   before the first socket interface or packet allocation. A repeated identical
   configuration is safe; conflicting reconfiguration returns an error.
-  With `POOLING=true`, synthesized packets of 512–16,384 bytes use the bounded
-  packet cache; smaller control packets and larger uncached buffers are exact-sized.
+  With `POOLING=true`, all pool-capable synthesized packets through 16,384 bytes
+  use the bounded packet cache, including ACK/control packets. Larger buffers
+  remain exact-sized. `POOLING=false` selects exact-sized storage at every size.
   Live reservations follow the actual storage capacity. `POOL_WRAP` retains its
   legacy ownership behavior for caller-provided buffers; it is not required by
-  maintained forwarding paths. Default pooling remains off.
+  maintained forwarding paths. Idle retention stays bounded at 960 KiB process-wide.
+  This does not extend pooling into UDP reply or IPv4 reassembly storage.
 - Capture is disabled unless `WG_PCAP` names a path. `WG_PCAP_MAX_BYTES` defaults
   to 64 MiB, minimum 24 bytes. Parsing and opening happen at startup, so invalid
   settings or inaccessible files fail startup before forwarding. Packet-time

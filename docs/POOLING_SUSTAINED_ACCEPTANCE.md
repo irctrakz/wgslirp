@@ -1,5 +1,7 @@
 # Sustained encrypted pooling comparison
 
+Historical evidence: see [the subsequent full-pooling default decision](POOLING_DEFAULT_ACCEPTANCE.md) for the current policy. Original measurements and conclusions below retain their source context.
+
 ## Outcome
 
 Across twelve pairs on two independent CI runners, median paired throughput

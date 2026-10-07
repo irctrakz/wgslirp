@@ -58,8 +58,10 @@ func testReleaseImage(t *testing.T, reassembly bool) {
 	}
 	report := map[string]any{"image": image, "source_commit": os.Getenv("WGSLIRP_RELEASE_COMMIT"), "run": run, "ipv4_reassembly": reassembly}
 	report["reassembly_environment"] = "unset"
+	report["pooling_environment"] = "unset"
 	if !reassembly {
 		report["reassembly_environment"] = "false"
+		report["pooling_environment"] = "false"
 	}
 	t.Cleanup(func() {
 		report["passed"] = !t.Failed()
@@ -90,10 +92,10 @@ func testReleaseImage(t *testing.T, reassembly bool) {
 	serverPrivate, serverPublic := encryptedKey(t)
 	guestPrivate, guestPublic := encryptedKey(t)
 	config := strings.Join([]string{"WG_PRIVATE_KEY=" + serverPrivate, "WG_LISTEN_PORT=51820", "WG_MTU=1380",
-		"METRICS_INTERVAL=50ms", "METRICS_FORMAT=text",
+		"METRICS_INTERVAL=50ms", "METRICS_FORMAT=text", "PRINT_CONFIG=true",
 		"WG_PEER_0_PUBLIC_KEY=" + guestPublic, "WG_PEER_0_ALLOWED_IPS=10.0.0.2/32"}, "\n") + "\n"
 	if !reassembly {
-		config += "IPV4_REASSEMBLY=false\n"
+		config += "IPV4_REASSEMBLY=false\nPOOLING=false\n"
 	}
 	envFile := filepath.Join(t.TempDir(), "device.env")
 	if err := os.WriteFile(envFile, []byte(config), 0600); err != nil {
@@ -513,6 +515,23 @@ func testReleaseImage(t *testing.T, reassembly bool) {
 	report["final"] = i
 	report["sigterm_ms"] = shutdownDuration.Milliseconds()
 	logs := mustDocker("logs", name)
+	// Verify the image's effective policy, not just the fixture's intended inputs.
+	var policies []struct{ Pool struct{ Enabled, Wrap bool } }
+	for _, line := range strings.Split(logs, "\n") {
+		const marker = "effective configuration: "
+		if _, summary, found := strings.Cut(line, marker); found {
+			var policy struct{ Pool struct{ Enabled, Wrap bool } }
+			if err := json.Unmarshal([]byte(summary), &policy); err != nil {
+				t.Fatal("invalid effective configuration", err)
+			}
+			policies = append(policies, policy)
+		}
+	}
+	if len(policies) != 1 || policies[0].Pool.Enabled != reassembly || policies[0].Pool.Wrap {
+		t.Fatal("release image pooling/default wrapping policy mismatch")
+	}
+	report["pooling"] = policies[0].Pool.Enabled
+	report["pool_wrap"] = policies[0].Pool.Wrap
 	if !reassembly {
 		if strings.Count(logs, "incoming IPv4 fragments are unsupported") != 1 ||
 			strings.Count(logs, "Repeated TUN packet failures: reason=unsupported_ipv4_fragment suppressed=15") != 1 {

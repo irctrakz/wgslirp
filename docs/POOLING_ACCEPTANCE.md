@@ -1,5 +1,7 @@
 # Packet pooling default: paired evidence
 
+Historical evidence: see [the subsequent full-pooling default decision](POOLING_DEFAULT_ACCEPTANCE.md) for the current policy. Original measurements and conclusions below retain their source context.
+
 ## Decision rule (before measurement)
 
 Keep the current default off until ordinary encrypted traffic demonstrates a useful,

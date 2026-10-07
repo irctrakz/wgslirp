@@ -790,8 +790,10 @@ controls pass; independent-stack full CI remains the acceptance gate. See
   throughput +0.78%, short completion p95 -1.53%, p99 +0.38%. Memory is not a
   blocker; the small throughput tendency and mixed tails support opt-in trials
   without establishing a consistent overall advantage. Default remains unchanged.
-- [ ] If selecting default-on, validate/promote that separate candidate's actual
-  release image under existing deployment, ownership and shutdown gates.
+- [ ] Validate/promote the [full-pooling default candidate](POOLING_DEFAULT_ACCEPTANCE.md)
+  under existing deployment, ownership and shutdown gates. The user selected
+  default-on full pooling after reviewing the sustained and selective evidence;
+  preserve an explicit opt-out, wrapping off and fixed resource limits.
 - [x] Validate the implemented [selective packet pooling candidate](SELECTIVE_PACKET_POOLING.md):
   exact storage below 512 bytes, existing pool classes for 512–16,384 bytes,
   shared allocation/reservation eligibility and captured release ownership.

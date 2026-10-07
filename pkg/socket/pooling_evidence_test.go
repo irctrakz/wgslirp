@@ -62,7 +62,7 @@ func TestPoolingQueueCapacityEvidence(t *testing.T) {
 			retained = append(retained, packet)
 		}
 		capacity := size
-		if enabled && size >= packetPoolMinSize && size <= pktXL {
+		if enabled && size <= pktXL {
 			capacity = packetCapacity(size)
 		}
 		used, peak, _, rejected := budget.snapshot()

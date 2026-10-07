@@ -27,7 +27,7 @@ func TestSynthesisReservationAndDeliveryOwnership(t *testing.T) {
 		for _, payloadSize := range []int{3, 472} {
 			payload := bytes.Repeat([]byte{5, 6, 7}, (payloadSize+2)/3)[:payloadSize]
 			capacity := 40 + payloadSize
-			if pooling == 1 && capacity >= packetPoolMinSize {
+			if pooling == 1 {
 				capacity = pktSmall
 			}
 			budget := &resourceBudget{limit: capacity + 128}
@@ -64,7 +64,7 @@ func TestSynthesisReservationAndDeliveryOwnership(t *testing.T) {
 	}
 }
 
-func TestSelectivePacketStorageBoundaries(t *testing.T) {
+func TestPacketStorageBoundaries(t *testing.T) {
 	original := poolPolicy.Load()
 	defer poolPolicy.Store(original)
 	for _, enabled := range []bool{false, true} {
@@ -73,7 +73,6 @@ func TestSelectivePacketStorageBoundaries(t *testing.T) {
 			want := size
 			if enabled {
 				switch {
-				case size < 512:
 				case size <= 2048:
 					want = 2048
 				case size <= 4096:
@@ -104,10 +103,11 @@ func TestTinyPacketFreezesPoolingPolicy(t *testing.T) {
 	original := poolPolicy.Swap(nil)
 	defer poolPolicy.Store(original)
 	buf := bufMaybePool(40)
-	if cap(buf) != 40 {
-		t.Fatal("tiny packet must remain exact-sized")
+	if cap(buf) != pktSmall {
+		t.Fatal("default tiny packet must use the smallest pool class")
 	}
-	if ConfigurePooling(PoolConfig{Enabled: true}) == nil {
+	pktPut(buf)
+	if ConfigurePooling(PoolConfig{}) == nil {
 		t.Fatal("first tiny allocation did not freeze startup policy")
 	}
 }

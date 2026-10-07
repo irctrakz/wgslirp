@@ -10,7 +10,7 @@ on:
       pooling-profile:
         description: Pooling comparison profile
         type: choice
-        options: [basic, sustained, selective]
+        options: [basic, sustained]
         default: basic
   push:
     branches: [master, codex/architecture-hardening]
@@ -163,6 +163,9 @@ jobs:
               assert report['passed'] is True, f'{mode} runtime fixture did not pass'
               assert report['ipv4_reassembly'] is enabled, 'wrong reassembly mode'
               assert report['reassembly_environment'] == policy, 'wrong startup policy tested'
+              assert report['pooling'] is enabled, 'wrong effective pooling policy'
+              assert report['pooling_environment'] == policy, 'wrong pooling startup policy tested'
+              assert report['pool_wrap'] is False, 'legacy wrapping must remain disabled'
               assert report['image'] == os.environ['WGSLIRP_RELEASE_IMAGE'], 'wrong image tested'
               assert report['source_commit'] == os.environ['GITHUB_SHA'], 'wrong source tested'
               assert report['initial']['Image'] == open('release-evidence/image-id.txt').read().strip(), 'wrong container image'
