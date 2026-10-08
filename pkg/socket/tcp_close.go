@@ -147,7 +147,7 @@ func (b *tcpBridge) closeTickLocked(f *tcpFlow, now time.Time) bool {
 		atomic.AddUint64(&b.parent.metrics.Errors, 1)
 		atomic.AddUint64(&b.metrics.Errors, 1)
 		if b.failureLog.Allow(now) {
-			logging.Warnf("TCP close timed out: flow=%s state=%d unacknowledged=%d", f.key, f.state, f.serverNxt-f.sndUna)
+			logging.Warnf("TCP close timed out; aborting connection: flow=%s state=%s unacknowledged=%d; check path loss/delay and peer responsiveness", f.key, f.state, f.serverNxt-f.sndUna)
 		}
 		_ = b.sendToGuest(f, b.buildTCPFlowLocked(f, f.serverNxt, 0x14, nil, nil, 0, 64))
 		b.removeFlowLocked(f)

@@ -161,6 +161,26 @@ speculative MTU advice. The rejected counter applies regardless of configured
 MTU. Library callers remain responsible for logging returned errors. Neither
 counter detects silent drops elsewhere in the network.
 
+## TCP recovery diagnostics
+
+Recent retransmissions can trigger a **debug-only registry snapshot**, including
+idle and TIME-WAIT flows. Each line identifies the TCP state, outstanding sequence
+bytes, peer window and current retransmission timeout. The snapshot is not a list
+of failed connections; a timeout value is not measured latency. At info/warning
+levels the snapshot and its flow-lock traversal are skipped. Retransmission
+counters, tracking, timer ownership and maintenance/reset APIs remain unchanged.
+
+Temporary ACK delay, retransmission or a large RTO does not by itself emit a
+warning. An existing ACK-progress failure deadline that removes a connection
+emits a warning with the observed delay, configured limit and outstanding bytes.
+An expired close-handshake deadline warns that the connection is being aborted.
+Both messages suggest checking path loss/delay and peer responsiveness; ACK-idle
+removal also suggests reconnecting if needed. The existing per-bridge limiter
+bounds these failure warnings to one per 30 seconds, shared with other TCP
+failure diagnostics. Repeated maintenance after removal does not warn again.
+No ACK/RTO thresholds, reset policy, locks, flow admission or forwarding behavior
+change as part of this logging update.
+
 Startup health probes are one-shot diagnostics of direct host egress and slirp DNS.
 They are not a persistent liveness/readiness endpoint or a proof of sustained
 forwarding. The health tee exposes the primary processor's metrics without

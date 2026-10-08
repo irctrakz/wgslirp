@@ -50,15 +50,43 @@ func (b *tcpBridge) trackRTOFlow(f *tcpFlow) {
 	}
 }
 
-// dumpDetailedMetrics logs detailed system metrics when multiple flows are in RTO state
-// This function is designed to be robust against errors and always complete the metrics dump
+// dumpDetailedMetrics is a registry snapshot triggered by recent retransmissions,
+// not a list of failed flows. Quiet levels avoid the snapshot and its flow locks.
 func (b *tcpBridge) dumpDetailedMetrics() {
+	if !logging.IsLevelEnabled(logging.DebugLevel) {
+		return
+	}
 	// Snapshot registry membership first; never lock flow state under b.mu.
 	for _, f := range b.flowSnapshot() {
 		f.stateMu.Lock()
-		logging.Warnf("TCP flow=%s inflight=%d window=%d rto=%v closed=%v",
-			f.key, f.serverNxt-f.sndUna, f.advWnd, f.rto, f.closed)
+		logging.Debugf("TCP registry snapshot: flow=%s state=%s inflight=%d window=%d rto=%v closed=%v",
+			f.key, f.state, f.serverNxt-f.sndUna, f.advWnd, f.rto, f.closed)
 		f.stateMu.Unlock()
+	}
+}
+
+func (state tcpState) String() string {
+	switch state {
+	case tcpSynRcvd:
+		return "SYN_RECEIVED"
+	case tcpEstablished:
+		return "ESTABLISHED"
+	case tcpFinWait1:
+		return "FIN_WAIT_1"
+	case tcpFinWait2:
+		return "FIN_WAIT_2"
+	case tcpCloseWait:
+		return "CLOSE_WAIT"
+	case tcpClosing:
+		return "CLOSING"
+	case tcpLastAck:
+		return "LAST_ACK"
+	case tcpTimeWait:
+		return "TIME_WAIT"
+	case tcpClosed:
+		return "CLOSED"
+	default:
+		return "UNKNOWN"
 	}
 }
 
