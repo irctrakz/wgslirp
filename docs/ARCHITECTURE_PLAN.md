@@ -857,10 +857,17 @@ candidate before implementation; no broad representation or lock rewrite is just
   ping sockets only; retain library protocol defaults and `ICMP_ECHO=false`.
   Namespace permission failure is actionable and fail-fast. No raw fallback,
   subprocesses, application sysctl writes or extra capabilities.
-- [ ] Validate Linux unit/race, integration/race and actual-image encrypted echo,
+- [x] Validate Linux unit/race, integration/race and actual-image encrypted echo,
   explicit-disabled operation and deliberately denied ping-socket startup under
   the existing resource/cleanup gates. Promote only the same tested artifact.
+  Run 37842268168 passed all 19 jobs at `d349550`; all sixteen workload resource
+  and cleanup artifacts plus same-digest promotion were independently verified.
+  See [acceptance](RELEASE_IMAGE_TEST.md#latest-validated-default-guest-ping).
   Issue #3's arbitrary-ICMP/GRE/EoIP scope is separate from echo support.
+- [ ] Extend bounded echo-load evidence to request-quota saturation and expiry;
+  add the known `icmp_echo_limit` refusal to TUN log aggregation before treating
+  that profile as quiet under saturation. The existing request/memory caps remain
+  enforced, and Compose log retention remains bounded.
 
 ## First implementation milestone
 

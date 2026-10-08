@@ -52,7 +52,13 @@ through a ping socket (`SOCK_DGRAM`), never raw sockets or subprocesses. False
 disables guest echo. The container network namespace must allow the process group
 in `net.ipv4.ping_group_range`; unavailable sockets fail startup with instructions
 to permit that group or disable echo. The application does not alter sysctls.
+The reader reserves 64 KiB plus entry overhead from the shared socket budget.
+Outstanding requests are capped at 1,024, expire after five seconds and also
+consume that budget; see `icmp_echo_limit` in [observability](OBSERVABILITY.md).
 Only echo request/reply is supported, not arbitrary ICMP or encapsulated tunnels.
+The older [issue #3 example](https://github.com/irctrakz/wgslirp/issues/3) used
+`SOCKET_PROTOCOL`; the executable has no such selector. Use `ICMP_ECHO` and
+remove `TCP_GATE_LOG` from older configurations.
 
 Library callers retain the legacy protocol default. For capability-free TCP/UDP
 plus echo, set `Config.Protocol="ip4:tcp"` and `Config.ICMPEcho=true`. This bool

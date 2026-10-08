@@ -19,15 +19,13 @@ The maintained [Compose file](../deploy/compose.yaml) runs a non-root container
 with all capabilities dropped, a read-only root, bounded logs and finite CPU,
 memory and PID limits. Its 1 CPU / 256 MiB profile is a validated small-workload
 baseline; size resources for your deployment using measurements.
-The pinned image below predates default-enabled ping; that change requires its
-own actual-image validation before promotion.
 
 Run these commands from the repository root on a Docker host. This Linux/amd64
-development image passed encrypted forwarding, fragment handling and SIGTERM
+development image passed encrypted TCP/UDP and ping, fragment handling and SIGTERM
 under traffic, then was promoted **without rebuilding**:
 
 ```sh
-export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:be56bb216de910559d457e3b23dd7cf0b796f2577474bcbc503a2ee759973e1b
+export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:197701ffd0d6453dd120838f680447a54fd166337f90808d49adb8a0e6bc02e1
 umask 077
 ```
 
@@ -86,7 +84,7 @@ curl --max-time 10 https://example.com
 
 In images with default-enabled echo, guest ping also checks forwarding. To stop and remove the
 container, run `docker compose -f deploy/compose.yaml down`.
-See [deployment guidance](DEPLOYMENT.md) and [image acceptance evidence](API_MIGRATION.md#acceptance-at-4b2e254)
+See [deployment guidance](DEPLOYMENT.md) and [image acceptance evidence](RELEASE_IMAGE_TEST.md#latest-validated-default-guest-ping)
 for runtime restrictions, credentials and validation details.
 
 ## Configuration
@@ -164,7 +162,7 @@ library-only and warn when set in the inline executable. Consult the
 flowchart LR
     Client[WireGuard client] <-->|Encrypted UDP| WG[WireGuard device]
     WG <-->|IPv4 packets| TUN[In-memory TUN]
-    TUN <-->|Inline delivery| Bridge[TCP / UDP bridges]
+    TUN <-->|Inline delivery| Bridge[TCP / UDP / echo bridges]
     Bridge <-->|Ordinary host sockets| Destination[Destination services]
 ```
 

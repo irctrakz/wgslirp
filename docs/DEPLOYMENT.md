@@ -10,12 +10,12 @@ operation; the application receives no Docker socket or host network access.
 Use Linux/amd64 and a digest from a successful development CI run. Candidate tags
 are not validation evidence. See [RELEASE_IMAGE_TEST.md](RELEASE_IMAGE_TEST.md)
 for the current tested source/digest and run reports. The example below uses the
-validated API-cleanup image with automatic peer discovery, bounded pooling and
-default-enabled fragment reassembly. See [its acceptance report](API_MIGRATION.md#acceptance-at-4b2e254).
+validated default-echo image with automatic peer discovery, bounded pooling and
+default-enabled fragment reassembly. See [its acceptance report](RELEASE_IMAGE_TEST.md#latest-validated-default-guest-ping).
 Older digest pins retain their own defaults. Arm64 runtime validation remains separate.
 
 ```sh
-export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:be56bb216de910559d457e3b23dd7cf0b796f2577474bcbc503a2ee759973e1b
+export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:197701ffd0d6453dd120838f680447a54fd166337f90808d49adb8a0e6bc02e1
 ```
 
 ## Keep credentials in a private local file
@@ -108,8 +108,8 @@ Destination firewalls and cloud rules can still block echo.
 
 Ping uses the container's normal network path. It supports echo only, not every
 ICMP type, GRE, EoIP or Ethernet tunnels. Correlation retains guest identity with
-finite request, expiry and shared-memory limits. Existing pinned images retain
-their prior activation policy; the image above predates default-enabled echo.
+finite request, expiry and shared-memory limits. Older pinned images retain
+their prior activation policy; the image above includes default-enabled echo.
 
 Library callers selecting `Config.Protocol = "ip4:icmp"` (the retained library
 default) try raw ICMP, then ping sockets. Capability-free Linux ping sockets

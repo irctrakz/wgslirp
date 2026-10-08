@@ -6,7 +6,54 @@ same commit. The candidate is published to GHCR, pulled by immutable digest and
 tested. Only a successful validation job (including cleanup) permits promotion
 of that digest to a unique development tag. Promotion does not rebuild the image.
 
-## Latest validated image - API cleanup
+## Latest validated default guest ping
+
+[Run 37842268168](https://github.com/irctrakz/wgslirp/actions/runs/37842268168)
+passed all 19 applicable jobs at `d349550a143114487175ef8232774ef4cc6c27ef`.
+The separate [Go Tests run](https://github.com/irctrakz/wgslirp/actions/runs/37842267652)
+also passed Linux build/vet, race-enabled unit/integration and fuzz checks.
+The tested and promoted Linux/amd64 image is:
+
+`ghcr.io/irctrakz/wgslirp@sha256:197701ffd0d6453dd120838f680447a54fd166337f90808d49adb8a0e6bc02e1`
+
+Development tag:
+`dev-d349550a143114487175ef8232774ef4cc6c27ef-37842268168-1`.
+
+Actual-image evidence verifies guest echo with `ICMP_ECHO` absent (default true),
+through a ping socket to the runner's gateway. The reply preserves guest
+address, ID, sequence and payload, with valid IPv4/ICMP checksums. The kernel
+response is independent of the application's packet synthesis; no subprocess
+or raw-socket fallback exists in this executable path.
+
+The same image deliberately failed startup with actionable instructions when
+namespace ping sockets were denied. Explicit `ICMP_ECHO=false` then started,
+dropped the guest echo and forwarded eight encrypted TCP/UDP rounds with that
+same denied namespace policy. Disabled reassembly/pooling were also verified;
+the default profile retained their enabled defaults and fragment recovery checks.
+
+Both forwarding profiles used UID 100, all capabilities dropped, read-only root,
+no-new-privileges, 1 CPU, 256 MiB RAM/no swap and 128 PIDs. SIGTERM under traffic
+exited zero in 487 / 74 ms. Sampled cgroup memory peaks were 61,652,992 /
+27,004,928 bytes, with zero memory/OOM/PID-limit events. These finite samples
+are not a general capacity or performance-gain claim.
+
+All sixteen existing encrypted workload resource/cleanup artifacts were
+independently inspected: maximum cgroup memory 1,046,781,952 bytes, below 2 GiB;
+zero memory/OOM/PID-limit events, successful workload acceptance and no owned
+residue. Actual-image cleanup removed runtime containers (including the denied
+trial), network, builder, cache volume and local candidate image. Registry
+candidate/development artifacts and CI evidence are retained deliberately.
+
+Promotion's manifest digest matches the tested digest exactly, with no rebuild.
+Main/master and latest were untouched; the private server was not used. Local
+socket ownership/ICMP checks, Linux cross-build, tagged vet/fixture compilation,
+documentation links and five invalid-report verifier controls also passed.
+Windows cannot compile the existing executable metrics code; Linux CI supplies
+the complete executable acceptance. Go library protocol defaults are unchanged.
+Echo quota-saturation/load and log-aggregation follow-up is recorded in the
+[architecture plan](ARCHITECTURE_PLAN.md#default-enabled-guest-ping).
+
+## Historical validated image - API cleanup
 
 [Run 37825299733](https://github.com/irctrakz/wgslirp/actions/runs/37825299733)
 passed all 19 applicable jobs at `4b2e254d0d66648af2b89384129a85a26c470ba6`.
