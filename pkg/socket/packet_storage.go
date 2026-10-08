@@ -3,6 +3,7 @@ package socket
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"sync/atomic"
 )
@@ -109,15 +110,11 @@ func (b *udpBridge) deliverDatagram(f *udpFlow, payload []byte, tos, ttl byte, m
 		size := minInt(maxFragment, len(datagram)-offset)
 		fragment := b.buffers.buildPacket(20+size, false, func() []byte {
 			out := make([]byte, 20+size)
-			copy(out, data[:20])
-			binary.BigEndian.PutUint16(out[2:4], uint16(len(out)))
 			flags := uint16(offset / 8)
 			if offset+size < len(datagram) {
 				flags |= 0x2000
 			}
-			binary.BigEndian.PutUint16(out[6:8], flags)
-			out[10], out[11] = 0, 0
-			binary.BigEndian.PutUint16(out[10:12], calculateChecksum(out[:20]))
+			packetwire.IPv4Header(out, f.dstIP, f.srcIP, 17, data[1], data[8], binary.BigEndian.Uint16(data[4:6]), flags)
 			copy(out[20:], datagram[offset:offset+size])
 			return out
 		})

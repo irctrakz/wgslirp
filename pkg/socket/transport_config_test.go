@@ -46,7 +46,7 @@ func TestTransportEnvironmentAndSnapshot(t *testing.T) {
 	if b.tuning != want || s.ttlOverride != 42 || !s.tosCopy ||
 		b.ackIdleGate != 23*time.Millisecond || b.ackIdleMinInflight != 1234 || b.ackIdleFail != 19*time.Second ||
 		!b.ackTrace || b.mssClamp.Load() != 1000 || b.paceUS.Load() != 13 || b.errorSignal != "rst" ||
-		!b.logHandshake || !b.gateLogDebug || b.gateLogDisabled {
+		!b.logHandshake || b.tuning.GateLog != "debug" {
 		t.Fatal("runtime ignored transport snapshot")
 	}
 }
@@ -100,7 +100,7 @@ func TestTransportDefaultsAndBoundaries(t *testing.T) {
 	}
 	b := newTCPBridge(NewSocketInterface(cfg))
 	defer b.stop()
-	if b.ackIdleGate != 0 || b.ackIdleFail != 0 || !b.gateLogDisabled || b.tuning.WindowScale != 0 || b.tuning.CongestionControl != "off" {
+	if b.ackIdleGate != 0 || b.ackIdleFail != 0 || b.tuning.GateLog != "off" || b.tuning.WindowScale != 0 || b.tuning.CongestionControl != "off" {
 		t.Fatal("zero/off overrides ignored")
 	}
 	for _, tc := range []struct{ override, want int }{{0, 10000}, {1, 1000}, {2, 2000}, {10, 10000}, {math.MaxInt32, 10000}} {

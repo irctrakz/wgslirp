@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"golang.org/x/net/dns/dnsmessage"
 	"net"
 	"net/http"
@@ -142,19 +143,16 @@ func validDNSHealthReply(p []byte, server, client [4]byte, id uint16) bool {
 }
 
 func validDNSHealthReplyForName(p []byte, server, client [4]byte, id uint16, name string) bool {
-	if len(p) < 28 || p[0]>>4 != 4 || p[9] != 17 {
-		return false
-	}
-	ihl := int(p[0]&15) * 4
-	total := int(binary.BigEndian.Uint16(p[2:4]))
-	if ihl < 20 || total < ihl+8 || total > len(p) || binary.BigEndian.Uint16(p[6:8])&0x3fff != 0 {
+	// Apply the same wire validation as socket input before DNS-specific matching.
+	p, ihl, err := packetwire.ParseTransport(p, 17)
+	if err != nil {
 		return false
 	}
 	if string(p[12:16]) != string(server[:]) || string(p[16:20]) != string(client[:]) {
 		return false
 	}
-	u := p[ihl:total]
-	if binary.BigEndian.Uint16(u[:2]) != 53 || binary.BigEndian.Uint16(u[2:4]) != 40053 || int(binary.BigEndian.Uint16(u[4:6])) != len(u) {
+	u := p[ihl:]
+	if binary.BigEndian.Uint16(u[:2]) != 53 || binary.BigEndian.Uint16(u[2:4]) != 40053 {
 		return false
 	}
 	var msg dnsmessage.Message
@@ -214,63 +212,11 @@ func buildDNSQuery(id uint16, name string) []byte {
 }
 
 func buildIPv4UDP(srcIP, dstIP [4]byte, srcPort, dstPort uint16, payload []byte) []byte {
-	ihl := 20
-	udpLen := 8 + len(payload)
-	totalLen := ihl + udpLen
-	pkt := make([]byte, totalLen)
-	pkt[0] = 0x45
-	pkt[1] = 0x00
-	pkt[2] = byte(totalLen >> 8)
-	pkt[3] = byte(totalLen)
-	pkt[8] = 64
-	pkt[9] = 17
-	copy(pkt[12:16], srcIP[:])
-	copy(pkt[16:20], dstIP[:])
-	ipcs := checksum(pkt[:20])
-	pkt[10] = byte(ipcs >> 8)
-	pkt[11] = byte(ipcs)
-	off := 20
-	binary.BigEndian.PutUint16(pkt[off:off+2], srcPort)
-	binary.BigEndian.PutUint16(pkt[off+2:off+4], dstPort)
-	binary.BigEndian.PutUint16(pkt[off+4:off+6], uint16(udpLen))
-	copy(pkt[off+8:], payload)
-	ucs := udpChecksum(pkt[off:off+udpLen], srcIP, dstIP)
-	binary.BigEndian.PutUint16(pkt[off+6:off+8], ucs)
+	if len(payload) > 65507 {
+		return nil
+	}
+	pkt := make([]byte, 28+len(payload))
+	packetwire.IPv4Header(pkt, srcIP, dstIP, 17, 0, 64, 0, 0)
+	packetwire.UDP(pkt[20:], srcIP, dstIP, srcPort, dstPort, payload)
 	return pkt
-}
-
-func checksum(data []byte) uint16 {
-	var sum uint32
-	for i := 0; i+1 < len(data); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(data[i:]))
-	}
-	if len(data)%2 == 1 {
-		sum += uint32(uint16(data[len(data)-1]) << 8)
-	}
-	for (sum >> 16) != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
-}
-
-func udpChecksum(udp []byte, srcIP, dstIP [4]byte) uint16 {
-	sum := uint32(0)
-	pseudo := make([]byte, 12)
-	copy(pseudo[0:4], srcIP[:])
-	copy(pseudo[4:8], dstIP[:])
-	pseudo[9] = 17
-	binary.BigEndian.PutUint16(pseudo[10:12], uint16(len(udp)))
-	for i := 0; i < len(pseudo); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(pseudo[i:]))
-	}
-	for i := 0; i+1 < len(udp); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(udp[i:]))
-	}
-	if len(udp)%2 == 1 {
-		sum += uint32(uint16(udp[len(udp)-1]) << 8)
-	}
-	for (sum >> 16) != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
 }
