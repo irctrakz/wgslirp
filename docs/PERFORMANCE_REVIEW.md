@@ -21,12 +21,14 @@ isolated allocation counts. The latter's six full-pooling CPU profiles show:
 | Function | Median share | Interpretation |
 | --- | ---: | --- |
 | `internal/runtime/syscall.Syscall6` | 36.25% flat | Socket operations across router, guest and echo endpoints |
-| `runtime.memmove` | 2.46% flat | Copies across the whole fixture, not one boundary |
+| `runtime.memmove` | 2.46% flat | One copy helper across the fixture, not total copy cost |
+| `runtime.duffcopy` | 4.62% flat | Another copy helper, including fixed-size structure copies |
+| `runtime.memclrNoHeapPointers` | 1.35% flat | Memory clearing across the whole fixture |
 | `runtime.mallocgc` | 5.81% cumulative | Allocation path, including its callees |
 | `fmt.Sprintf` | 2.13% cumulative | Formatting across the whole fixture |
 | `socket.parseTCPSegment` | 3.17% cumulative | TCP validation/tuple construction, including formatting |
 
-[All 30 selected profile rows](PERFORMANCE_REVIEW_PROFILE_SAMPLES.csv) are retained
+[All 42 selected profile rows](PERFORMANCE_REVIEW_PROFILE_SAMPLES.csv) are retained
 from [run 37697847115](https://github.com/irctrakz/wgslirp/actions/runs/37697847115).
 That run uses source `7fcaa40` with the full-pooling policy files restored from
 `90e4df7`; it is supporting evidence, not a new profile of the default-on source.
@@ -34,6 +36,11 @@ The router, encrypted guest and echo endpoints share one process and one CPU.
 Nested cumulative percentages overlap and must not be added. A large cumulative
 `writeToSocket` share is the complete forwarding path, not the cost of its copy.
 These profiles do not isolate production router CPU or loss-heavy recovery cost.
+`memmove` alone is not a total or upper bound on copying. A focused call-graph
+review of the first full-pooling profile attributes 0.73 of its 0.79 seconds in
+`duffcopy` to upstream WireGuard `StdNetBind.putMessages`, rather than the router's
+TUN queue. This attribution is one profile, not a six-profile median. Do not
+equate that dependency's message reset/reuse work with an avoidable payload copy.
 Earlier [unpaced fragment allocation profiles](ENCRYPTED_FRAGMENTS.md) identified
 upstream WireGuard message buffers as the largest sampled live allocation source.
 That argues against assuming that further fragment-cache tuning will materially
@@ -101,8 +108,9 @@ WireGuard-owned read buffers. Its first copy might eventually be avoided by an
 explicit owned-packet enqueue path. That changes asynchronous lifetime, rejection,
 close/drain and shared reservation accounting. It is a higher-risk project, not
 a simple deletion: retain the public copying API and do not introduce unaccounted
-or prematurely returned buffers. With only 2.46% whole-fixture copy CPU, pursue
-this only if a router-isolated profile demonstrates a consequential bottleneck.
+or prematurely returned buffers. The whole-fixture copy-helper shares do not
+attribute this boundary's cost; pursue it only if a router-isolated profile
+demonstrates a consequential bottleneck.
 
 ### 5. Profile repeated SACK snapshots under loss before changing recovery
 
