@@ -1,5 +1,7 @@
 package socket
 
+import "github.com/irctrakz/wgslirp/internal/packetwire"
+
 // buildICMPUnreachable builds an IPv4 ICMP Destination Unreachable packet
 // with the given code (e.g., 1=host unreachable, 3=port unreachable).
 // It includes the original IP header and first 8 bytes of the payload per RFC.
@@ -29,23 +31,7 @@ func buildICMPUnreachable(srcIP, dstIP [4]byte, code byte, original []byte) []by
 	icmpBody[2] = byte(cs >> 8)
 	icmpBody[3] = byte(cs & 0xff)
 
-	// Wrap with IPv4 header
-	ih := 20
-	total := ih + len(icmpBody)
-
-	pkt[0] = 0x45
-	pkt[1] = 0x00
-	pkt[2] = byte(total >> 8)
-	pkt[3] = byte(total & 0xff)
-	pkt[4], pkt[5] = 0, 0
-	pkt[6], pkt[7] = 0, 0
-	pkt[8] = 64
-	pkt[9] = 1 // ICMP
-	copy(pkt[12:16], srcIP[:])
-	copy(pkt[16:20], dstIP[:])
-	ipcs := calculateChecksum(pkt[:20])
-	pkt[10] = byte(ipcs >> 8)
-	pkt[11] = byte(ipcs & 0xff)
+	packetwire.IPv4Header(pkt, srcIP, dstIP, 1, 0, 64, 0, 0)
 
 	return pkt
 }

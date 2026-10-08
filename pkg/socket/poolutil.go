@@ -67,14 +67,3 @@ func WrapPacket(b []byte) core.Packet {
 	}
 	return core.NewPacket(b)
 }
-
-// DEPRECATED: use WrapPacket. Kept for compatibility during refactors.
-func pktWrapMaybe(b []byte) core.Packet { return WrapPacket(b) }
-
-// pktReleaseMaybe releases a Packet if pooling is enabled. It is safe to call
-// on non-pooled packets (no-op).
-func pktReleaseMaybe(p core.Packet) {
-	if poolingEnabled() {
-		core.ReleasePacket(p)
-	}
-}

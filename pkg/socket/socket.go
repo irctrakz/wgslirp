@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"net"
 	"strings"
 	"sync"
@@ -429,61 +430,7 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 		dm.UDPExt = map[string]uint64{"tx_enq": enq, "tx_proc": proc}
 	}
 	if tcp != nil {
-		flows := tcp.flowSnapshot()
-		active := uint64(len(flows))
-		// Snapshot membership before taking individual flow locks.
-		ackIdle := uint64(0)
-		if tcp.ackIdleGate > 0 {
-			for _, f := range flows {
-				f.stateMu.Lock()
-				inFlight := int(f.serverNxt - f.sndUna)
-				minInflight := tcp.ackIdleMinInflight
-				if minInflight <= 0 {
-					minInflight = f.mss
-				}
-				if inFlight >= minInflight {
-					if time.Since(f.lastAckTime) >= tcp.ackIdleGate {
-						ackIdle++
-					}
-				}
-				f.stateMu.Unlock()
-			}
-		}
-		dm.TCP.DeliveryRefused = tcp.deliveryRefused.Load()
-		dm.TCP.Counters = loadSocketMetrics(&tcp.metrics)
-		dm.TCP.ActiveFlows = active
-		// TCP extra debug counters
-		tcp.rtoMu.Lock()
-		activeRTOFlows := uint64(len(tcp.rtoActiveFlows))
-		tcp.rtoMu.Unlock()
-		// Compose TCPExt with RTO and ACK classification counters
-		dialUsed, dialPeak, dialLimit, dialRejected := tcp.dialSlots.snapshot()
-		bufferUsed, bufferPeak, bufferLimit, bufferRejected := tcp.buffers.snapshot()
-		dm.TCPExt = map[string]uint64{
-			"dial_reserved":         dialUsed,
-			"dial_peak":             dialPeak,
-			"dial_limit":            dialLimit,
-			"dial_refused":          dialRejected,
-			"socket_buffer_bytes":   bufferUsed,
-			"socket_buffer_peak":    bufferPeak,
-			"socket_buffer_limit":   bufferLimit,
-			"socket_buffer_refused": bufferRejected,
-			"buffer_dropped":        tcp.bufferDrops.Load(),
-			"rto":                   atomic.LoadUint64(&tcp.rtoCount),
-			"active_rto_flows":      activeRTOFlows,
-			"ack_advanced":          atomic.LoadUint64(&tcp.ackAdv),
-			"ack_duplicate":         atomic.LoadUint64(&tcp.ackDup),
-			"ack_window_update":     atomic.LoadUint64(&tcp.ackWndOnly),
-			"ack_idle_flows":        ackIdle,
-			// Async dial and pending-buffer instrumentation
-			"dial_start":    atomic.LoadUint64(&tcp.dialStart),
-			"dial_ok":       atomic.LoadUint64(&tcp.dialOk),
-			"dial_fail":     atomic.LoadUint64(&tcp.dialFail),
-			"dial_inflight": uint64(atomic.LoadInt64(&tcp.dialInflight)),
-			"pend_enq":      atomic.LoadUint64(&tcp.pendEnq),
-			"pend_flush":    atomic.LoadUint64(&tcp.pendFlush),
-			"pend_drop":     atomic.LoadUint64(&tcp.pendDrop),
-		}
+		dm.TCP, dm.TCPExt = tcp.snapshotMetrics()
 	}
 	// FlowManager and egress limiter removed
 	// Fallback removed
@@ -610,19 +557,7 @@ func (s *SocketInterface) listenLoop(releaseRead func()) {
 }
 
 // calculateChecksum calculates the Internet checksum for the given data
-func calculateChecksum(data []byte) uint16 {
-	var sum uint32
-	for i := 0; i < len(data)-1; i += 2 {
-		sum += uint32(data[i])<<8 | uint32(data[i+1])
-	}
-	if len(data)%2 == 1 {
-		sum += uint32(data[len(data)-1]) << 8
-	}
-	for sum>>16 > 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return uint16(^sum)
-}
+func calculateChecksum(data []byte) uint16 { return packetwire.Checksum(data) }
 
 // processICMPReply accounts parser scratch and the synthesized reply separately.
 func (s *SocketInterface) processICMPReply(body []byte, peerIP, myIP net.IP) error {
@@ -639,15 +574,10 @@ func (s *SocketInterface) processICMPReply(body []byte, peerIP, myIP net.IP) err
 	}
 	packet := s.buffers().buildPacket(20+len(body), false, func() []byte {
 		out := make([]byte, 20+len(body))
-		out[0], out[8], out[9] = 0x45, 64, 1
-		total := len(out)
-		out[2], out[3] = byte(total>>8), byte(total)
-		id := nextIPID()
-		out[4], out[5] = byte(id>>8), byte(id)
-		copy(out[12:16], peerIP.To4())
-		copy(out[16:20], myIP.To4())
-		checksum := calculateChecksum(out[:20])
-		out[10], out[11] = byte(checksum>>8), byte(checksum)
+		var src, dst [4]byte
+		copy(src[:], peerIP.To4())
+		copy(dst[:], myIP.To4())
+		packetwire.IPv4Header(out, src, dst, 1, 0, 64, nextIPID(), 0)
 		copy(out[20:], body)
 		return out
 	})

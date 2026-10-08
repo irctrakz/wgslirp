@@ -9,15 +9,16 @@ import (
 // TransportConfig controls TCP behavior and synthesized IP headers. It contains
 // only values; constructors snapshot it so callers can safely reuse a template.
 type TransportConfig struct {
-	AckIdleGateMs       int // zero disables gating
-	AckIdleMinInflight  int // zero uses one MSS
-	AckIdleFailSec      int // zero disables ACK-idle failure
-	AckTrace            bool
-	MSSClamp            int // zero leaves the peer/MTU limit unchanged
-	PaceUS              int
-	ErrorSignal         string // icmp, rst, none
-	LogHandshake        bool
-	GateLog             string // info, debug, off
+	AckIdleGateMs      int // zero disables gating
+	AckIdleMinInflight int // zero uses one MSS
+	AckIdleFailSec     int // zero disables ACK-idle failure
+	AckTrace           bool
+	MSSClamp           int // zero leaves the peer/MTU limit unchanged
+	PaceUS             int
+	ErrorSignal        string // icmp, rst, none
+	LogHandshake       bool
+	// Deprecated: retained for configuration compatibility; send-gate logging has no active caller.
+	GateLog             string // accepted values: info, debug, off
 	FastDialMs          int    // zero retains the historical one-millisecond minimum
 	CongestionControl   string // newreno or off
 	InitialCwndMSS      int    // zero uses RFC 6928; positive values only reduce the window
