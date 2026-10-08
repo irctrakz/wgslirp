@@ -1,6 +1,8 @@
 name: Go Tests
 
 on:
+  push:
+    branches: [codex/architecture-hardening]
   workflow_dispatch:
   workflow_call:
 
