@@ -6,7 +6,25 @@ same commit. The candidate is published to GHCR, pulled by immutable digest and
 tested. Only a successful validation job (including cleanup) permits promotion
 of that digest to a unique development tag. Promotion does not rebuild the image.
 
-## Latest validated default-enabled reassembly — 2026-10-07 UTC
+## Latest validated image - API cleanup
+
+[Run 37825299733](https://github.com/irctrakz/wgslirp/actions/runs/37825299733)
+passed all 19 applicable jobs at `4b2e254d0d66648af2b89384129a85a26c470ba6`.
+The tested and promoted Linux/amd64 image is:
+
+`ghcr.io/irctrakz/wgslirp@sha256:be56bb216de910559d457e3b23dd7cf0b796f2577474bcbc503a2ee759973e1b`
+
+Development tag:
+`dev-4b2e254d0d66648af2b89384129a85a26c470ba6-37825299733-1`.
+
+The default/disabled actual-image samples verified non-root startup, dropped
+capabilities, encrypted TCP/UDP and fragment handling, and SIGTERM under traffic
+with the bounded deployment profile. Promotion retained the tested digest without
+rebuilding. See [the acceptance report](API_MIGRATION.md#acceptance-at-4b2e254)
+for measurements, independent controls and cleanup evidence. Older image pins
+retain their original defaults and APIs.
+
+## Historical validated default-enabled reassembly — 2026-10-07 UTC
 
 [Run 37571042489](https://github.com/irctrakz/wgslirp/actions/runs/37571042489)
 passed all 19 applicable jobs at `7fc97fbabec572771deba26c1fa38994baa67403`,

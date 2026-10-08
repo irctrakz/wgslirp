@@ -7,7 +7,7 @@ bridge, TUN, device, capture, pooling policy, health probe or metrics reporter.
 Explicit runtime MTU/MSS/pacing APIs remain separate, deliberate operations.
 
 The executable has no JSON/YAML file or command-line override layer. The
-[README reference](README.md#environment-variables-reference) lists its settings.
+[environment reference](ENVIRONMENT.md) lists its settings.
 Unknown variables are not rejected (the process inherits unrelated OS variables).
 
 ## Validation and migration
