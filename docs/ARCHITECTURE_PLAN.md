@@ -825,6 +825,12 @@ follow-ups: disabled-debug formatting, typed flow keys, TCP read scratch reuse,
 ownership-audited copy reduction and loss-specific SACK snapshots. Measure each
 candidate before implementation; no broad representation or lock rewrite is justified.
 
+- [ ] Audit TCP RTO policy separately from logging: reconcile the RTT estimator's
+  60-second ceiling with retransmission backoff's 2-second ceiling. Establish
+  intended behavior before changing either bound; preserve cancellation, lock
+  ownership and recovery semantics, and validate with bounded WAN/loss workloads.
+  An RTO is a retransmission timeout, not a measured network latency.
+
 ## First implementation milestone
 
 Complete Phase 0 and Phase 1 before beginning broad TCP refactoring. The milestone is reached when publishing is test-gated, sensitive diagnostics are repaired, lifecycle/health regressions pass, and invalid configuration cannot cause the identified panics. Then make resource controls effective before investing in structural cleanup.
