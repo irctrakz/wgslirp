@@ -831,6 +831,14 @@ candidate before implementation; no broad representation or lock rewrite is just
   ownership and recovery semantics, and validate with bounded WAN/loss workloads.
   An RTO is a retransmission timeout, not a measured network latency.
 
+- [x] Add manual, discrete [independent failure controls](INDEPENDENT_FAILURE_CHECKS.md)
+  outside release dependencies: retransmission, reservation release, fragment
+  source-quota recovery and late dial cancellation. Require unchanged baseline
+  success, compilable mutations and exact failure diagnostics; retain bounded
+  execution, resource and cleanup evidence. CI verification is recorded separately.
+- [ ] Expand independent failure conditions and real-client/endurance evidence
+  as tracked in [the checks follow-ups](INDEPENDENT_FAILURE_CHECKS.md#scope-and-follow-ups).
+
 ## First implementation milestone
 
 Complete Phase 0 and Phase 1 before beginning broad TCP refactoring. The milestone is reached when publishing is test-gated, sensitive diagnostics are repaired, lifecycle/health regressions pass, and invalid configuration cannot cause the identified panics. Then make resource controls effective before investing in structural cleanup.
