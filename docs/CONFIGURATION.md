@@ -43,15 +43,15 @@ Unknown variables are not rejected (the process inherits unrelated OS variables)
   variables from deployments. The optional library processor still supports
   them through the adapters below; it defaults to 4 workers and 1000 slots and
   accepts 1-256 workers and 1-65536 slots.
-- `POOLING` defaults to true; `POOL_WRAP` defaults to false. Their process-wide policy is frozen
+- `POOLING` defaults to true. Its process-wide policy is frozen
   before the first socket interface or packet allocation. A repeated identical
   configuration is safe; conflicting reconfiguration returns an error.
   With `POOLING=true`, all pool-capable synthesized packets through 16,384 bytes
   use the bounded packet cache, including ACK/control packets. Larger buffers
   remain exact-sized. `POOLING=false` selects exact-sized storage at every size.
-  Live reservations follow the actual storage capacity. `POOL_WRAP` retains its
-  legacy ownership behavior for caller-provided buffers; it is not required by
-  maintained forwarding paths. Idle retention stays bounded at 960 KiB process-wide.
+  Live reservations follow the actual storage capacity. Packet constructors choose
+  ownership explicitly; configurable wrapping was removed. Idle retention stays
+  bounded at 960 KiB process-wide.
   This does not extend pooling into UDP reply or IPv4 reassembly storage.
 - Capture is disabled unless `WG_PCAP` names a path. `WG_PCAP_MAX_BYTES` defaults
   to 64 MiB, minimum 24 bytes. Parsing and opening happen at startup, so invalid
@@ -105,33 +105,13 @@ on failure. `StartDevice` itself no longer reads environment settings. Library
 users relying on implicit pooling/capture environment reads must explicitly parse
 and configure those process-wide policies before creating components.
 
-## Legacy JSON/YAML model
+## Retired configuration surfaces
 
-`pkg/config` is deprecated, retained for external library consumers, and is not
-imported by the executable or another production package in this repository.
-Its public loaders, types, validation, logging and save APIs remain available.
-It describes the older `core.RouterConfig` / `core.WireGuardConfig` model, with
-`ROUTER_*`, `WIREGUARD_*` and `LOGGING_*` variables. These variables and JSON/YAML
-files do **not** configure the executable's `WG_*`/socket startup path.
+The legacy `pkg/config` JSON/YAML model and its core router/WireGuard types have
+been removed. Use validated `socket.Config` and `wireguard.DeviceConfig`, or
+explicit environment parsers. Legacy file settings never configured the executable.
 
-For existing consumers, precedence remains caller-controlled: starting with
-`DefaultConfig`, then `LoadFromFile`, then `LoadFromEnv` overlays file fields and
-nonempty environment values in that order. Loaders do not automatically validate;
-call `Validate` afterward. The legacy environment loader retains its historical
-permissive parsing and must not be presented as the executable's strict parser.
-
-For migration, deliberately map device keys, port and peers to `wireguard.DeviceConfig`
-and socket transport/resource values to `socket.Config`, then validate them.
-Do not mechanically map legacy kernel-TUN/router fields or source-validation
-flags: there is no equivalent supported setting for those in the current inline
-userspace path. This deprecation avoids inventing a lossy adapter or removing an
-exported API whose external consumers cannot be inventoried locally.
-
-### Inactive send-gate logging compatibility
-
-`TCP_GATE_LOG` and `socket.TransportConfig.GateLog` are deprecated. Their former
-private logger had no callers; removing it does not change emitted logs. Values
-`info`, `debug`, `off` and existing environment aliases remain accepted and
-validated, with the same default, so existing configurations keep loading. The
-field remains in configuration snapshots for compatibility. It does not control
-active ACK, handshake, admission-failure or RTO diagnostics.
+`POOL_WRAP` and inactive `TCP_GATE_LOG` are removed. Startup rejects their presence,
+including false/off values, with instructions to remove them. `POOLING=false`
+remains supported. Debug controls logging only and never changes packet ownership.
+See [breaking-change migration and policy](API_MIGRATION.md).

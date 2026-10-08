@@ -61,7 +61,7 @@ func TestICMPDatagramIntegration_EchoLoopback(t *testing.T) {
 	}
 
 	request := buildIPv4ICMP(net.IPv4(10, 0, 0, 5).To4(), net.IPv4(127, 0, 0, 1).To4(), requestBody)
-	packet := core.NewPacket(request)
+	packet := core.NewCopiedPacket(request)
 	defer core.ReleasePacket(packet)
 	if err := s.WritePacket(packet); err != nil {
 		t.Fatalf("write echo request: %v", err)

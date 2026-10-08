@@ -13,6 +13,9 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 	cfg := base
 	transport := base.transportConfig()
 	cfg.Transport = &transport
+	if _, present := lookup("TCP_GATE_LOG"); present {
+		return cfg, fmt.Errorf("TCP_GATE_LOG was removed because it was inactive; remove this setting")
+	}
 	for _, setting := range []struct {
 		name   string
 		target *int
@@ -71,18 +74,12 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 		name   string
 		target *string
 	}{
-		{"TCP_ERROR_SIGNAL", &transport.ErrorSignal}, {"TCP_GATE_LOG", &transport.GateLog},
+		{"TCP_ERROR_SIGNAL", &transport.ErrorSignal},
 		{"TCP_CC", &transport.CongestionControl},
 	} {
 		if value, present := lookup(setting.name); present {
 			*setting.target = strings.ToLower(strings.TrimSpace(value))
 		}
-	}
-	switch transport.GateLog {
-	case "0", "false", "no":
-		transport.GateLog = "off"
-	case "1", "true", "yes":
-		transport.GateLog = "info"
 	}
 	switch transport.CongestionControl {
 	case "reno", "new-reno":

@@ -378,20 +378,20 @@ func TestIPv4FragmentConfigurationAndShutdown(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Stop() })
 	first := fragmentFixture(17, 1, 0, true, make([]byte, 8))
-	if err := s.WritePacket(core.NewPacket(first)); err != nil {
+	if err := s.WritePacket(core.NewCopiedPacket(first)); err != nil {
 		t.Fatal(err)
 	}
 	if s.DetailedMetrics().IPv4Fragments["cached"] != 1 {
 		t.Fatal("fragment not retained")
 	}
 	// A malformed UDP completion must release the dispatch reservation too.
-	if err := s.WritePacket(core.NewPacket(fragmentFixture(17, 1, 8, false, []byte{1}))); !errors.Is(err, ErrMalformedPacket) {
+	if err := s.WritePacket(core.NewCopiedPacket(fragmentFixture(17, 1, 8, false, []byte{1}))); !errors.Is(err, ErrMalformedPacket) {
 		t.Fatal(err)
 	}
 	if s.DetailedMetrics().IPv4Fragments["reserved_bytes"] != 0 {
 		t.Fatal("invalid transport retained a fragment reservation")
 	}
-	if err := s.WritePacket(core.NewPacket(first)); err != nil {
+	if err := s.WritePacket(core.NewCopiedPacket(first)); err != nil {
 		t.Fatal(err)
 	}
 	s.Stop()

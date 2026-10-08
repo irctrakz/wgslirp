@@ -51,7 +51,7 @@ func TestWGPacketProcessor_RoutesToTunRead(t *testing.T) {
 
     // Prepare synthetic IPv4 UDP packet and inject via processor
     pkt := MakeIPv4(net.IPv4(8,8,8,8), net.IPv4(10,0,0,2), 17, []byte("DNS"))
-    if err := proc.ProcessPacket(core.NewPacket(pkt)); err != nil {
+    if err := proc.ProcessPacket(core.NewCopiedPacket(pkt)); err != nil {
         t.Fatalf("processor error: %v", err)
     }
 

@@ -62,7 +62,7 @@ func TestSaturationStreaksAndConcurrentSnapshots(t *testing.T) {
 	}
 	defer tun.Close()
 	p := NewWGPacketProcessor(tun).(*WGPacketProcessor)
-	send := func() error { return p.ProcessPacket(core.NewPacket(make([]byte, 20))) }
+	send := func() error { return p.ProcessPacket(core.NewCopiedPacket(make([]byte, 20))) }
 	if err := send(); err != nil {
 		t.Fatal(err)
 	}

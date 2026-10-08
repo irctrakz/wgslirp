@@ -50,8 +50,8 @@ ownership with its caller on rejection. A WireGuard processor without a TUN
 rejects rather than silently accepting ownership.
 
 Use the [explicit packet APIs](PACKET_OWNERSHIP.md) to choose borrowing or copying
-independently of debug mode. Legacy constructors retain their compatibility
-behavior; a borrowed view never permits mutation after packet publication.
+independently of logging. Legacy packet constructors have been removed; see
+[migration](API_MIGRATION.md). A borrowed view never permits mutation after publication.
 
 ## Adjacent lifecycle boundaries
 

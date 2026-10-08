@@ -332,22 +332,21 @@ func testReleaseImage(t *testing.T, reassembly bool) {
 	report["verified_tcp_udp_rounds"] = 8
 	// Capture startup evidence before the expiry workload can rotate bounded logs.
 	// Verify the image's effective policy, not just the fixture's intended inputs.
-	var policies []struct{ Pool struct{ Enabled, Wrap bool } }
+	var policies []struct{ Pool struct{ Enabled bool } }
 	for _, line := range strings.Split(mustDocker("logs", name), "\n") {
 		const marker = "effective configuration: "
 		if _, summary, found := strings.Cut(line, marker); found {
-			var policy struct{ Pool struct{ Enabled, Wrap bool } }
+			var policy struct{ Pool struct{ Enabled bool } }
 			if err := json.Unmarshal([]byte(summary), &policy); err != nil {
 				t.Fatal("invalid effective configuration", err)
 			}
 			policies = append(policies, policy)
 		}
 	}
-	if len(policies) != 1 || policies[0].Pool.Enabled != reassembly || policies[0].Pool.Wrap {
-		t.Fatal("release image pooling/default wrapping policy mismatch")
+	if len(policies) != 1 || policies[0].Pool.Enabled != reassembly {
+		t.Fatal("release image pooling policy mismatch")
 	}
 	report["pooling"] = policies[0].Pool.Enabled
-	report["pool_wrap"] = policies[0].Pool.Wrap
 	// Exercise the actual wireguard-go error callback with a bounded encrypted
 	// fragment burst. Explicit disabled mode rejects fragments; default mode rejects a
 	// conflicting overlap and disposes its assembly. Later traffic must progress.

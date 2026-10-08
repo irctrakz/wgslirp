@@ -33,7 +33,7 @@ func (m *mockPacketProcessor) ProcessPacket(packet core.Packet) error {
 	data := make([]byte, packet.Length())
 	copy(data, packet.Data())
 
-	m.processedPackets = append(m.processedPackets, core.NewPacket(data))
+	m.processedPackets = append(m.processedPackets, core.NewCopiedPacket(data))
 
 	// Signal that a packet was received
 	if m.packetReceived != nil {
@@ -104,7 +104,7 @@ func TestMockTUNDevice(t *testing.T) {
 	}
 
 	// Test writing a packet
-	testPacket := core.NewPacket(testData)
+	testPacket := core.NewCopiedPacket(testData)
 	if err := tun.WritePacket(testPacket); err != nil {
 		t.Fatalf("Failed to write packet: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestTUNLoopback(t *testing.T) {
 	}
 
 	// Test writing a packet
-	testPacket := core.NewPacket(testData)
+	testPacket := core.NewCopiedPacket(testData)
 	if err := tun.WritePacket(testPacket); err != nil {
 		t.Fatalf("Failed to write packet: %v", err)
 	}
@@ -286,10 +286,4 @@ func TestTUNLoopback(t *testing.T) {
 	if err := tun.Stop(); err != nil {
 		t.Fatalf("Failed to stop TUN device: %v", err)
 	}
-}
-
-// TestRealTUNDevice tests the real TUN device implementation
-// This test is skipped because kernel TUN devices are no longer supported
-func TestRealTUNDevice(t *testing.T) {
-	t.Skip("Skipping test because kernel TUN devices are no longer supported")
 }

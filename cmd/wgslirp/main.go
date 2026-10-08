@@ -9,7 +9,6 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/logging"
 	"github.com/irctrakz/wgslirp/pkg/socket"
 	wg "github.com/irctrakz/wgslirp/pkg/wireguard"
@@ -35,12 +34,10 @@ func run() error {
 	interval := cfg.MetricsInterval
 	if debugOn {
 		logging.SetLevel(logging.DebugLevel)
-		core.SetDebugMode(true)
-		logging.Infof("DEBUG enabled: verbose logging and packet copy mode")
+		logging.Infof("DEBUG enabled: verbose logging")
 	} else {
 		// Default to warn to keep runtime quiet unless explicitly enabled
 		logging.SetLevel(logging.WarnLevel)
-		core.SetDebugMode(false)
 		// If metrics are enabled, raise to info so metrics dumps are visible
 		if metricsEnabled {
 			logging.SetLevel(logging.InfoLevel)

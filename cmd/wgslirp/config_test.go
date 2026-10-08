@@ -14,7 +14,7 @@ func TestApplicationConfigurationSnapshotAndSummary(t *testing.T) {
 	entries := []string{"WG_PRIVATE_KEY=" + key, "WG_LISTEN_PORT=12345", "WG_MTU=1420", "WG_PEER_0_PUBLIC_KEY=" + key,
 		"WG_PEER_0_ENDPOINT=private.example:1234", "WG_PEER_0_ALLOWED_IPS=10.3.0.0/16", "WG_DEBUG=true", "DEBUG=true", "WG_DISABLE_IPV6=false",
 		"WG_OVERLAY_ROUTING=true", "WG_OVERLAY_EXCLUDE_CIDRS=10.4.0.0/16", "WG_TUN_QUEUE_CAP=7", "WG_PCAP=/private/capture", "WG_PCAP_MAX_BYTES=44",
-		"POOLING=true", "POOL_WRAP=true", "HEALTHCHECK=true", "HEALTH_HTTP_URL=https://user:password@private.example/path?token=secret",
+		"POOLING=true", "HEALTHCHECK=true", "HEALTH_HTTP_URL=https://user:password@private.example/path?token=secret",
 		"HEALTH_DNS_NAME=health.example", "HEALTH_DNS_IP=127.0.0.2", "METRICS_LOG=true", "METRICS_INTERVAL=7s", "METRICS_FORMAT=json", "PRINT_CONFIG=yes",
 		"PROCESSOR_WORKERS=8", "PROCESSOR_QUEUE_CAP=2048"}
 	lookup := snapshotEnvironment(entries)
@@ -25,12 +25,15 @@ func TestApplicationConfigurationSnapshotAndSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Socket.MTU != 1420 || cfg.Tun.QueueCapacity != 7 || !cfg.Pool.Enabled || !cfg.Pool.Wrap || !cfg.Health.Enabled ||
+	if cfg.Socket.MTU != 1420 || cfg.Tun.QueueCapacity != 7 || !cfg.Pool.Enabled || !cfg.Health.Enabled ||
 		cfg.Health.DNSName != "health.example" || cfg.Health.DNSIP != "127.0.0.2" || cfg.MetricsInterval != 7*time.Second || cfg.MetricsFormat != "json" ||
 		!cfg.Metrics || !cfg.PrintConfig || cfg.Capture.Path != "/private/capture" || cfg.Capture.MaxBytes != 44 || len(cfg.Warnings) != 2 {
 		t.Fatalf("configuration: %+v", cfg.Health)
 	}
 	summary := cfg.effectiveSummary()
+	if strings.Contains(summary, `"Wrap"`) || strings.Contains(summary, `"GateLog"`) {
+		t.Fatal("summary retained retired configuration")
+	}
 	if !json.Valid([]byte(summary)) {
 		t.Fatal("invalid summary JSON")
 	}
@@ -72,7 +75,7 @@ func TestApplicationDefaultsAndInvalidSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if defaults.Device.ListenPort != 51820 || defaults.Device.MTU != 1380 || defaults.Device.Options.DisableIPv6 || defaults.Tun.QueueCapacity != 1024 ||
-		!defaults.Pool.Enabled || defaults.Pool.Wrap || defaults.Health.Enabled || defaults.Metrics || defaults.PrintConfig || defaults.MetricsInterval != 30*time.Second || defaults.MetricsFormat != "text" ||
+		!defaults.Pool.Enabled || defaults.Health.Enabled || defaults.Metrics || defaults.PrintConfig || defaults.MetricsInterval != 30*time.Second || defaults.MetricsFormat != "text" ||
 		defaults.Health.DNSName != "example.com" || defaults.Health.DNSIP != "1.1.1.1" || defaults.Health.HTTPURL != "https://httpbin.org/ip" || defaults.Capture.MaxBytes != 64*1024*1024 {
 		t.Fatal("unexpected defaults")
 	}
@@ -92,6 +95,18 @@ func TestApplicationDefaultsAndInvalidSettings(t *testing.T) {
 		c, err := loadApplicationConfig(snapshotEnvironment(append(tc.entries, "WG_PRIVATE_KEY="+key)))
 		if err != nil || c.Metrics != tc.want {
 			t.Fatal("metrics precedence", err)
+		}
+	}
+}
+
+func TestApplicationRejectsRetiredSettings(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	for _, name := range []string{"POOL_WRAP", "TCP_GATE_LOG"} {
+		for _, value := range []string{"", "false", "off", "true"} {
+			_, err := loadApplicationConfig(snapshotEnvironment([]string{"WG_PRIVATE_KEY=" + key, name + "=" + value}))
+			if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "remove this setting") {
+				t.Fatal("missing startup migration error", name, err)
+			}
 		}
 	}
 }

@@ -20,7 +20,7 @@ func TestSocketConcurrentTrafficMetricsAndStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Stop()
-	packet := core.NewPacket(buildIPv4UDP([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, uint16(listener.LocalAddr().(*net.UDPAddr).Port), []byte("hello")))
+	packet := core.NewCopiedPacket(buildIPv4UDP([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, uint16(listener.LocalAddr().(*net.UDPAddr).Port), []byte("hello")))
 	if err := s.WritePacket(packet); err != nil {
 		t.Fatal(err)
 	}

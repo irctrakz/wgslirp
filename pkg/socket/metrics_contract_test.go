@@ -16,7 +16,7 @@ func TestSocketCountsFramesOnceWhileTCPCountsHostWrites(t *testing.T) {
 	s.running = true
 	f.pendCap = b.defaultPendCap
 	packet := buildIPv4TCP(f.srcIP, f.dstIP, f.srcPort, f.dstPort, 100, 1000, 0x18, []byte("data"))
-	if err := s.WritePacket(core.NewPacket(packet)); err != nil {
+	if err := s.WritePacket(core.NewCopiedPacket(packet)); err != nil {
 		t.Fatal(err)
 	}
 	m := s.DetailedMetrics()
@@ -34,7 +34,7 @@ func TestSocketCountsFramesOnceWhileTCPCountsHostWrites(t *testing.T) {
 	}
 	conn.Close()
 	packet = buildIPv4TCP(f.srcIP, f.dstIP, f.srcPort, f.dstPort, 104, 1000, 0x18, []byte("lost"))
-	if err := s.WritePacket(core.NewPacket(packet)); !errors.Is(err, net.ErrClosed) {
+	if err := s.WritePacket(core.NewCopiedPacket(packet)); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("cause lost: %v", err)
 	}
 	m = s.DetailedMetrics()
@@ -93,7 +93,7 @@ func TestUDPInjectedDialAndDeliveryCounters(t *testing.T) {
 	attempts := 0
 	s.udp.dial = func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error) { attempts++; return nil, cause }
 	packet := buildIPv4UDP([4]byte{10, 0, 0, 1}, [4]byte{127, 0, 0, 1}, 40000, 12345, []byte("data"))
-	if err := s.WritePacket(core.NewPacket(packet)); !errors.Is(err, cause) {
+	if err := s.WritePacket(core.NewCopiedPacket(packet)); !errors.Is(err, cause) {
 		t.Fatal(err)
 	}
 	m := s.DetailedMetrics()
@@ -105,7 +105,7 @@ func TestUDPInjectedDialAndDeliveryCounters(t *testing.T) {
 		t.Fatal(m)
 	}
 	s.udp.deliver = func(p core.Packet) bool { core.ReleasePacket(p); return false }
-	if err := s.WritePacket(core.NewPacket(packet)); !errors.Is(err, cause) {
+	if err := s.WritePacket(core.NewCopiedPacket(packet)); !errors.Is(err, cause) {
 		t.Fatal(err)
 	}
 	m = s.DetailedMetrics()
@@ -172,7 +172,7 @@ func TestWorkerCompletionAndErrorCause(t *testing.T) {
 	cause := errors.New("writer failure")
 	writer := &mockSocketWriter{writePacketFunc: func(core.Packet) error { return cause }}
 	p := newSocketPacketProcessor(writer, ProcessorConfig{Workers: 1, QueueCapacity: 1})
-	if err := p.processPacketInternal(core.NewPacket(make([]byte, 20))); !errors.Is(err, cause) {
+	if err := p.processPacketInternal(core.NewCopiedPacket(make([]byte, 20))); !errors.Is(err, cause) {
 		t.Fatal(err)
 	}
 	m := p.Metrics()
@@ -180,7 +180,7 @@ func TestWorkerCompletionAndErrorCause(t *testing.T) {
 		t.Fatal(m)
 	}
 	writer.writePacketFunc = func(core.Packet) error { return nil }
-	if err := p.processPacketInternal(core.NewPacket(make([]byte, 20))); err != nil {
+	if err := p.processPacketInternal(core.NewCopiedPacket(make([]byte, 20))); err != nil {
 		t.Fatal(err)
 	}
 	if p.Metrics()["packetsDelivered"] != 1 {
@@ -201,7 +201,7 @@ func TestEmptyUDPDatagramForwardedAndCounted(t *testing.T) {
 	}
 	defer s.Stop()
 	packet := buildIPv4UDP([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, uint16(listener.LocalAddr().(*net.UDPAddr).Port), nil)
-	if err := s.WritePacket(core.NewPacket(packet)); err != nil {
+	if err := s.WritePacket(core.NewCopiedPacket(packet)); err != nil {
 		t.Fatal(err)
 	}
 	_ = listener.SetReadDeadline(time.Now().Add(time.Second))

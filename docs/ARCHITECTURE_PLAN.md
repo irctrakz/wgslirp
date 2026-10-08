@@ -841,6 +841,13 @@ candidate before implementation; no broad representation or lock rewrite is just
 - [ ] Expand independent failure conditions and real-client/endurance evidence
   as tracked in [the checks follow-ups](INDEPENDENT_FAILURE_CHECKS.md#scope-and-follow-ups).
 
+- [x] Retire the user-selected legacy configuration/types, unsupported kernel-TUN
+  constructors, debug-dependent packet APIs, configurable wrapping and inactive
+  send-gate setting. Preserve explicit ownership and resource accounting; document
+  breaking migration and future policy in [API_MIGRATION.md](API_MIGRATION.md).
+  Historical compatibility statements above describe earlier checkpoints.
+  Linux CI and actual-image acceptance are required before candidate promotion.
+
 ## First implementation milestone
 
 Complete Phase 0 and Phase 1 before beginning broad TCP refactoring. The milestone is reached when publishing is test-gated, sensitive diagnostics are repaired, lifecycle/health regressions pass, and invalid configuration cannot cause the identified panics. Then make resource controls effective before investing in structural cleanup.

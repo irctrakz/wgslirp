@@ -6,6 +6,11 @@ the architecture plan and earlier assessment retain their historical evidence.
 Independent code review and verified branch protections are assumed satisfied,
 as requested. They are not remaining tasks.
 
+**2026-10-08 retirement update:** the selected compatibility residue, inactive
+send-gate setting and legacy packet/wrapping APIs are removed on the development
+branch. [Migration and policy](API_MIGRATION.md) supersede earlier statements
+below that those surfaces remain compatible. Historical evidence is retained.
+
 ## Judgment
 
 **The principal resource, ownership and lifecycle hardening is implemented and
@@ -269,6 +274,8 @@ do not combine the list into a general rewrite.
   Add a concise changelog and API/config/metrics deprecation policy, including
   release-to-image mapping. Decide explicitly whether legacy exported adapters
   remain supported; repository-local non-use alone is insufficient evidence.
+  [Policy and selected retirement](API_MIGRATION.md) plus [changelog](CHANGELOG.md)
+  now record the user-authorized breaking cleanup. Other adapters remain supported.
 
 R5 and the proven-private subset of R7 are inexpensive and can be handled while
 R1's execution environment is being arranged. No new framework, generic flow

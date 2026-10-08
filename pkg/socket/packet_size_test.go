@@ -45,21 +45,21 @@ func TestAcceptedOversizedPackets(t *testing.T) {
 			t.Fatalf("UDP delivery: size=%d err=%v", n, err)
 		}
 	}
-	if err := s.WritePacket(core.NewPacket(packet(1200, 40000))); err != nil {
+	if err := s.WritePacket(core.NewCopiedPacket(packet(1200, 40000))); err != nil {
 		t.Fatal(err)
 	}
 	checkDelivery(1200)
 	// Input padding exceeds MTU, but the declared IP packet fits exactly.
-	if err := s.WritePacket(core.NewPacket(append(packet(1172, 40000), make([]byte, 28)...))); err != nil {
+	if err := s.WritePacket(core.NewCopiedPacket(append(packet(1172, 40000), make([]byte, 28)...))); err != nil {
 		t.Fatal(err)
 	}
 	checkDelivery(1172)
-	if err := s.WritePacket(core.NewPacket(packet(1200, 40001))); !errors.Is(err, ErrFlowLimit) {
+	if err := s.WritePacket(core.NewCopiedPacket(packet(1200, 40001))); !errors.Is(err, ErrFlowLimit) {
 		t.Fatal(err)
 	}
 	bad := packet(1200, 40000)
 	bad[10] ^= 1
-	if err := s.WritePacket(core.NewPacket(bad)); !errors.Is(err, ErrInvalidChecksum) {
+	if err := s.WritePacket(core.NewCopiedPacket(bad)); !errors.Is(err, ErrInvalidChecksum) {
 		t.Fatal(err)
 	}
 	if got := s.DetailedMetrics().PacketSize["accepted_oversized"]; got != 1 {
@@ -68,7 +68,7 @@ func TestAcceptedOversizedPackets(t *testing.T) {
 	// Count accepted original fragments, not the larger reassembled datagram.
 	whole := packet(1600, 40000)
 	for _, p := range [][]byte{fragmentFixture(17, 42, 0, true, whole[20:1228]), fragmentFixture(17, 42, 1208, false, whole[1228:])} {
-		if err := s.WritePacket(core.NewPacket(p)); err != nil {
+		if err := s.WritePacket(core.NewCopiedPacket(p)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -80,7 +80,7 @@ func TestAcceptedOversizedPackets(t *testing.T) {
 		t.Fatalf("accepted packet warned: %s", logs.String())
 	}
 	logger.SetLevel(logrus.DebugLevel)
-	if err := s.WritePacket(core.NewPacket(packet(1200, 40000))); err != nil {
+	if err := s.WritePacket(core.NewCopiedPacket(packet(1200, 40000))); err != nil {
 		t.Fatal(err)
 	}
 	checkDelivery(1200)
