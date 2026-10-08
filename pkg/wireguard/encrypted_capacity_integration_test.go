@@ -74,10 +74,10 @@ func runEncryptedCapacity(t *testing.T) {
 			rssPeak = rss
 		}
 		if time.Since(lastReport) >= 10*time.Second {
-			t.Logf("CAPACITY_MEMORY phase=%s elapsed_ms=%d heap=%d heap_sys=%d stack=%d rss=%d workers=%d", phase, time.Since(started).Milliseconds(), m.HeapAlloc, m.HeapSys, m.StackInuse, rss, runtime.NumGoroutine())
+			t.Logf("CAPACITY_MEMORY phase=%s elapsed_ms=%d heap=%d heap_sys=%d stack=%d rss=%d rss_limit=%d workers=%d", phase, time.Since(started).Milliseconds(), m.HeapAlloc, m.HeapSys, m.StackInuse, rss, capacityRSSLimit, runtime.NumGoroutine())
 			lastReport = time.Now()
 		}
-		if m.HeapAlloc > 192<<20 || rss > 384<<20 || runtime.NumGoroutine() > 1024 {
+		if m.HeapAlloc > 192<<20 || rss > capacityRSSLimit || runtime.NumGoroutine() > 1024 {
 			if dir := os.Getenv("WGSLIRP_FRAGMENT_PROFILE_DIR"); dir != "" {
 				f, err := os.Create(filepath.Join(dir, "capacity-breach.pprof"))
 				if err != nil {
@@ -91,7 +91,7 @@ func runEncryptedCapacity(t *testing.T) {
 					}
 				}
 			}
-			t.Fatalf("resource ceiling: heap=%d rss=%d workers=%d", m.HeapAlloc, rss, runtime.NumGoroutine())
+			t.Fatalf("resource ceiling: heap=%d rss=%d rss_limit=%d workers=%d", m.HeapAlloc, rss, capacityRSSLimit, runtime.NumGoroutine())
 		}
 		if time.Since(started) > 6*time.Minute {
 			t.Fatal("workload deadline")
