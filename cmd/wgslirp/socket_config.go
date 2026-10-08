@@ -8,5 +8,6 @@ func socketConfig(mtu int, lookup func(string) (string, bool)) (socket.Config, e
 	cfg := socket.DefaultConfig()
 	cfg.MTU = mtu
 	cfg.Protocol = "ip4:tcp"
+	cfg.ICMPEcho = true
 	return socket.ConfigFromEnv(cfg, lookup)
 }

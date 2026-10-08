@@ -10,8 +10,8 @@ const (
 	// Charge each retained queue entry as well as its payload, preventing a
 	// stream of tiny segments from bypassing the byte budget via metadata.
 	bufferEntryAllowance    = 128
-	DefaultMaxTCPFlows      = 64
-	DefaultMaxUDPFlows      = 256
+	DefaultMaxTCPFlows      = 256
+	DefaultMaxUDPFlows      = 512
 	DefaultPendingTCPDials  = 64
 	DefaultSocketBufferCap  = 64 * 1024 * 1024
 	DefaultTCPPendingCap    = 64 * 1024

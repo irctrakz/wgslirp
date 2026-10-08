@@ -44,7 +44,7 @@ func TestProcessorConcurrentStopReleasesAcceptedPackets(t *testing.T) {
 	if p.Start() == nil {
 		t.Fatal("restarted stopped processor")
 	}
-	if p.ProcessPacket(core.NewPacket(make([]byte, 20))) == nil {
+	if p.ProcessPacket(core.NewCopiedPacket(make([]byte, 20))) == nil {
 		t.Fatal("accepted after stop")
 	}
 }
@@ -109,7 +109,7 @@ func TestProcessorQueueBudgetAndCallerOwnership(t *testing.T) {
 			if released.Load() != 3 {
 				t.Fatalf("release count %d", released.Load())
 			}
-			if p.ProcessPacket(core.NewPacket([]byte{0x45})) == nil {
+			if p.ProcessPacket(core.NewCopiedPacket([]byte{0x45})) == nil {
 				t.Fatal("accepted after stop")
 			}
 			assertBudget(t, s.buffers(), 0)

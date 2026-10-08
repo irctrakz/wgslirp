@@ -6,6 +6,9 @@ on:
       workload:
         type: string
         default: capacity
+      repetitions:
+        type: string
+        default: '[1]'
 
 permissions:
   contents: read
@@ -19,10 +22,11 @@ jobs:
       max-parallel: 1
       matrix:
         mode: [ordinary, race]
+        repetition: ${{ fromJSON(inputs.repetitions) }}
     env:
       MODE: ${{ matrix.mode }}
       WORKLOAD: ${{ inputs.workload }}
-      CONTAINER: wgslirp-${{ inputs.workload }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
+      CONTAINER: wgslirp-${{ inputs.workload }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}-${{ matrix.repetition }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,9 +46,11 @@ jobs:
             --tmpfs /work:rw,exec,nosuid,nodev,size=768m,mode=1777 \
             --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777 \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/evidence,dst=/evidence" \
             --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
             -e MODE -e WORKLOAD -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB \
             -e GOCACHE=/work/cache -e GOPATH=/work/gopath -e GOTMPDIR=/work/build \
+            -e WGSLIRP_FRAGMENT_PROFILE_DIR=/evidence \
             golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 600s bash -c '
               set -eu
               mkdir -p "$GOTMPDIR"
@@ -57,12 +63,35 @@ jobs:
                 wan) test_name=TestEncryptedWANRecovery; test_timeout=120s ;;
                 sustained) test_name=TestEncryptedSustainedLoss; test_timeout=330s ;;
                 mixed) test_name=TestEncryptedMixed; test_timeout=120s ;;
+                fragments) test_name="(TestEncryptedFragments|TestFragmentGuestTUNReadyBatchOwnership)"; test_timeout=300s ;;
+                fragments-unpaced) test_name="(TestEncryptedFragmentsUnpaced|TestFragmentGuestTUNReadyBatchOwnership)"; test_timeout=300s ;;
                 *) echo "Unknown workload" >&2; exit 1 ;;
               esac
               set +e
-              go test $race_flag -v -tags="integration,$WORKLOAD" -run="^${test_name}$" -timeout="$test_timeout" -count=1 -parallel=1 ./pkg/wireguard
+              test_tags="integration,$WORKLOAD"
+              case "$WORKLOAD" in
+                fragments|fragments-unpaced) test_tags="integration,fragments,mixed" ;;
+              esac
+              if [ "$WORKLOAD" = fragments ]; then
+                go test $race_flag -run="^$" -bench="^BenchmarkIPv4Fragments$" -benchmem \
+                  -benchtime=100ms -count=3 -timeout=60s -parallel=1 ./pkg/socket > /evidence/reassembly-allocations.txt
+                benchmark_result=$?
+                cat /evidence/reassembly-allocations.txt
+                if [ "$benchmark_result" != 0 ]; then exit "$benchmark_result"; fi
+              fi
+              go test $race_flag -v -tags="$test_tags" -run="^${test_name}$" -timeout="$test_timeout" -count=1 -parallel=1 ./pkg/wireguard
               result=$?
               set -e
+              if [ -f /evidence/fragment-breach.pprof ]; then
+                go tool pprof -top -sample_index=inuse_space /evidence/fragment-breach.pprof > /evidence/fragment-inuse.txt
+                go tool pprof -top -sample_index=alloc_space /evidence/fragment-breach.pprof > /evidence/fragment-allocations.txt
+                cat /evidence/fragment-inuse.txt /evidence/fragment-allocations.txt
+              fi
+              if [ -f /evidence/capacity-breach.pprof ]; then
+                go tool pprof -top -sample_index=inuse_space /evidence/capacity-breach.pprof > /evidence/capacity-inuse.txt
+                go tool pprof -top -sample_index=alloc_space /evidence/capacity-breach.pprof > /evidence/capacity-allocations.txt
+                cat /evidence/capacity-inuse.txt /evidence/capacity-allocations.txt
+              fi
               echo CGROUP_MEMORY_PEAK
               cat /sys/fs/cgroup/memory.peak
               cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/pids.events
@@ -86,6 +115,8 @@ jobs:
             wan) grep -q 'WAN_ACCEPTED' evidence/test.log ;;
             sustained) grep -q 'SUSTAINED_ACCEPTED' evidence/test.log ;;
             mixed) grep -q 'MIXED_ACCEPTED' evidence/test.log ;;
+            fragments) grep -q 'FRAGMENTS_ACCEPTED' evidence/test.log ;;
+            fragments-unpaced) grep -q 'FRAGMENTS_UNPACED_ACCEPTED' evidence/test.log ;;
             *) exit 1 ;;
           esac
       - name: Remove owned container and toolchain image
@@ -112,7 +143,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: ${{ inputs.workload }}-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.workload }}-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.repetition }}
           path: evidence/
           retention-days: 14
           if-no-files-found: error

@@ -11,7 +11,7 @@ func TestTransportEnvironmentAndSnapshot(t *testing.T) {
 	values := map[string]string{
 		"TCP_ACK_IDLE_GATE_MS": "23", "TCP_ACK_IDLE_MIN_INFLIGHT": "1234", "TCP_ACK_IDLE_FAIL_SEC": "19",
 		"TCP_ACK_TRACE": "yes", "TCP_MSS_CLAMP": "1000", "TCP_PACE_US": "13", "TCP_ERROR_SIGNAL": "rst",
-		"TCP_LOG_HANDSHAKE": "on", "TCP_GATE_LOG": "debug", "TCP_FAST_DIAL_MS": "17", "TCP_CC": "new-reno",
+		"TCP_LOG_HANDSHAKE": "on", "TCP_FAST_DIAL_MS": "17", "TCP_CC": "new-reno",
 		"TCP_INIT_CWND_MSS": "2", "TCP_SOCK_RCVBUF": "4096", "TCP_SOCK_SNDBUF": "8192", "TCP_WS_OUT": "3",
 		"TCP_ENABLE_SACK": "true", "COPY_TOS": "1", "IP_TTL": "42",
 	}
@@ -24,7 +24,7 @@ func TestTransportEnvironmentAndSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := TransportConfig{23, 1234, 19, true, 1000, 13, "rst", true, "debug", 17, "newreno", 2, 4096, 8192, 3, true, true, 42}
+	want := TransportConfig{23, 1234, 19, true, 1000, 13, "rst", true, 17, "newreno", 2, 4096, 8192, 3, true, true, 42}
 	if *cfg.Transport != want {
 		t.Fatalf("parsed %+v; want %+v", *cfg.Transport, want)
 	}
@@ -46,7 +46,7 @@ func TestTransportEnvironmentAndSnapshot(t *testing.T) {
 	if b.tuning != want || s.ttlOverride != 42 || !s.tosCopy ||
 		b.ackIdleGate != 23*time.Millisecond || b.ackIdleMinInflight != 1234 || b.ackIdleFail != 19*time.Second ||
 		!b.ackTrace || b.mssClamp.Load() != 1000 || b.paceUS.Load() != 13 || b.errorSignal != "rst" ||
-		!b.logHandshake || b.tuning.GateLog != "debug" {
+		!b.logHandshake {
 		t.Fatal("runtime ignored transport snapshot")
 	}
 }
@@ -90,8 +90,6 @@ func TestTransportDefaultsAndBoundaries(t *testing.T) {
 			return "0", true
 		case "TCP_CC":
 			return "off", true
-		case "TCP_GATE_LOG":
-			return "false", true
 		}
 		return "", false
 	})
@@ -100,7 +98,7 @@ func TestTransportDefaultsAndBoundaries(t *testing.T) {
 	}
 	b := newTCPBridge(NewSocketInterface(cfg))
 	defer b.stop()
-	if b.ackIdleGate != 0 || b.ackIdleFail != 0 || b.tuning.GateLog != "off" || b.tuning.WindowScale != 0 || b.tuning.CongestionControl != "off" {
+	if b.ackIdleGate != 0 || b.ackIdleFail != 0 || b.tuning.WindowScale != 0 || b.tuning.CongestionControl != "off" {
 		t.Fatal("zero/off overrides ignored")
 	}
 	for _, tc := range []struct{ override, want int }{{0, 10000}, {1, 1000}, {2, 2000}, {10, 10000}, {math.MaxInt32, 10000}} {

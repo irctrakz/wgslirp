@@ -27,10 +27,14 @@ func (c Config) Validate() error {
 		{"SocketBufferCapBytes", c.SocketBufferCapBytes, 1},
 		{"TCPPendingCapBytes", c.TCPPendingCapBytes, 1},
 		{"TCPRetransmitCapBytes", c.TCPRetransmitCapBytes, 1},
+		{"IPv4FragmentBufferCapBytes", c.IPv4FragmentBufferCapBytes, 1},
 	} {
 		if setting.value < 0 || uint64(setting.value) > uint64(math.MaxInt64/int64(setting.unit)) {
 			return fmt.Errorf("%s must be nonnegative and fit its runtime representation", setting.name)
 		}
+	}
+	if c.IPv4Reassembly && budgetDefault(c.IPv4FragmentBufferCapBytes, DefaultIPv4FragmentBufferCap) < ipv4FragmentCharge {
+		return fmt.Errorf("IPv4FragmentBufferCapBytes must admit at least one bounded datagram (%d bytes)", ipv4FragmentCharge)
 	}
 	return c.transportConfig().Validate()
 }
@@ -53,6 +57,10 @@ type Config struct {
 	// Protocol to use for the socket interface (ip4:icmp, ip4:tcp, ip4:udp)
 	// Default is ip4:icmp
 	Protocol string
+
+	// ICMPEcho enables ping sockets in TCP/UDP mode without raw-socket fallback.
+	// Startup fails if the host does not permit them. Library default is false.
+	ICMPEcho bool
 
 	// TCPAckDelayMs controls delayed ACK scheduling (milliseconds); 0 is immediate.
 	TCPAckDelayMs int
@@ -77,6 +85,12 @@ type Config struct {
 	SocketBufferCapBytes  int
 	TCPPendingCapBytes    int
 	TCPRetransmitCapBytes int
+
+	// IPv4Reassembly is enabled by DefaultConfig. An explicit false (including
+	// a zero-value Config) disables it. Zero storage cap uses a finite default,
+	// shared with SocketBufferCapBytes rather than added to it.
+	IPv4Reassembly             bool
+	IPv4FragmentBufferCapBytes int
 }
 
 // Effective returns a detached configuration with documented zero-as-default
@@ -97,6 +111,7 @@ func (c Config) Effective() Config {
 		{&c.SocketBufferCapBytes, defaults.SocketBufferCapBytes},
 		{&c.TCPPendingCapBytes, defaults.TCPPendingCapBytes},
 		{&c.TCPRetransmitCapBytes, defaults.TCPRetransmitCapBytes},
+		{&c.IPv4FragmentBufferCapBytes, defaults.IPv4FragmentBufferCapBytes},
 	} {
 		if *setting.value == 0 {
 			*setting.value = setting.fallback
@@ -109,20 +124,22 @@ func (c Config) Effective() Config {
 func DefaultConfig() Config {
 	transport := DefaultTransportConfig()
 	return Config{
-		Transport:             &transport,
-		IPAddress:             "0.0.0.0",
-		MTU:                   1500,
-		Debug:                 false,
-		Protocol:              "ip4:icmp",
-		TCPAckDelayMs:         10,
-		TCPFlowLifetimeSec:    120,
-		UDPFlowLifetimeSec:    60,
-		TCPReassemblyCapBytes: 128 * 1024,
-		MaxTCPFlows:           DefaultMaxTCPFlows,
-		MaxUDPFlows:           DefaultMaxUDPFlows,
-		MaxPendingTCPDials:    DefaultPendingTCPDials,
-		SocketBufferCapBytes:  DefaultSocketBufferCap,
-		TCPPendingCapBytes:    DefaultTCPPendingCap,
-		TCPRetransmitCapBytes: DefaultTCPRetransmitCap,
+		Transport:                  &transport,
+		IPAddress:                  "0.0.0.0",
+		MTU:                        1500,
+		Debug:                      false,
+		Protocol:                   "ip4:icmp",
+		TCPAckDelayMs:              10,
+		TCPFlowLifetimeSec:         120,
+		UDPFlowLifetimeSec:         60,
+		TCPReassemblyCapBytes:      128 * 1024,
+		MaxTCPFlows:                DefaultMaxTCPFlows,
+		MaxUDPFlows:                DefaultMaxUDPFlows,
+		MaxPendingTCPDials:         DefaultPendingTCPDials,
+		SocketBufferCapBytes:       DefaultSocketBufferCap,
+		TCPPendingCapBytes:         DefaultTCPPendingCap,
+		TCPRetransmitCapBytes:      DefaultTCPRetransmitCap,
+		IPv4Reassembly:             true,
+		IPv4FragmentBufferCapBytes: DefaultIPv4FragmentBufferCap,
 	}
 }

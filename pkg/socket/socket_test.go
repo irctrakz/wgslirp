@@ -76,7 +76,7 @@ func TestSocketInterface_WritePacket(t *testing.T) {
 	packetData := []byte{
 		0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0xc0, 0xa8, 0x01, 0x01, 0xc0, 0xa8, 0x01, 0x02,
 	}
-	packet := core.NewPacket(packetData)
+	packet := core.NewCopiedPacket(packetData)
 
 	// Write the packet
 	err = mockSocket.WritePacket(packet)
@@ -166,7 +166,7 @@ func TestSocketInterface_Integration(t *testing.T) {
 		// ICMP Echo Request
 		0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
 	}
-	packet := core.NewPacket(packetData)
+	packet := core.NewCopiedPacket(packetData)
 
 	// Simulate receiving a packet
 	err = mockSocket.SimulatePacketReceived(packet)

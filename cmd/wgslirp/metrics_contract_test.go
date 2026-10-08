@@ -68,7 +68,7 @@ func TestHealthTeePreservesPrimaryMetrics(t *testing.T) {
 type fixtureSocketMetrics struct{ rto uint64 }
 
 func (s *fixtureSocketMetrics) DetailedMetrics() socket.SocketDetailedMetrics {
-	return socket.SocketDetailedMetrics{TCPExt: map[string]uint64{"rto": s.rto}}
+	return socket.SocketDetailedMetrics{TCPExt: map[string]uint64{"rto": s.rto}, PacketSize: map[string]uint64{"accepted_oversized": 7, "local_size_rejected": 1}}
 }
 
 type fixtureTunMetrics struct{}
@@ -89,6 +89,9 @@ func TestReporterUsesNarrowSnapshotSources(t *testing.T) {
 	snap, hs := a.snapshot(source, fixtureTunMetrics{}, fixtureDeviceState{})
 	if snap.SchemaVersion != 1 || !snap.WGAvailable || snap.WG["plaintext_from_wg"] != 42 || snap.TCPExt["rto_delta"] != 10 || hs["peers"] != 1 || hs["stale"] != 1 {
 		t.Fatal(snap, hs)
+	}
+	if snap.PacketSize["accepted_oversized"] != 7 || snap.PacketSize["local_size_rejected"] != 1 {
+		t.Fatal("packet size counters lost", snap.PacketSize)
 	}
 	source.rto = 12
 	snap, hs = a.snapshot(source, fixtureTunMetrics{}, fixtureDeviceState{fail: true})

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/logging"
+	"golang.zx2c4.com/wireguard/conn"
 	wtun "golang.zx2c4.com/wireguard/tun"
 	"net"
 	"os"
@@ -13,37 +14,41 @@ import (
 // File returns nil; userspace WGTun does not back with an os.File.
 func (t *WGTun) File() *os.File { return nil }
 
-// Read with offset compatibility for wireguard-go; offset is ignored.
+// Read copies queued frames into caller-owned buffers at offset. After the first
+// blocking receive, it drains only ready frames, up to the advertised batch cap.
 func (t *WGTun) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
-	if len(buffs) == 0 || len(sizes) == 0 || offset < 0 || offset >= len(buffs[0]) {
+	if len(buffs) == 0 || len(sizes) < len(buffs) || offset < 0 || offset >= len(buffs[0]) {
 		return 0, fmt.Errorf("invalid TUN read buffers or offset")
 	}
-	select {
-	case <-t.closed:
-		return 0, fmt.Errorf("wg tun closed")
-	case frame := <-t.outCh:
-		// A frame already dequeued during Close remains owned by this Read.
-		// Release on every completion path, including an undersized destination.
-		defer frame.release()
-		pkt := frame.data
-		if len(buffs) == 0 {
-			return 0, nil
+	for n := 0; n < min(len(buffs), t.BatchSize()); n++ {
+		var frame queuedFrame
+		if n == 0 {
+			select {
+			case <-t.closed:
+				return 0, fmt.Errorf("wg tun closed")
+			case frame = <-t.outCh:
+			}
+		} else {
+			// Drain only already queued frames; never delay a packet to fill a
+			// batch. Close owns frames that this Read has not dequeued.
+			select {
+			case <-t.closed:
+				return n, nil
+			case frame = <-t.outCh:
+			default:
+				return n, nil
+			}
 		}
-		b := buffs[0]
-		if offset >= len(b) {
-			return 0, fmt.Errorf("offset beyond buffer")
+		if offset > len(buffs[n]) || len(frame.data) > len(buffs[n])-offset {
+			frame.release()
+			return n, fmt.Errorf("TUN read buffer too small: need %d bytes", len(frame.data))
 		}
-		dst := b[offset:]
-		n := len(pkt)
-		if n > len(dst) {
-			return 0, fmt.Errorf("TUN read buffer too small: need %d bytes", n)
-		}
-		copy(dst, pkt[:n])
-		if sizes != nil && len(sizes) > 0 {
-			sizes[0] = n
-		}
-		return 1, nil
+		copy(buffs[n][offset:], frame.data)
+		sizes[n] = len(frame.data)
+		// The destination belongs to WireGuard; release only after copying.
+		frame.release()
 	}
+	return min(len(buffs), t.BatchSize()), nil
 }
 
 // Write with offset compatibility for wireguard-go; offset is ignored.
@@ -56,8 +61,10 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		return 0, fmt.Errorf("wg tun closed")
 	default:
 	}
-	// forward each buffer as a packet either back into WG (overlay) or to slirp
+	// Attempt every buffer. Return the first failure after processing the batch;
+	// only accepted packets contribute to the count and plaintext byte metrics.
 	sent := 0
+	var firstErr error
 
 	for _, b := range buffs {
 		if b == nil {
@@ -80,7 +87,10 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		// Exclusion first: always egress via slirp
 		if t.dstInExclude(dst) {
 			if err := t.writeToSocket(pkt); err != nil {
-				return sent, err
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
 			sent++
 			atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
@@ -89,7 +99,10 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		// Overlay re-route: back into WG if destination is inside a peer prefix
 		if t.dstInPeerCIDR(dst) {
 			if err := t.InjectToPeer(pkt); err != nil {
-				return sent, err
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
 			sent++
 			atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
@@ -97,12 +110,15 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 		}
 		// Default: egress via slirp
 		if err := t.writeToSocket(pkt); err != nil {
-			return sent, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		sent++
 		atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
 	}
-	return sent, nil
+	return sent, firstErr
 }
 
 // Flush is a no-op for userspace WGTun.
@@ -126,8 +142,9 @@ func (t *WGTun) Events() <-chan wtun.Event {
 	return ch
 }
 
-// BatchSize returns 1 to indicate minimal batch support.
-func (t *WGTun) BatchSize() int { return 1 }
+// BatchSize matches the standard WireGuard bind's maximum batch. Read drains
+// ready frames up to this bound without waiting for a full batch.
+func (t *WGTun) BatchSize() int { return conn.IdealBatchSize }
 
 // writeToSocket owns its copy until the synchronous SocketWriter returns.
 func (t *WGTun) writeToSocket(data []byte) error {

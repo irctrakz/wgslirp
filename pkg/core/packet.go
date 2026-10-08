@@ -1,32 +1,9 @@
 package core
 
-import (
-	"sync/atomic"
-)
-
-// Global debug flag that can be set via configuration
-var debugMode uint32
-
-// SetDebugMode sets the global debug mode flag
-// It affects only legacy NewPacket/SimplePacket copying. Explicit constructors,
-// borrowed access and pooled packets have debug-independent ownership semantics.
-func SetDebugMode(enabled bool) {
-	if enabled {
-		atomic.StoreUint32(&debugMode, 1)
-	} else {
-		atomic.StoreUint32(&debugMode, 0)
-	}
-}
-
-// IsDebugMode returns whether debug mode is enabled
-func IsDebugMode() bool {
-	return atomic.LoadUint32(&debugMode) == 1
-}
-
 // Packet represents a network packet
 type Packet interface {
-	// Data is the compatibility accessor; aliasing depends on the implementation.
-	// Use BorrowPacketData for read-only access or CopyPacketData for owned bytes.
+	// Data returns a borrowed read-only view, valid until release.
+	// Use CopyPacketData for independent mutable bytes.
 	Data() []byte
 
 	// Length returns the packet length
@@ -63,33 +40,19 @@ func CopyPacketData(packet Packet) []byte {
 }
 
 // BorrowPacketData returns a read-only view valid until the packet is released.
-// It avoids diagnostic copies for built-in packets. Callers must neither mutate
+// Built-in packets do not copy on access. Callers must neither mutate
 // nor retain the view beyond the packet's ownership lifetime. For custom Packet
-// implementations it uses Data(), whose allocation behavior is implementation-specific.
+// implementations it uses Data(), which must obey the same borrowed-view contract.
 func BorrowPacketData(packet Packet) []byte {
-	switch p := packet.(type) {
-	case *SimplePacket:
-		return p.data
-	case *pooledPacket:
-		return p.data
-	default:
-		return packet.Data()
-	}
+	return packet.Data()
 }
 
 // PacketBufferSize reports retained slice capacity rather than payload length.
-// Built-in packets can be measured without Data's optional debug copy. Custom
+// Built-in packets expose their retained backing storage directly. Custom
 // packets must expose their retained storage through Data; allocator overhead
 // and unrelated storage hidden by a custom implementation are not included.
 func PacketBufferSize(packet Packet) int {
-	switch p := packet.(type) {
-	case *SimplePacket:
-		return cap(p.data)
-	case *pooledPacket:
-		return cap(p.data)
-	default:
-		return cap(packet.Data())
-	}
+	return cap(packet.Data())
 }
 
 // pooledPacket is a Packet implementation backed by a reusable buffer.
@@ -130,48 +93,4 @@ func ReleasePacket(p Packet) {
 			release(data)
 		}
 	}
-}
-
-// SimplePacket is a simple implementation of Packet
-type SimplePacket struct {
-	data []byte
-}
-
-// NewPacket creates a new packet
-//
-// Deprecated: use NewBorrowedPacket or NewCopiedPacket for explicit ownership
-// independent of debug mode. Legacy copy/alias behavior is preserved.
-func NewPacket(data []byte) Packet {
-	if data == nil {
-		data = make([]byte, 0)
-		return &SimplePacket{data: data}
-	}
-
-	// In debug mode, make a copy of the data for safety
-	if IsDebugMode() {
-		dataCopy := make([]byte, len(data))
-		copy(dataCopy, data)
-		return &SimplePacket{data: dataCopy}
-	}
-
-	// In non-debug mode, use the data directly for performance
-	return &SimplePacket{data: data}
-}
-
-// Data returns the packet data
-func (p *SimplePacket) Data() []byte {
-	// In debug mode, make a copy of the data for safety
-	if IsDebugMode() {
-		dataCopy := make([]byte, len(p.data))
-		copy(dataCopy, p.data)
-		return dataCopy
-	}
-
-	// In non-debug mode, return the internal data directly for performance
-	return p.data
-}
-
-// Length returns the packet length
-func (p *SimplePacket) Length() int {
-	return len(p.data)
 }

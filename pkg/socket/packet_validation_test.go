@@ -47,7 +47,7 @@ func TestPacketBoundariesBeforeForwarding(t *testing.T) {
 			p := tc.edit(append([]byte(nil), tc.base...))
 			repairTestChecksums(p)
 			// Test the public boundary and direct bridge entry points.
-			if err := s.WritePacket(core.NewPacket(p)); !errors.Is(err, tc.want) {
+			if err := s.WritePacket(core.NewCopiedPacket(p)); !errors.Is(err, tc.want) {
 				t.Fatalf("socket: %v", err)
 			}
 			var err error
@@ -87,7 +87,7 @@ func TestUDPForwardingIgnoresIPPadding(t *testing.T) {
 	payload := []byte("only this payload")
 	pkt := buildIPv4UDP([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, uint16(listener.LocalAddr().(*net.UDPAddr).Port), payload)
 	pkt = append(pkt, []byte("padding must not be forwarded")...)
-	if err := s.WritePacket(core.NewPacket(pkt)); err != nil {
+	if err := s.WritePacket(core.NewCopiedPacket(pkt)); err != nil {
 		t.Fatal(err)
 	}
 	_ = listener.SetReadDeadline(time.Now().Add(time.Second))
@@ -201,7 +201,7 @@ func TestChecksumAndIPPolicyBeforeSideEffects(t *testing.T) {
 			t.Run(fmt.Sprintf("%d/%s", base[9], tc.name), func(t *testing.T) {
 				p := tc.edit(append([]byte(nil), base...))
 				before := append([]byte(nil), p...)
-				if err := s.WritePacket(core.NewPacket(p)); !errors.Is(err, tc.want) {
+				if err := s.WritePacket(core.NewCopiedPacket(p)); !errors.Is(err, tc.want) {
 					t.Fatalf("socket: %v", err)
 				}
 				var err error

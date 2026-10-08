@@ -2,46 +2,78 @@ name: Docker build & push to GHCR
 
 on:
   workflow_dispatch:
+    inputs:
+      pooling-study:
+        description: Run only the bounded pooling comparison (no image publishing)
+        type: boolean
+        default: false
+      pooling-profile:
+        description: Pooling comparison profile
+        type: choice
+        options: [basic, sustained]
+        default: basic
   push:
-    branches: [master, codex/architecture-hardening]
+    branches: [master, codex/architecture-hardening, codex/integration-05-features]
   pull_request:                 # PRs = build-only
 
 permissions:
   contents: read
 
 jobs:
+  pooling-study:
+    if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    uses: ./.github/workflows/pooling.yml
+    with:
+      profile: ${{ inputs.pooling-profile }}
+
   test:
+    if: github.event_name != 'workflow_dispatch' || !inputs.pooling-study
     uses: ./.github/workflows/go.yml
 
   encrypted-capacity:
-    needs: [test, encrypted-wan]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    needs: test
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
     uses: ./.github/workflows/capacity.yml
 
   encrypted-wan:
-    needs: [test, encrypted-sustained]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    needs: [test, encrypted-capacity, release-image-test]
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: wan
 
   encrypted-sustained:
-    needs: [test, encrypted-mixed]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    needs: [test, encrypted-capacity, release-image-test]
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: sustained
 
   encrypted-mixed:
-    needs: test
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    needs: [test, encrypted-capacity, release-image-test]
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: mixed
 
+  encrypted-fragments:
+    needs: [test, encrypted-capacity, release-image-test]
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    uses: ./.github/workflows/capacity.yml
+    with:
+      workload: fragments
+
+  encrypted-fragments-unpaced:
+    needs: [test, encrypted-capacity, release-image-test]
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    uses: ./.github/workflows/capacity.yml
+    with:
+      workload: fragments-unpaced
+      repetitions: '[1,2,3]'
+
   release-image-test:
-    needs: [test, encrypted-capacity]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    needs: test
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -65,6 +97,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.23.12'
+          cache-dependency-path: go.sum
       - name: Build the release Dockerfile with a bounded builder
         timeout-minutes: 12
         shell: bash
@@ -125,11 +158,23 @@ jobs:
             2>&1 | tee release-evidence/runtime-test.log
           python3 - <<'PY'
           import json, os
-          report = json.load(open('release-evidence/runtime.json'))
-          assert report['passed'] is True, 'runtime fixture did not pass'
-          assert report['image'] == os.environ['WGSLIRP_RELEASE_IMAGE'], 'wrong image tested'
-          assert report['source_commit'] == os.environ['GITHUB_SHA'], 'wrong source tested'
-          assert report['initial']['Image'] == open('release-evidence/image-id.txt').read().strip(), 'wrong container image'
+          for mode, enabled, policy in [('default', True, 'unset'), ('disabled', False, 'false')]:
+              report = json.load(open(f'release-evidence/runtime-{mode}.json'))
+              assert report['passed'] is True, f'{mode} runtime fixture did not pass'
+              assert report['ipv4_reassembly'] is enabled, 'wrong reassembly mode'
+              assert report['reassembly_environment'] == policy, 'wrong startup policy tested'
+              assert report['pooling'] is enabled, 'wrong effective pooling policy'
+              assert report['pooling_environment'] == policy, 'wrong pooling startup policy tested'
+              assert report['icmp_echo'] is enabled, 'wrong effective echo policy'
+              assert report['icmp_echo_environment'] == policy, 'wrong echo startup policy tested'
+              if enabled:
+                  assert report['verified_icmp_echo_rounds'] == 1, 'encrypted ping not verified'
+                  assert report['icmp_echo_denied_startup_verified'] is True, 'ping-denied startup not verified'
+              else:
+                  assert report['icmp_echo_disabled_verified'] is True, 'disabled ping not verified'
+              assert report['image'] == os.environ['WGSLIRP_RELEASE_IMAGE'], 'wrong image tested'
+              assert report['source_commit'] == os.environ['GITHUB_SHA'], 'wrong source tested'
+              assert report['initial']['Image'] == open('release-evidence/image-id.txt').read().strip(), 'wrong container image'
           PY
       - name: Remove owned test resources
         if: always()
@@ -167,8 +212,8 @@ jobs:
           if-no-files-found: error
 
   promote-development:
-    needs: release-image-test
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
+    needs: [test, encrypted-capacity, encrypted-wan, encrypted-sustained, encrypted-mixed, encrypted-fragments, encrypted-fragments-unpaced, release-image-test]
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -249,7 +294,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v6
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:

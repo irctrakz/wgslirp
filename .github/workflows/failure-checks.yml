@@ -1,0 +1,127 @@
+name: Independent failure checks
+
+on:
+  push:
+    branches: [master, codex/architecture-hardening, codex/integration-05-features]
+    paths:
+      - .github/workflows/failure-checks.yml
+      - tools/ci/failure_checks.py
+      - tools/ci/test_failure_checks.py
+      - pkg/socket/fragment_quota_recovery_test.go
+  workflow_dispatch:
+    inputs:
+      check:
+        description: Failure control to exercise (never gates publishing)
+        type: choice
+        default: all
+        options: [all, retransmission, reservation-release, fragment-recovery, dial-cancellation]
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      checks: ${{ steps.select.outputs.checks }}
+    steps:
+      - id: select
+        env:
+          CHECK: ${{ inputs.check || 'all' }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          checks = ['retransmission', 'reservation-release', 'fragment-recovery', 'dial-cancellation']
+          selected = os.environ['CHECK']
+          assert selected == 'all' or selected in checks
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('checks=' + json.dumps(checks if selected == 'all' else [selected]) + '\n')
+          PY
+
+  failure-check:
+    needs: select
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        check: ${{ fromJSON(needs.select.outputs.checks) }}
+        mode: [ordinary, race]
+    env:
+      CHECK: ${{ matrix.check }}
+      MODE: ${{ matrix.mode }}
+      CONTAINER: wgslirp-control-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.check }}-${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify the control supervisor
+        run: python3 -m unittest discover -s tools/ci -p 'test_failure_checks.py'
+      - name: Prove the selected assertion detects a compilable defect
+        timeout-minutes: 11
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          copies=$(mktemp -d)
+          printf 'COPIES=%s\n' "$copies" >> "$GITHUB_ENV"
+          docker pull golang:1.23.12-bookworm
+          docker image inspect golang:1.23.12-bookworm --format '{{json .RepoDigests}}' > evidence/toolchain-image.json
+          docker run -d --name "$CONTAINER" --user "$(id -u):$(id -g)" \
+            --cpus=1 --memory=2g --memory-swap=2g --pids-limit=128 \
+            --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /work:rw,exec,nosuid,nodev,size=768m,mode=1777 \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777 \
+            --mount "type=bind,src=$copies,dst=/copies,readonly" \
+            --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
+            -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB -e GOCACHE=/work/cache -e GOPATH=/work/gopath -e GOTMPDIR=/work \
+            golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 600s sleep 600
+          docker inspect "$CONTAINER" --format '{{json .HostConfig}}' > evidence/limits.json
+          python3 - <<'PY'
+          import json
+          c = json.load(open('evidence/limits.json'))
+          assert c['Memory'] == c['MemorySwap'] == 2147483648
+          assert c['NanoCpus'] == 1000000000 and c['PidsLimit'] == 128
+          assert c['ReadonlyRootfs'] and c['CapDrop'] == ['ALL']
+          assert 'no-new-privileges' in c['SecurityOpt']
+          PY
+          flags=()
+          if [ "$MODE" = race ]; then flags+=(--race); fi
+          timeout --signal=TERM --kill-after=15s 570s python3 tools/ci/failure_checks.py "$CHECK" \
+            --evidence "$PWD/evidence" --container "$CONTAINER" --workspace-root "$copies" "${flags[@]}"
+      - name: Collect containment evidence and remove owned resources
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          failed=0
+          if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+            docker inspect "$CONTAINER" --format '{{json .State}}' > evidence/final-state.json
+            if ! docker exec "$CONTAINER" sh -c 'cat /sys/fs/cgroup/memory.peak; cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/pids.events; ! grep -Eq "^(max|oom|oom_kill|oom_group_kill) [1-9]" /sys/fs/cgroup/memory.events /sys/fs/cgroup/pids.events' > evidence/resources.txt; then
+              failed=1
+            fi
+            if [ "$(docker inspect --format '{{.State.OOMKilled}}' "$CONTAINER")" != false ]; then failed=1; fi
+            docker rm -f "$CONTAINER"
+          fi
+          test -z "$(docker ps -aq --filter "name=^/$CONTAINER$")"
+          if [ -n "${COPIES:-}" ]; then
+            case "$COPIES" in /tmp/tmp.*) rm -rf -- "$COPIES" ;; *) echo 'Unexpected copy directory' >&2; exit 1 ;; esac
+            test ! -e "$COPIES"
+          fi
+          if docker image inspect golang:1.23.12-bookworm >/dev/null 2>&1; then
+            image_id=$(docker image inspect golang:1.23.12-bookworm --format '{{.Id}}')
+            docker image rm golang:1.23.12-bookworm
+            if docker image inspect "$image_id" >/dev/null 2>&1; then failed=1; fi
+          fi
+          printf 'Owned container, copies, tmpfs and toolchain image removed.\n' > evidence/cleanup.txt
+          exit "$failed"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: failure-check-${{ matrix.check }}-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          retention-days: 14
+          if-no-files-found: error

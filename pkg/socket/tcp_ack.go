@@ -159,9 +159,42 @@ func (b *tcpBridge) scheduleAck(f *tcpFlow) {
 		if f.closed {
 			return
 		}
-		ack := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x10, nil)
-		_ = b.sendToGuest(f, ack)
+		b.sendCloseACKLocked(f)
 	}) {
 		f.ackScheduled = false
 	}
+}
+
+// receiveSACKLocked reports only retained guest bytes, without advancing the
+// cumulative ACK or transferring buffer ownership. Caller holds stateMu.
+// RFC 2018 requires the most recently received block first, and permits at
+// most four blocks in the available TCP option space. SACK requires peer consent.
+func (f *tcpFlow) receiveSACKLocked(options *[36]byte) []byte {
+	if !f.sackPermitted || len(f.ooo) == 0 {
+		return nil
+	}
+	first := len(f.ooo) - 1
+	for i, s := range f.ooo {
+		if uint64(f.recentFuture) >= uint64(s.seq) && uint64(f.recentFuture) < uint64(s.seq)+uint64(len(s.data)) {
+			first = i
+			break
+		}
+	}
+	options[0] = 5
+	n := 2
+	appendBlock := func(i int) {
+		s := f.ooo[i]
+		binary.BigEndian.PutUint32(options[n:n+4], s.seq)
+		binary.BigEndian.PutUint32(options[n+4:n+8], s.seq+uint32(len(s.data)))
+		n += 8
+	}
+	appendBlock(first)
+	for i := len(f.ooo) - 1; i >= 0 && n < 34; i-- {
+		if i != first {
+			appendBlock(i)
+		}
+	}
+	options[1] = byte(n)
+	// Zero padding ends the option list; the packet builder copies this scratch.
+	return options[:(n+3)&^3]
 }

@@ -280,6 +280,7 @@ func runEncryptedRecovery(t *testing.T, delay time.Duration) {
 		time.Sleep(time.Millisecond)
 	}
 	m := s.DetailedMetrics()
+	t.Logf("WAN_ADMISSION delay=%s counters=%v", delay, m.Admission)
 	if m.TCP.ActiveFlows != 0 || m.UDP.ActiveFlows != 0 || m.TCPExt["socket_buffer_bytes"] != 0 || m.TCPExt["dial_reserved"] != 0 || m.TCP.DeliveryRefused != 0 {
 		t.Fatal("unclean final metrics")
 	}

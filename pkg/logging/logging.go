@@ -36,6 +36,11 @@ func SetLevel(level Level) {
 	logger.SetLevel(logrus.Level(level))
 }
 
+// IsLevelEnabled lets callers avoid preparing diagnostics that will not be emitted.
+func IsLevelEnabled(level Level) bool {
+	return logger.IsLevelEnabled(logrus.Level(level))
+}
+
 // SetFormatter sets the log formatter
 func SetFormatter(formatter logrus.Formatter) {
 	logger.SetFormatter(formatter)

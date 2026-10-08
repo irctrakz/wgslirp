@@ -9,16 +9,14 @@ import (
 // TransportConfig controls TCP behavior and synthesized IP headers. It contains
 // only values; constructors snapshot it so callers can safely reuse a template.
 type TransportConfig struct {
-	AckIdleGateMs      int // zero disables gating
-	AckIdleMinInflight int // zero uses one MSS
-	AckIdleFailSec     int // zero disables ACK-idle failure
-	AckTrace           bool
-	MSSClamp           int // zero leaves the peer/MTU limit unchanged
-	PaceUS             int
-	ErrorSignal        string // icmp, rst, none
-	LogHandshake       bool
-	// Deprecated: retained for configuration compatibility; send-gate logging has no active caller.
-	GateLog             string // accepted values: info, debug, off
+	AckIdleGateMs       int // zero disables gating
+	AckIdleMinInflight  int // zero uses one MSS
+	AckIdleFailSec      int // zero disables ACK-idle failure
+	AckTrace            bool
+	MSSClamp            int // zero leaves the peer/MTU limit unchanged
+	PaceUS              int
+	ErrorSignal         string // icmp, rst, none
+	LogHandshake        bool
 	FastDialMs          int    // initial result wait; zero retains the one-millisecond minimum
 	CongestionControl   string // newreno or off
 	InitialCwndMSS      int    // zero uses RFC 6928; positive values only reduce the window
@@ -32,7 +30,7 @@ type TransportConfig struct {
 
 func DefaultTransportConfig() TransportConfig {
 	return TransportConfig{AckIdleGateMs: 6000, AckIdleFailSec: 120,
-		ErrorSignal: "icmp", GateLog: "info", FastDialMs: 5,
+		ErrorSignal: "icmp", FastDialMs: 5,
 		CongestionControl: "newreno", WindowScale: 7, TTL: 64}
 }
 
@@ -72,11 +70,6 @@ func (c TransportConfig) Validate() error {
 	case "icmp", "rst", "none":
 	default:
 		return fmt.Errorf("TCP_ERROR_SIGNAL must be icmp, rst or none")
-	}
-	switch c.GateLog {
-	case "info", "debug", "off":
-	default:
-		return fmt.Errorf("TCP_GATE_LOG must be info, debug or off")
 	}
 	switch c.CongestionControl {
 	case "newreno", "off":

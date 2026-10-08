@@ -20,8 +20,10 @@ import (
 // SocketInterface represents a socket interface for connecting to the host network
 // It implements the core.SocketInterface interface and the SocketWriter interface
 type SocketInterface struct {
-	failureLog logging.RateLimiter
-	admission  admissionCounters
+	failureLog        logging.RateLimiter
+	admission         admissionCounters
+	oversizedAccepted atomic.Uint64
+	localSizeRejected atomic.Uint64
 	// Configuration
 	config       Config
 	budgetOnce   sync.Once
@@ -47,9 +49,10 @@ type SocketInterface struct {
 	wg       sync.WaitGroup
 
 	// Slirp bridges
-	udp  *udpBridge
-	tcp  *tcpBridge
-	icmp *icmpBridge
+	udp       *udpBridge
+	tcp       *tcpBridge
+	icmp      *icmpBridge
+	fragments *ipv4Fragments // assigned during Start, immutable until joined shutdown
 
 	// (FlowManager and egress limiter removed)
 
@@ -124,8 +127,16 @@ func (s *SocketInterface) Start() error {
 			s.conn = conn
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
-		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
+		// TCP/UDP uses ordinary sockets. Optional echo uses only a ping socket,
+		// even if the process happens to have raw-socket privileges.
 		s.conn = nil
+		if s.config.ICMPEcho {
+			conn, echoErr := icmp.ListenPacket("udp4", "0.0.0.0")
+			if echoErr != nil {
+				return fmt.Errorf("ICMP_ECHO: guest ping unavailable: %w; permit the process group in the network namespace's net.ipv4.ping_group_range or set ICMP_ECHO=false for TCP/UDP-only operation", echoErr)
+			}
+			s.dgram = newICMPDatagram(conn)
+		}
 	} else {
 		return fmt.Errorf("unsupported protocol: %s", protocol)
 	}
@@ -168,15 +179,17 @@ func (s *SocketInterface) Start() error {
 		go s.dgram.listen(s, releaseRead)
 	}
 
-	// SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
-	logging.Infof("Simple mode active: bypassing FlowManager and egress limiter; inline delivery to processor")
-
 	// Initialize UDP/TCP slirp bridges
 	s.tosCopy = s.config.Transport.CopyTOS
 	s.ttlOverride = s.config.Transport.TTL
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
 	s.icmp = newICMPBridge(s)
+	if s.config.IPv4Reassembly {
+		s.fragments = newIPv4Fragments(s.buffers(), s.config.IPv4FragmentBufferCapBytes)
+		s.wg.Add(1)
+		go s.maintainIPv4Fragments()
+	}
 	s.udp.start()
 	s.tcp.start()
 
@@ -244,6 +257,9 @@ func (s *SocketInterface) RequestStop() <-chan struct{} {
 			udp.stop()
 		}
 		s.wg.Wait()
+		if s.fragments != nil {
+			s.fragments.close()
+		}
 		if dgram != nil {
 			dgram.clear()
 		}
@@ -282,17 +298,28 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		return fmt.Errorf("nil packet")
 	}
 
-	data, _, err := parseIPv4(core.BorrowPacketData(packet))
+	data := core.BorrowPacketData(packet)
+	original := data
+	var err error
+	if s.fragments != nil {
+		var release func()
+		data, release, err = s.fragments.add(data, time.Now())
+		if release != nil {
+			defer release()
+		}
+		if err == nil && data == nil {
+			s.recordAcceptedPacketSize(int(original[2])<<8 | int(original[3]))
+			return nil
+		}
+	} else {
+		data, _, err = parseIPv4(data)
+	}
 	if err != nil {
 		atomic.AddUint64(&s.metrics.Errors, 1)
 		return err
 	}
-	// Check packet size against MTU
-	if len(data) > s.config.MTU {
-		if s.failureLog.Allow(time.Now()) {
-			logging.Warnf("Guest packet size %d exceeds configured MTU %d", len(data), s.config.MTU)
-		}
-	}
+	// Validated original IP length excludes padding and reassembled size.
+	wireSize := int(original[2])<<8 | int(original[3])
 
 	// Extract IP header information for detailed logging
 	if len(data) >= 20 {
@@ -327,8 +354,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		// Route ICMP through a thin bridge so implementation is modular.
 
 		if err := s.icmp.HandleOutbound(data); err != nil {
-			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("ICMP slirp error: %w", err)
+			return s.outboundPacketError("ICMP", wireSize, err)
 		}
 	case 6: // TCP protocol
 		if s.tcp == nil {
@@ -336,8 +362,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 			return fmt.Errorf("TCP bridge not initialized")
 		}
 		if err := s.tcp.HandleOutbound(data); err != nil {
-			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("TCP slirp error: %w", err)
+			return s.outboundPacketError("TCP", wireSize, err)
 		}
 		break
 	case 17: // UDP protocol
@@ -347,8 +372,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 			return fmt.Errorf("UDP bridge not initialized")
 		}
 		if err := s.udp.HandleOutbound(data); err != nil {
-			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("UDP slirp error: %w", err)
+			return s.outboundPacketError("UDP", wireSize, err)
 		}
 		// Metrics count the original packet bytes
 		break
@@ -367,6 +391,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	}
 
 	// Update metrics
+	s.recordAcceptedPacketSize(wireSize)
 	atomic.AddUint64(&s.metrics.PacketsSent, 1)
 	atomic.AddUint64(&s.metrics.BytesSent, uint64(len(data)))
 
@@ -437,11 +462,15 @@ func (s *SocketInterface) SetEgressMTU(mtu int) {
 // DetailedMetrics returns total and per-bridge metrics, including active flows.
 func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 	s.mu.Lock()
-	udp, tcp, processor := s.udp, s.tcp, s.processor
+	udp, tcp, processor, fragments := s.udp, s.tcp, s.processor, s.fragments
 	s.mu.Unlock()
 	dm := SocketDetailedMetrics{
-		Total:     loadSocketMetrics(&s.metrics),
-		Admission: s.admissionSnapshot(),
+		Total:      loadSocketMetrics(&s.metrics),
+		Admission:  s.admissionSnapshot(),
+		PacketSize: map[string]uint64{"accepted_oversized": s.oversizedAccepted.Load(), "local_size_rejected": s.localSizeRejected.Load()},
+	}
+	if fragments != nil {
+		dm.IPv4Fragments = fragments.snapshot()
 	}
 	if udp != nil {
 		udp.flowsMu.Lock()

@@ -23,6 +23,8 @@ type metricsSnapshot struct {
 	SchemaVersion uint64            `json:"schema_version"`
 	WGAvailable   bool              `json:"wg_available"`
 	Admission     map[string]uint64 `json:"admission"`
+	IPv4Fragments map[string]uint64 `json:"ipv4_fragments,omitempty"`
+	PacketSize    map[string]uint64 `json:"packet_size"`
 	Timestamp     string            `json:"ts"`
 	Total         map[string]uint64 `json:"total"`
 	TCP           map[string]uint64 `json:"tcp"`
@@ -170,9 +172,11 @@ func (r *metricsReporter) snapshot(si socketMetricsSource, tun tunMetricsSource,
 			m["rto_delta"] = rtoDelta
 			return m
 		}(),
-		Admission: dm.Admission,
-		TCPActive: dm.TCP.ActiveFlows,
-		UDPActive: dm.UDP.ActiveFlows,
+		Admission:     dm.Admission,
+		IPv4Fragments: dm.IPv4Fragments,
+		PacketSize:    dm.PacketSize,
+		TCPActive:     dm.TCP.ActiveFlows,
+		UDPActive:     dm.UDP.ActiveFlows,
 		WG: map[string]uint64{
 			"plaintext_from_wg": wgM.PlaintextFromWG,
 			"plaintext_to_wg":   wgM.PlaintextToWG,
@@ -222,6 +226,11 @@ func (r *metricsReporter) emit(snap metricsSnapshot, hstat map[string]uint64, fo
 	default:
 		logging.Infof("metrics schema_version=%d wg_available=%t", snap.SchemaVersion, snap.WGAvailable)
 		logging.Infof("admission: %s", admissionText(snap.Admission))
+		logging.Infof("packet_size: accepted_oversized=%d local_size_rejected=%d", snap.PacketSize["accepted_oversized"], snap.PacketSize["local_size_rejected"])
+		if snap.IPv4Fragments != nil {
+			f := snap.IPv4Fragments
+			logging.Infof("ipv4_fragments: received=%d completed=%d duplicates=%d rejected=%d expired=%d cached=%d live=%d reserved_bytes=%d limit_bytes=%d source_limit=%d global_limit=%d storage_limit=%d aggregate_limit=%d live_peak=%d source_peak=%d", f["received"], f["completed"], f["duplicates"], f["rejected"], f["expired"], f["cached"], f["live"], f["reserved_bytes"], f["limit_bytes"], f["source_limit"], f["global_limit"], f["storage_limit"], f["aggregate_limit"], f["live_peak"], f["source_peak"])
+		}
 		qfd := uint64(0)
 		if v, ok := snap.Proc["queueFullDrops"]; ok {
 			qfd = v

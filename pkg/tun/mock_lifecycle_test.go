@@ -82,7 +82,7 @@ func TestMockTUNCallbackShutdownAndQueueDrain(t *testing.T) {
 	if err := m.Start(); err == nil {
 		t.Fatal("restarted stopped mock")
 	}
-	if err := m.WritePacket(core.NewPacket(nil)); err == nil {
+	if err := m.WritePacket(core.NewCopiedPacket(nil)); err == nil {
 		t.Fatal("write after stop")
 	}
 	if err := m.Stop(); err != nil {
@@ -109,7 +109,7 @@ func TestMockTUNConcurrentStartStopAndObservers(t *testing.T) {
 				for j := 0; j < 20; j++ {
 					m.SetPacketProcessor(consumer)
 					_ = m.SimulatePacketReceived([]byte{1})
-					_ = m.WritePacket(core.NewPacket([]byte{2}))
+					_ = m.WritePacket(core.NewCopiedPacket([]byte{2}))
 					_ = m.Metrics()
 					_ = m.GetWrittenPackets()
 					m.ClearWrittenPackets()

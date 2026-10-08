@@ -5,10 +5,22 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/irctrakz/wgslirp/pkg/socket"
 )
+
+func TestPacketErrorLogPreservesLocalSizeRejection(t *testing.T) {
+	var lines []string
+	l := &packetErrorLog{emit: func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }}
+	err := fmt.Errorf("UDP slirp error: local host rejected packet for size: %w; reduce datagram size or check host path MTU", syscall.EMSGSIZE)
+	l.Errorf("Failed to write packets to TUN device: %v", err)
+	l.Flush()
+	if len(lines) != 1 || !strings.Contains(lines[0], syscall.EMSGSIZE.Error()) || !strings.Contains(lines[0], "reduce datagram size or check host path MTU") {
+		t.Fatal("local rejection reason/action hidden", lines)
+	}
+}
 
 func TestPacketErrorLogSummarizesBurstAndQuietTail(t *testing.T) {
 	var lines []string
