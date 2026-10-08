@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -21,10 +22,12 @@ type MockSocketInterface struct {
 	metrics core.SocketMetrics
 
 	// Control
-	mu      sync.Mutex
-	running bool
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	running  bool
+	stopped  bool
+	stopDone chan struct{}
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
 
 	// Mock-specific fields
 	receivedPackets []core.Packet
@@ -38,7 +41,7 @@ var _ SocketWriter = (*MockSocketInterface)(nil)
 // NewMockSocketInterface creates a new mock socket interface
 func NewMockSocketInterface(config Config) *MockSocketInterface {
 	return &MockSocketInterface{
-		config:          config,
+		config:          config.Effective(),
 		metrics:         core.SocketMetrics{},
 		stopCh:          make(chan struct{}),
 		receivedPackets: make([]core.Packet, 0),
@@ -51,6 +54,9 @@ func (m *MockSocketInterface) Start() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.stopped {
+		return fmt.Errorf("socket interface stopped; create a new instance")
+	}
 	if m.running {
 		return fmt.Errorf("socket interface already running")
 	}
@@ -59,30 +65,54 @@ func (m *MockSocketInterface) Start() error {
 		return fmt.Errorf("no packet processor set")
 	}
 
+	if err := m.config.Validate(); err != nil {
+		return fmt.Errorf("socket config: %w", err)
+	}
 	m.running = true
 	logging.Infof("Mock socket interface started with IP: %s", m.config.IPAddress)
 	return nil
 }
 
-// Stop stops the mock socket interface
-func (m *MockSocketInterface) Stop() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// Stop joins accepted work; callbacks must use RequestStop without waiting.
+func (m *MockSocketInterface) Stop() error { return m.StopContext(context.Background()) }
 
-	if !m.running {
+func (m *MockSocketInterface) StopContext(ctx context.Context) error {
+	done := m.RequestStop()
+	select {
+	case <-done:
 		return nil
+	default:
 	}
-
-	close(m.stopCh)
-	m.wg.Wait()
-	m.running = false
-
-	logging.Infof("Mock socket interface stopped")
-	return nil
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-// SetPacketProcessor sets the packet processor for handling packets from the socket
+// RequestStop has the same callback-safe completion contract as SocketInterface.
+func (m *MockSocketInterface) RequestStop() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopped {
+		return m.stopDone
+	}
+	m.stopped, m.running = true, false
+	m.stopDone = make(chan struct{})
+	close(m.stopCh)
+	go func() { m.wg.Wait(); close(m.stopDone) }()
+	return m.stopDone
+}
+
+// SetPacketProcessor configures delivery only before startup.
 func (m *MockSocketInterface) SetPacketProcessor(processor core.PacketProcessor) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.running || m.stopped {
+		logging.Warnf("Mock socket packet processor can only be configured before startup")
+		return
+	}
 	m.processor = processor
 }
 
@@ -90,10 +120,17 @@ func (m *MockSocketInterface) SetPacketProcessor(processor core.PacketProcessor)
 func (m *MockSocketInterface) WritePacket(packet core.Packet) error {
 	m.mu.Lock()
 	running := m.running
+	if running {
+		m.wg.Add(1)
+	}
 	m.mu.Unlock()
 
 	if !running {
 		return fmt.Errorf("socket interface not running")
+	}
+	defer m.wg.Done()
+	if packet == nil {
+		return fmt.Errorf("nil packet")
 	}
 
 	// Get the packet data
@@ -114,41 +151,51 @@ func (m *MockSocketInterface) WritePacket(packet core.Packet) error {
 
 // Metrics returns the metrics for the mock socket interface
 func (m *MockSocketInterface) Metrics() core.SocketMetrics {
-	return m.metrics
+	return loadSocketMetrics(&m.metrics)
 }
 
 // SimulatePacketReceived simulates receiving a packet from the network
-// This is a test-only method that doesn't exist in the real implementation
+// Ownership transfers to the processor on success; on error the caller retains
+// ownership. The recorded history is a detached copy, including after release.
 func (m *MockSocketInterface) SimulatePacketReceived(packet core.Packet) error {
 	m.mu.Lock()
 	running := m.running
+	if running {
+		m.wg.Add(1)
+	}
 	processor := m.processor
 	m.mu.Unlock()
 
 	if !running {
 		return fmt.Errorf("socket interface not running")
 	}
+	defer m.wg.Done()
+	if packet == nil {
+		return fmt.Errorf("nil packet")
+	}
 
 	if processor == nil {
 		return fmt.Errorf("no packet processor set")
 	}
 
-	// Store the packet
+	// Copy before the callback can consume/release the packet.
+	data := append([]byte(nil), core.BorrowPacketData(packet)...)
+	size := len(data)
 	m.mu.Lock()
-	m.receivedPackets = append(m.receivedPackets, packet)
+	m.receivedPackets = append(m.receivedPackets, core.NewPacket(data))
 	m.mu.Unlock()
 
 	// Update metrics
 	atomic.AddUint64(&m.metrics.PacketsReceived, 1)
-	atomic.AddUint64(&m.metrics.BytesReceived, uint64(len(packet.Data())))
+	atomic.AddUint64(&m.metrics.BytesReceived, uint64(size))
 
 	// Process the packet
 	if err := processor.ProcessPacket(packet); err != nil {
 		atomic.AddUint64(&m.metrics.Errors, 1)
-		return fmt.Errorf("failed to process packet: %v", err)
+		return fmt.Errorf("failed to process packet: %w", err)
 	}
 
-	logging.Debugf("Mock socket received packet of length %d", len(packet.Data()))
+	logging.Debugf("Mock socket received packet of length %d", size)
 	return nil
 }
 
@@ -160,7 +207,9 @@ func (m *MockSocketInterface) GetSentPackets() []core.Packet {
 
 	// Return a copy to avoid race conditions
 	packets := make([]core.Packet, len(m.sentPackets))
-	copy(packets, m.sentPackets)
+	for i, packet := range m.sentPackets {
+		packets[i] = core.NewPacket(append([]byte(nil), core.BorrowPacketData(packet)...))
+	}
 	return packets
 }
 
@@ -172,6 +221,8 @@ func (m *MockSocketInterface) GetReceivedPackets() []core.Packet {
 
 	// Return a copy to avoid race conditions
 	packets := make([]core.Packet, len(m.receivedPackets))
-	copy(packets, m.receivedPackets)
+	for i, packet := range m.receivedPackets {
+		packets[i] = core.NewPacket(append([]byte(nil), core.BorrowPacketData(packet)...))
+	}
 	return packets
 }

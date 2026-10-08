@@ -1,6 +1,8 @@
 package socket
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -17,6 +19,8 @@ import (
 // SocketInterface represents a socket interface for connecting to the host network
 // It implements the core.SocketInterface interface and the SocketWriter interface
 type SocketInterface struct {
+	failureLog logging.RateLimiter
+	admission  admissionCounters
 	// Configuration
 	config       Config
 	budgetOnce   sync.Once
@@ -106,7 +110,7 @@ func (s *SocketInterface) Start() error {
 		// For ICMP, use the icmp package. This works in privileged mode ("ip4:icmp").
 		s.conn, err = icmp.ListenPacket(protocol, "0.0.0.0") // Bind to all interfaces
 		if err != nil {
-			return fmt.Errorf("failed to create raw socket with protocol %s: %v", protocol, err)
+			return fmt.Errorf("failed to create raw socket with protocol %s: %w", protocol, err)
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
 		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
@@ -116,7 +120,7 @@ func (s *SocketInterface) Start() error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to create raw socket with protocol %s: %v", protocol, err)
+		return fmt.Errorf("failed to create raw socket with protocol %s: %w", protocol, err)
 	}
 
 	if s.conn != nil {
@@ -125,7 +129,7 @@ func (s *SocketInterface) Start() error {
 		if err != nil {
 			s.conn.Close()
 			s.conn = nil
-			return fmt.Errorf("failed to set read deadline: %v", err)
+			return fmt.Errorf("failed to set read deadline: %w", err)
 		}
 	}
 
@@ -153,6 +157,8 @@ func (s *SocketInterface) Start() error {
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
 	s.icmp = newICMPBridge(s)
+	s.udp.start()
+	s.tcp.start()
 
 	// No egress limiter configuration
 
@@ -160,14 +166,35 @@ func (s *SocketInterface) Start() error {
 	return nil
 }
 
-// Stop stops the socket interface
-func (s *SocketInterface) Stop() error {
-	s.mu.Lock()
-	if s.stopped {
-		done := s.stopDone
-		s.mu.Unlock()
-		<-done
+// Stop requests shutdown and joins all accepted work. Call RequestStop from
+// a delivery callback; waiting here inside that callback would join itself.
+func (s *SocketInterface) Stop() error { return s.StopContext(context.Background()) }
+
+// StopContext bounds the caller's wait, not the lifetime of accepted callbacks.
+// On timeout cleanup continues; RequestStop's channel closes only after joining.
+func (s *SocketInterface) StopContext(ctx context.Context) error {
+	done := s.RequestStop()
+	select {
+	case <-done:
 		return nil
+	default:
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// RequestStop closes admission synchronously and starts exactly one finalizer.
+// It is safe inside a delivery callback provided the callback does not wait for
+// the returned completion channel (which includes that callback's return).
+func (s *SocketInterface) RequestStop() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return s.stopDone
 	}
 	s.stopped = true
 	s.running = false
@@ -176,21 +203,27 @@ func (s *SocketInterface) Stop() error {
 		close(s.stopCh)
 	}
 	conn, udp, tcp := s.conn, s.udp, s.tcp
-	s.mu.Unlock()
-	// Close descriptors before joining blocked readers. Bridge pointers remain
-	// stable after startup so concurrent snapshots never observe torn teardown.
-	if conn != nil {
-		_ = conn.Close()
-	}
-	if udp != nil {
-		udp.stop()
-	}
-	if tcp != nil {
-		tcp.stop()
-	}
-	s.wg.Wait()
-	close(s.stopDone)
-	return nil
+	go func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		// Signal both bridges before joining either callback domain.
+		if tcp != nil {
+			tcp.requestStop()
+		}
+		if udp != nil {
+			udp.requestStop()
+		}
+		if tcp != nil {
+			tcp.stop()
+		}
+		if udp != nil {
+			udp.stop()
+		}
+		s.wg.Wait()
+		close(s.stopDone)
+	}()
+	return s.stopDone
 }
 
 // SetPacketProcessor configures delivery before Start. Runtime replacement is
@@ -230,7 +263,9 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	}
 	// Check packet size against MTU
 	if len(data) > s.config.MTU {
-		logging.Warnf("Packet size %d exceeds MTU %d, packet will be fragmented", len(data), s.config.MTU)
+		if s.failureLog.Allow(time.Now()) {
+			logging.Warnf("Guest packet size %d exceeds configured MTU %d", len(data), s.config.MTU)
+		}
 	}
 
 	// Extract IP header information for detailed logging
@@ -379,16 +414,18 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 	udp, tcp, processor := s.udp, s.tcp, s.processor
 	s.mu.Unlock()
 	dm := SocketDetailedMetrics{
-		Total: loadSocketMetrics(&s.metrics),
+		Total:     loadSocketMetrics(&s.metrics),
+		Admission: s.admissionSnapshot(),
 	}
 	if udp != nil {
 		udp.flowsMu.Lock()
 		active := uint64(len(udp.flows))
 		udp.flowsMu.Unlock()
+		dm.UDP.DeliveryRefused = udp.deliveryRefused.Load()
 		dm.UDP.Counters = loadSocketMetrics(&udp.metrics)
 		dm.UDP.ActiveFlows = active
 		// Add UDP debug counters
-		enq, proc := getUDPTxDebug()
+		enq, proc := udp.txEnqueued.Load(), udp.txProcessed.Load()
 		dm.UDPExt = map[string]uint64{"tx_enq": enq, "tx_proc": proc}
 	}
 	if tcp != nil {
@@ -412,6 +449,7 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 				f.stateMu.Unlock()
 			}
 		}
+		dm.TCP.DeliveryRefused = tcp.deliveryRefused.Load()
 		dm.TCP.Counters = loadSocketMetrics(&tcp.metrics)
 		dm.TCP.ActiveFlows = active
 		// TCP extra debug counters
@@ -452,7 +490,10 @@ func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
 	// Include processor metrics if available
 	if processor != nil {
 		if m, ok := processor.(interface{ Metrics() map[string]uint64 }); ok {
-			dm.Processor = m.Metrics()
+			dm.Processor = make(map[string]uint64)
+			for k, v := range m.Metrics() {
+				dm.Processor[k] = v
+			}
 		}
 	}
 	return dm
@@ -469,20 +510,13 @@ func (s *SocketInterface) ResetAllTCPFlows() int {
 		return 0
 	}
 
-	// Get all flow keys
-	tcp.mu.RLock()
-	keys := make([]string, 0, len(tcp.flows))
-	for k := range tcp.flows {
-		keys = append(keys, k)
+	count := 0
+	for _, f := range tcp.flowSnapshot() {
+		if tcp.removeFlowIf(f, nil) {
+			count++
+		}
 	}
-	tcp.mu.RUnlock()
-
-	// Reset each flow
-	for _, k := range keys {
-		tcp.removeFlow(k)
-	}
-
-	return len(keys)
+	return count
 }
 
 // ResetRTOTCPFlows resets only TCP flows that are in the retransmit state.
@@ -496,20 +530,19 @@ func (s *SocketInterface) ResetRTOTCPFlows() int {
 		return 0
 	}
 
-	// Get RTO flow keys
 	tcp.rtoMu.Lock()
-	rtoKeys := make([]string, 0, len(tcp.rtoActiveFlows))
-	for k := range tcp.rtoActiveFlows {
-		rtoKeys = append(rtoKeys, k)
+	flows := make([]*tcpFlow, 0, len(tcp.rtoActiveFlows))
+	for _, f := range tcp.rtoActiveFlows {
+		flows = append(flows, f)
 	}
 	tcp.rtoMu.Unlock()
-
-	// Reset only RTO flows
-	for _, k := range rtoKeys {
-		tcp.removeFlow(k)
+	count := 0
+	for _, f := range flows {
+		if tcp.removeFlowIf(f, nil) {
+			count++
+		}
 	}
-
-	return len(rtoKeys)
+	return count
 }
 
 // listenLoop listens for packets from the host network
@@ -535,7 +568,13 @@ func (s *SocketInterface) listenLoop(releaseRead func()) {
 			// Reset read deadline to prevent permanent timeout
 			err := s.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			if err != nil {
-				logging.Errorf("Failed to reset read deadline: %v", err)
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				if s.failureLog.Allow(time.Now()) {
+					logging.Errorf("Failed to reset read deadline: %v", err)
+				}
+				atomic.AddUint64(&s.metrics.Errors, 1)
 				time.Sleep(100 * time.Millisecond) // Avoid tight loop if errors persist
 				continue
 			}
@@ -547,7 +586,12 @@ func (s *SocketInterface) listenLoop(releaseRead func()) {
 					// This is just a timeout, not an error
 					continue
 				}
-				logging.Errorf("Failed to read from socket: %v", err)
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				if s.failureLog.Allow(time.Now()) {
+					logging.Errorf("Failed to read from socket: %v", err)
+				}
 				atomic.AddUint64(&s.metrics.Errors, 1)
 				time.Sleep(100 * time.Millisecond) // Avoid tight loop if errors persist
 				continue

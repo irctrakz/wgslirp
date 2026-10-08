@@ -17,6 +17,7 @@ jobs:
     needs: test
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -40,6 +41,7 @@ jobs:
     # Suspended during curated integration; stable release policy requires separate review.
     if: ${{ false }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write

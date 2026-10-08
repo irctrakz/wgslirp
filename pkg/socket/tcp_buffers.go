@@ -33,7 +33,9 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 		return true
 	}
 	start, end := uint64(seq), uint64(seq)+uint64(len(payload))
-	if end > 1<<32 {
+	// Numeric ordering is used by this bounded queue. Do not mix sequence
+	// epochs or retain a segment spanning wrap; the peer must retry in order.
+	if seq < f.clientNxt || end > 1<<32 {
 		return false
 	}
 	left, right := 0, 0
@@ -58,7 +60,14 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 		right++
 	}
 	size := int(end - start)
-	if size > b.reasmCap-(f.futureBytes-oldBytes) || !b.buffers.acquire(bufferCharge(size)) {
+	if size > b.reasmCap-(f.futureBytes-oldBytes) {
+		if b.parent != nil {
+			b.parent.admission.reassemblyBytes.Add(1)
+		}
+		b.bufferDrops.Add(1)
+		return false
+	}
+	if !b.buffers.acquire(bufferCharge(size)) {
 		b.bufferDrops.Add(1)
 		return false
 	}
@@ -92,7 +101,7 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 func (b *tcpBridge) flushReassembly(f *tcpFlow) error {
 	for len(f.ooo) > 0 && f.conn != nil {
 		s := f.ooo[0]
-		if s.seq > f.clientNxt {
+		if seqAfter(s.seq, f.clientNxt) {
 			break
 		}
 		skip := int(f.clientNxt - s.seq)
@@ -103,8 +112,6 @@ func (b *tcpBridge) flushReassembly(f *tcpFlow) error {
 			}
 			atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
 			atomic.AddUint64(&b.metrics.PacketsSent, 1)
-			atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
-			atomic.AddUint64(&b.parent.metrics.PacketsSent, 1)
 			f.toSrvBytes += uint64(n)
 			f.toSrvPkts++
 			f.clientNxt += uint32(n)

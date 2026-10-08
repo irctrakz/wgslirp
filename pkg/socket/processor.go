@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/logging"
@@ -14,12 +15,12 @@ const ipv4MinHeaderSize = 20
 
 // SocketWriter synchronously borrows a packet. Implementations must copy any
 // data they retain after WritePacket returns; ownership stays with the caller.
-type SocketWriter interface {
-	WritePacket(packet core.Packet) error
-}
+type SocketWriter = core.PacketWriter
 
 // SocketPacketProcessor implements core.PacketProcessor
 type SocketPacketProcessor struct {
+	packetsDelivered, writeErrors, shutdownDropped uint64
+	failureLog                                     logging.RateLimiter
 	// The socket interface
 	socket  SocketWriter
 	buffers PacketBufferReserver
@@ -122,6 +123,7 @@ func (p *SocketPacketProcessor) Stop() error {
 		for {
 			select {
 			case packet := <-p.packetCh:
+				atomic.AddUint64(&p.shutdownDropped, 1)
 				packet.close()
 			default:
 				return
@@ -199,7 +201,9 @@ func (p *SocketPacketProcessor) worker(id int) {
 			// Process the packet
 			err := p.processQueuedPacket(packet)
 			if err != nil {
-				logging.Errorf("Failed to process packet in worker %d: %v", id, err)
+				if p.failureLog.Allow(time.Now()) {
+					logging.Errorf("Failed to process packet in worker %d: %v", id, err)
+				}
 			}
 		}
 	}
@@ -219,9 +223,11 @@ func (p *SocketPacketProcessor) processPacketInternal(packet core.Packet) error 
 	// Forward the packet to the socket interface
 	err := p.socket.WritePacket(packet)
 	if err != nil {
-		return fmt.Errorf("failed to write packet to socket: %v", err)
+		atomic.AddUint64(&p.writeErrors, 1)
+		return fmt.Errorf("failed to write packet to socket: %w", err)
 	}
 
+	atomic.AddUint64(&p.packetsDelivered, 1)
 	logging.Debugf("Forwarded packet to socket: length=%d", packet.Length())
 	return nil
 }
@@ -230,6 +236,9 @@ func (p *SocketPacketProcessor) processPacketInternal(packet core.Packet) error 
 func (p *SocketPacketProcessor) Metrics() map[string]uint64 {
 	return map[string]uint64{
 		"packetsProcessed": atomic.LoadUint64(&p.packetsProcessed),
+		"packetsDelivered": atomic.LoadUint64(&p.packetsDelivered),
+		"writeErrors":      atomic.LoadUint64(&p.writeErrors),
+		"shutdownDropped":  atomic.LoadUint64(&p.shutdownDropped),
 		"packetsDropped":   atomic.LoadUint64(&p.packetsDropped),
 		"queueFullDrops":   atomic.LoadUint64(&p.queueFullDrops),
 	}

@@ -125,7 +125,7 @@ func TestTCPIntegration_Echo(t *testing.T) {
 
 	// Allow server goroutine to exit
 	<-done
-	waitTCPClosed(t, s.tcp)
+	finishTCPIntegrationClose(t, s.tcp, proc, cliIP, srvIP, port, srvPort, cseq+2+uint32(len(payload)), true)
 
 	// Verify metrics: one TCP connection created and closed, packets both ways
 	dm := s.DetailedMetrics()
@@ -266,4 +266,41 @@ func TestTCPIntegration_OutOfOrder(t *testing.T) {
 	}
 
 	<-done
+}
+
+// Complete the wire handshake before advancing TIME-WAIT in the fixture.
+// Host EOF alone is no longer evidence of a safely closed guest connection.
+func finishTCPIntegrationClose(t *testing.T, b *tcpBridge, c *captureProcessor, src, dst [4]byte, sport, dport uint16, clientNext uint32, sentFIN bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, packet := range c.snapshot() {
+			_, _, _, _, seq, _, flags, _ := parseTCP(packet)
+			if flags&1 == 0 {
+				continue
+			}
+			guestFlags := byte(0x10)
+			if !sentFIN {
+				guestFlags |= 1
+			}
+			if err := b.HandleOutbound(buildIPv4TCP(src, dst, sport, dport, clientNext, seq+1, guestFlags, nil)); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range b.flowSnapshot() {
+				f.stateMu.Lock()
+				state := f.state
+				if state == tcpTimeWait {
+					b.closeTickLocked(f, f.timeWaitUntil)
+				}
+				f.stateMu.Unlock()
+				if state != tcpTimeWait {
+					t.Fatalf("incomplete FIN handshake: state=%d", state)
+				}
+			}
+			waitTCPClosed(t, b)
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("host FIN not delivered")
 }

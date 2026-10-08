@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,20 +20,23 @@ import (
 )
 
 type metricsSnapshot struct {
-	Timestamp string            `json:"ts"`
-	Total     map[string]uint64 `json:"total"`
-	TCP       map[string]uint64 `json:"tcp"`
-	UDP       map[string]uint64 `json:"udp"`
-	TCPExt    map[string]uint64 `json:"tcp_ext"`
-	TCPActive uint64            `json:"tcp_active"`
-	UDPActive uint64            `json:"udp_active"`
-	WG        map[string]uint64 `json:"wg"`
-	Flow      map[string]uint64 `json:"flow"`
-	Proc      map[string]uint64 `json:"proc"`
-	RT        map[string]uint64 `json:"rt"`
-	EgressLim map[string]uint64 `json:"egress_limiter"`
-	FlowLim   map[string]uint64 `json:"flow_limiter"`
-	Srv       map[string]uint64 `json:"srv_limits"`
+	SchemaVersion uint64            `json:"schema_version"`
+	WGAvailable   bool              `json:"wg_available"`
+	Admission     map[string]uint64 `json:"admission"`
+	Timestamp     string            `json:"ts"`
+	Total         map[string]uint64 `json:"total"`
+	TCP           map[string]uint64 `json:"tcp"`
+	UDP           map[string]uint64 `json:"udp"`
+	TCPExt        map[string]uint64 `json:"tcp_ext"`
+	TCPActive     uint64            `json:"tcp_active"`
+	UDPActive     uint64            `json:"udp_active"`
+	WG            map[string]uint64 `json:"wg"`
+	Flow          map[string]uint64 `json:"flow"`
+	Proc          map[string]uint64 `json:"proc"`
+	RT            map[string]uint64 `json:"rt"`
+	EgressLim     map[string]uint64 `json:"egress_limiter"`
+	FlowLim       map[string]uint64 `json:"flow_limiter"`
+	Srv           map[string]uint64 `json:"srv_limits"`
 	// Fallback removed
 }
 
@@ -51,8 +55,9 @@ func metricsInterval(iv string) (time.Duration, error) {
 func runMetricsReporter(ctx context.Context, d time.Duration, si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle, format string) {
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
+	r := &metricsReporter{}
 	for {
-		dumpMetrics(si, tun, dev, format)
+		r.dump(si, tun, dev, format)
 		select {
 		case <-ctx.Done():
 			return
@@ -61,19 +66,50 @@ func runMetricsReporter(ctx context.Context, d time.Duration, si *socket.SocketI
 	}
 }
 
-// lastRTODelta keeps the previous cumulative RTO count to compute per-interval delta.
-var lastRTODelta uint64
+type socketMetricsSource interface {
+	DetailedMetrics() socket.SocketDetailedMetrics
+}
+type tunMetricsSource interface{ Metrics() wg.TUNMetrics }
+type deviceStateSource interface{ IpcGet() (string, error) }
 
-func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle, format string) {
+// Interval state belongs to a reporter, never to the process or a bridge.
+type metricsReporter struct {
+	mu      sync.Mutex
+	lastRTO uint64
+}
+
+func (r *metricsReporter) rtoDelta(current uint64) uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delta := current
+	if current >= r.lastRTO {
+		delta = current - r.lastRTO
+	}
+	r.lastRTO = current
+	return delta
+}
+
+// One-shot reporting has no prior interval. Periodic reporting retains its own instance.
+func dumpMetrics(si socketMetricsSource, tun tunMetricsSource, dev deviceStateSource, format string) {
+	(&metricsReporter{}).dump(si, tun, dev, format)
+}
+func (r *metricsReporter) dump(si socketMetricsSource, tun tunMetricsSource, dev deviceStateSource, format string) {
+	snap, hstat := r.snapshot(si, tun, dev)
+	r.emit(snap, hstat, format)
+}
+
+func (r *metricsReporter) snapshot(si socketMetricsSource, tun tunMetricsSource, dev deviceStateSource) (metricsSnapshot, map[string]uint64) {
 	dm := si.DetailedMetrics()
 	wgM := tun.Metrics()
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	// Optional: handshake status from WG device
 	hstat := map[string]uint64{}
+	wgAvailable := false
 	if dev != nil {
 		if state, err := dev.IpcGet(); err == nil {
 			hstat = summarizeWGHandshakes(state)
+			wgAvailable = true
 		}
 	}
 	// Compute per-interval RTO delta
@@ -83,10 +119,10 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 			rtoCur = v
 		}
 	}
-	rtoDelta := rtoCur - lastRTODelta
-	lastRTODelta = rtoCur
+	rtoDelta := r.rtoDelta(rtoCur)
 
 	snap := metricsSnapshot{
+		SchemaVersion: 1, WGAvailable: wgAvailable,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Total: map[string]uint64{
 			"conns_created": dm.Total.ConnectionsCreated,
@@ -98,19 +134,21 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 			"errors":        dm.Total.Errors,
 		},
 		TCP: map[string]uint64{
-			"pkts_sent":  dm.TCP.Counters.PacketsSent,
-			"pkts_recv":  dm.TCP.Counters.PacketsReceived,
-			"bytes_sent": dm.TCP.Counters.BytesSent,
-			"bytes_recv": dm.TCP.Counters.BytesReceived,
-			"errors":     dm.TCP.Counters.Errors,
+			"pkts_sent":        dm.TCP.Counters.PacketsSent,
+			"pkts_recv":        dm.TCP.Counters.PacketsReceived,
+			"bytes_sent":       dm.TCP.Counters.BytesSent,
+			"bytes_recv":       dm.TCP.Counters.BytesReceived,
+			"errors":           dm.TCP.Counters.Errors,
+			"delivery_refused": dm.TCP.DeliveryRefused,
 		},
 		UDP: func() map[string]uint64 {
 			m := map[string]uint64{
-				"pkts_sent":  dm.UDP.Counters.PacketsSent,
-				"pkts_recv":  dm.UDP.Counters.PacketsReceived,
-				"bytes_sent": dm.UDP.Counters.BytesSent,
-				"bytes_recv": dm.UDP.Counters.BytesReceived,
-				"errors":     dm.UDP.Counters.Errors,
+				"pkts_sent":        dm.UDP.Counters.PacketsSent,
+				"pkts_recv":        dm.UDP.Counters.PacketsReceived,
+				"bytes_sent":       dm.UDP.Counters.BytesSent,
+				"bytes_recv":       dm.UDP.Counters.BytesReceived,
+				"errors":           dm.UDP.Counters.Errors,
+				"delivery_refused": dm.UDP.DeliveryRefused,
 			}
 			if dm.UDPExt != nil {
 				if v, ok := dm.UDPExt["tx_enq"]; ok {
@@ -132,6 +170,7 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 			m["rto_delta"] = rtoDelta
 			return m
 		}(),
+		Admission: dm.Admission,
 		TCPActive: dm.TCP.ActiveFlows,
 		UDPActive: dm.UDP.ActiveFlows,
 		WG: map[string]uint64{
@@ -160,6 +199,10 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 		// Fallback removed
 	}
 
+	return snap, hstat
+}
+
+func (r *metricsReporter) emit(snap metricsSnapshot, hstat map[string]uint64, format string) {
 	switch format {
 	case "json":
 		// Attach handshake summary under top-level key to avoid breaking existing parsers
@@ -177,6 +220,8 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 		b, _ := json.Marshal(snap)
 		logging.Infof("metrics: %s", string(b))
 	default:
+		logging.Infof("metrics schema_version=%d wg_available=%t", snap.SchemaVersion, snap.WGAvailable)
+		logging.Infof("admission: %s", admissionText(snap.Admission))
 		qfd := uint64(0)
 		if v, ok := snap.Proc["queueFullDrops"]; ok {
 			qfd = v
@@ -205,7 +250,7 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 		ackIdle := snap.TCPExt["ack_idle_flows"]
 		// Handshake summary in text: peers=fresh/stale oldest=newest=secs
 		hsPeers, hsFresh, hsStale, hsOld, hsNew := hstat["peers"], hstat["fresh"], hstat["stale"], hstat["oldest_sec"], hstat["newest_sec"]
-		logging.Infof("metrics: ts=%s total: sent=%d/%d recv=%d/%d err=%d | tcp: sent=%d/%d recv=%d/%d act=%d rto=%d dR=%d ackidle=%d async: dial=%d/%d/%d infl=%d pend=%d/%d/%d | udp: sent=%d/%d recv=%d/%d act=%d enq=%d proc=%d | wg: from=%d to=%d drops=%d hs: peers=%d %d/%d oldest=%ds newest=%ds | srv: fds=%d/%d eph=%d/%d ct=%d/%d | proc: qfd=%d per=%d sp=%d wgfull=%d | rt: heap=%dMi inuse=%dMi gor=%d gc=%d",
+		logging.Infof("metrics: ts=%s total: sent=%d/%d recv=%d/%d err=%d | tcp: sent=%d/%d recv=%d/%d act=%d rto=%d dR=%d ackidle=%d async: dial=%d/%d/%d infl=%d pend=%d/%d/%d | udp: sent=%d/%d recv=%d/%d act=%d enq=%d proc=%d | wg: from=%d to=%d drops=%d hs: peers=%d %d/%d oldest=%ds newest=%ds | srv: fds=%s/%s eph=%s/%s ct=%s/%s | proc: qfd=%d per=%d sp=%d wgfull=%d | rt: heap=%dMi inuse=%dMi gor=%d gc=%d",
 			snap.Timestamp,
 			snap.Total["pkts_sent"], snap.Total["bytes_sent"],
 			snap.Total["pkts_recv"], snap.Total["bytes_recv"],
@@ -220,9 +265,9 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 			snap.WG["plaintext_from_wg"], snap.WG["plaintext_to_wg"], snap.WG["queue_drops"],
 			hsPeers, hsFresh, hsStale, hsOld, hsNew,
 
-			snap.Srv["open_fds"], snap.Srv["nofile_soft"],
-			snap.Srv["eph_used_est"], snap.Srv["eph_size"],
-			snap.Srv["ct_used"], snap.Srv["ct_max"],
+			metricText(snap.Srv, "open_fds"), metricText(snap.Srv, "nofile_soft"),
+			metricText(snap.Srv, "eph_used_est"), metricText(snap.Srv, "eph_size"),
+			metricText(snap.Srv, "ct_used"), metricText(snap.Srv, "ct_max"),
 			qfd, per, sp, wgfull,
 			snap.RT["heap_alloc"]/(1024*1024), snap.RT["heap_inuse"]/(1024*1024), snap.RT["goroutines"], snap.RT["num_gc"],
 		)
@@ -232,99 +277,7 @@ func dumpMetrics(si *socket.SocketInterface, tun *wg.WGTun, dev wg.DeviceHandle,
 // summarizeWGHandshakes parses the wg device IpcGet state and returns summary counters:
 // peers, fresh, stale, oldest_sec, newest_sec.
 func summarizeWGHandshakes(state string) map[string]uint64 {
-	res := map[string]uint64{"peers": 0, "fresh": 0, "stale": 0, "oldest_sec": 0, "newest_sec": 0}
-	lines := strings.Split(state, "\n")
-	now := time.Now()
-	var lastHS int64 = 0
-	fresh := uint64(0)
-	total := uint64(0)
-	oldest := uint64(0)
-	newest := uint64(0)
-	// keepalive default heuristic
-	staleAfter := uint64(60)
-	// Track peer sections and their keepalive for a better staleAfter per-peer
-	keepalive := uint64(0)
-	for _, ln := range lines {
-		if ln == "" {
-			continue
-		}
-		// Start of a new peer section in wg UAPI output. Different versions emit
-		// either "public_key=" (standard) or "peer=". Treat both as section
-		// boundaries.
-		if strings.HasPrefix(ln, "public_key=") || strings.HasPrefix(ln, "peer=") {
-			// finalize previous peer
-			if lastHS > 0 {
-				age := uint64(now.Sub(time.Unix(lastHS, 0)) / time.Second)
-				if oldest == 0 || age > oldest {
-					oldest = age
-				}
-				if newest == 0 || age < newest {
-					newest = age
-				}
-				thr := staleAfter
-				if keepalive > 0 {
-					thr = keepalive * 3
-					if thr < 60 {
-						thr = 60
-					}
-				}
-				if age < thr {
-					fresh++
-				}
-			}
-			total++
-			// reset for new peer
-			lastHS = 0
-			keepalive = 0
-			continue
-		}
-		if strings.HasPrefix(ln, "latest_handshake_time_sec=") {
-			parts := strings.SplitN(ln, "=", 2)
-			if len(parts) == 2 {
-				if v, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64); err == nil {
-					lastHS = v
-				}
-			}
-		} else if strings.HasPrefix(ln, "persistent_keepalive_interval=") {
-			parts := strings.SplitN(ln, "=", 2)
-			if len(parts) == 2 {
-				if v, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64); err == nil {
-					keepalive = v
-				}
-			}
-		}
-	}
-	// finalize last peer
-	if lastHS > 0 {
-		age := uint64(now.Sub(time.Unix(lastHS, 0)) / time.Second)
-		if oldest == 0 || age > oldest {
-			oldest = age
-		}
-		if newest == 0 || age < newest {
-			newest = age
-		}
-		thr := staleAfter
-		if keepalive > 0 {
-			thr = keepalive * 3
-			if thr < 60 {
-				thr = 60
-			}
-		}
-		if age < thr {
-			fresh++
-		}
-		total++
-	}
-	stale := uint64(0)
-	if total > fresh {
-		stale = total - fresh
-	}
-	res["peers"] = total
-	res["fresh"] = fresh
-	res["stale"] = stale
-	res["oldest_sec"] = oldest
-	res["newest_sec"] = newest
-	return res
+	return wg.HandshakeSummary(wg.ParsePeerState(state), time.Now())
 }
 
 // buildServerLimits collects best-effort server-side limits/usage that can throttle traffic.
@@ -451,15 +404,31 @@ func countLines(path string) (uint64, bool) {
 	r := bufio.NewReader(f)
 	var n uint64 = 0
 	for {
-		_, err := r.ReadString('\n')
+		line, err := r.ReadString('\n')
 		if err == nil {
 			n++
 			continue
 		}
 		if err == io.EOF {
+			if len(line) > 0 {
+				n++
+			}
 			break
 		}
 		return 0, false
 	}
 	return n, true
+}
+
+// Fixed order and names make the text form usable without per-peer cardinality.
+func admissionText(m map[string]uint64) string {
+	return fmt.Sprintf("tcp_flow_limit=%d udp_flow_limit=%d pending_dial_limit=%d tcp_pending_limit=%d tcp_reassembly_limit=%d aggregate_buffer_limit=%d invalid_buffer_request=%d tcp_retransmit_waits=%d",
+		m["tcp_flow_limit"], m["udp_flow_limit"], m["pending_dial_limit"], m["tcp_pending_limit"], m["tcp_reassembly_limit"], m["aggregate_buffer_limit"], m["invalid_buffer_request"], m["tcp_retransmit_waits"])
+}
+
+func metricText(values map[string]uint64, key string) string {
+	if v, ok := values[key]; ok {
+		return strconv.FormatUint(v, 10)
+	}
+	return "unavailable"
 }

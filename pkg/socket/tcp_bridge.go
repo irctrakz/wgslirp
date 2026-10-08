@@ -38,22 +38,26 @@ import (
 // retransmission rather than protocol-specific tweaks.
 
 type tcpBridge struct {
-	tuning        TransportConfig
-	dialSlots     *resourceBudget
-	buffers       *resourceBudget
-	retransmitCap int
-	dial          func(context.Context, string, time.Duration) (*net.TCPConn, error)
-	bufferDrops   atomic.Uint64
-	lifecycleMu   sync.Mutex
-	workers       sync.WaitGroup
-	stopOnce      sync.Once
-	ctx           context.Context
-	cancel        context.CancelFunc
-	parent        *SocketInterface
-	mu            sync.RWMutex
-	flows         map[string]*tcpFlow
-	stopCh        chan struct{}
-	lifetime      time.Duration
+	deliveryRefused atomic.Uint64
+	failureLog      logging.RateLimiter
+	deliver         packetDelivery
+	startOnce       sync.Once
+	tuning          TransportConfig
+	dialSlots       *resourceBudget
+	buffers         *resourceBudget
+	retransmitCap   int
+	dial            func(context.Context, string, time.Duration) (*net.TCPConn, error)
+	bufferDrops     atomic.Uint64
+	lifecycleMu     sync.Mutex
+	workers         sync.WaitGroup
+	stopOnce        sync.Once
+	ctx             context.Context
+	cancel          context.CancelFunc
+	parent          *SocketInterface
+	mu              sync.RWMutex
+	flows           map[string]*tcpFlow
+	stopCh          chan struct{}
+	lifetime        time.Duration
 
 	metrics  core.SocketMetrics
 	maxFlows int
@@ -85,9 +89,9 @@ type tcpBridge struct {
 
 	// RTO metrics tracking
 	rtoMu              sync.Mutex
-	rtoActiveFlows     map[string]bool // Tracks flows currently in RTO retransmission
-	rtoMetricsDumped   bool            // Flag to prevent repeated dumps for the same event
-	rtoMetricsDumpTime time.Time       // Last time metrics were dumped
+	rtoActiveFlows     map[string]*tcpFlow // Tracks flows currently in RTO retransmission
+	rtoMetricsDumped   bool                // Flag to prevent repeated dumps for the same event
+	rtoMetricsDumpTime time.Time           // Last time metrics were dumped
 
 	// ACK classification counters (userspace visibility for return path)
 	ackAdv     uint64 // ACK advanced sndUna
@@ -123,11 +127,17 @@ type tcpState int
 const (
 	tcpSynRcvd tcpState = iota
 	tcpEstablished
-	tcpFinWait
+	tcpFinWait1
+	tcpFinWait2
+	tcpCloseWait
+	tcpClosing
+	tcpLastAck
+	tcpTimeWait
 	tcpClosed
 )
 
 type tcpFlow struct {
+	retransmitBlocked bool // stateMu; counts transitions, not polling iterations
 	// stateMu owns connection attachment, sequence/window state, timers and
 	// flow accounting. Never acquire it while holding the bridge registry lock.
 	// The existing buffer locks may only be nested inside stateMu.
@@ -162,7 +172,14 @@ type tcpFlow struct {
 	lastActivity time.Time
 	lastAckTime  time.Time
 
-	finSent bool
+	finSent         bool
+	finReceived     bool
+	hostWriteClosed bool
+	finSeq          uint32
+	finSentAt       time.Time
+	finRTO          time.Duration
+	closeDeadline   time.Time
+	timeWaitUntil   time.Time
 
 	mu sync.Mutex
 	// Out-of-order reassembly buffer (sorted by seq, merged)
@@ -245,6 +262,7 @@ type tcpFlow struct {
 func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	b := &tcpBridge{
 		parent:   parent,
+		deliver:  parent.packetDelivery(),
 		flows:    make(map[string]*tcpFlow),
 		stopCh:   make(chan struct{}),
 		lifetime: 2 * time.Minute,
@@ -254,7 +272,7 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 		// and fail/reset truly stuck flows after 120s.
 		ackIdleGate:    6 * time.Second,
 		ackIdleFail:    120 * time.Second,
-		rtoActiveFlows: make(map[string]bool),
+		rtoActiveFlows: make(map[string]*tcpFlow),
 	}
 	if parent != nil {
 		cfg := parent.config
@@ -289,10 +307,12 @@ func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	b.dialSlots = &resourceBudget{limit: budgetDefault(parent.config.MaxPendingTCPDials, DefaultPendingTCPDials)}
 	b.dial = dialTCP
 	b.ctx, b.cancel = context.WithCancel(context.Background())
-	b.launch(b.reaper)
-	// Start connection health monitor
-	b.launch(b.monitorConnectionHealth)
 	return b
+}
+
+// start owns periodic work; construction performs no I/O or goroutine launch.
+func (b *tcpBridge) start() {
+	b.startOnce.Do(func() { b.launch(b.reaper); b.launch(b.monitorConnectionHealth) })
 }
 
 // sendToGuest transfers a reserved packet to the downstream processor.
@@ -305,13 +325,14 @@ func (b *tcpBridge) sendToGuest(f *tcpFlow, pkt core.Packet) bool {
 		core.ReleasePacket(pkt)
 		return false
 	}
-	if deliverPacket(b.parent.processor, pkt) {
+	if b.deliver(pkt) {
 		atomic.AddUint64(&b.metrics.PacketsReceived, 1)
 		atomic.AddUint64(&b.metrics.BytesReceived, uint64(size))
 		atomic.AddUint64(&b.parent.metrics.PacketsReceived, 1)
 		atomic.AddUint64(&b.parent.metrics.BytesReceived, uint64(size))
 		return true
 	}
+	b.deliveryRefused.Add(1)
 	return false
 }
 
@@ -332,7 +353,7 @@ func (b *tcpBridge) monitorConnectionHealth() {
 			return
 		case <-ticker.C:
 			now := time.Now()
-			stalledFlows := make([]string, 0)
+			stalledFlows := make([]*tcpFlow, 0)
 
 			// Identify stalled flows
 			for _, f := range b.flowSnapshot() {
@@ -347,7 +368,7 @@ func (b *tcpBridge) monitorConnectionHealth() {
 					// 1. It has meaningful in-flight data
 					// 2. No ACK progress for a significant period
 					if inFlight >= minInFlight && idleTime >= stallThreshold {
-						stalledFlows = append(stalledFlows, k)
+						stalledFlows = append(stalledFlows, f)
 						logging.Warnf("Stalled connection detected: flow=%s idle=%v inFlight=%d bytes",
 							k, idleTime.Round(time.Second), inFlight)
 					}
@@ -356,14 +377,19 @@ func (b *tcpBridge) monitorConnectionHealth() {
 			}
 
 			// Reset stalled flows
-			for _, k := range stalledFlows {
-				logging.Warnf("Health monitor resetting stalled flow: %s", k)
-				b.removeFlow(k)
+			reset := 0
+			for _, f := range stalledFlows {
+				// Recheck progress after taking a snapshot: an ACK may have arrived.
+				if b.removeFlowIf(f, func(f *tcpFlow) bool {
+					return f.state == tcpEstablished && int(f.serverNxt-f.sndUna) >= minInFlight && now.Sub(f.lastAckTime) >= stallThreshold
+				}) {
+					reset++
+				}
 			}
 
 			// Log health check summary if any issues found
-			if len(stalledFlows) > 0 {
-				logging.Infof("Connection health check: reset %d stalled flows", len(stalledFlows))
+			if reset > 0 {
+				logging.Infof("Connection health check: reset %d stalled flows", reset)
 			}
 		}
 	}
@@ -387,14 +413,23 @@ func (b *tcpBridge) SetPaceUS(us int) {
 	logging.Infof("TCP pacing set to %d us (0=disabled)", us)
 }
 
+func (b *tcpBridge) requestStop() {
+	b.lifecycleMu.Lock()
+	defer b.lifecycleMu.Unlock()
+	select {
+	case <-b.stopCh:
+		return
+	default:
+	}
+	close(b.stopCh)
+	b.cancel()
+}
+
 func (b *tcpBridge) stop() {
+	b.requestStop()
 	b.stopOnce.Do(func() {
-		b.lifecycleMu.Lock()
-		close(b.stopCh)
-		b.cancel()
-		b.lifecycleMu.Unlock()
 		for _, f := range b.flowSnapshot() {
-			b.removeFlow(f.key)
+			b.removeFlowIf(f, nil)
 		}
 		b.workers.Wait()
 	})
@@ -402,11 +437,21 @@ func (b *tcpBridge) stop() {
 
 func (b *tcpBridge) Name() string { return "tcp" }
 
-func (b *tcpBridge) HandleOutbound(pkt []byte) error {
+func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
+	admitted := false
+	// Publish the operation's error before allowing lifecycle waits to complete.
+	defer func() {
+		if err != nil {
+			atomic.AddUint64(&b.metrics.Errors, 1)
+		}
+		if admitted {
+			b.workers.Done()
+		}
+	}()
 	if !b.beginWork() {
 		return fmt.Errorf("TCP bridge stopped")
 	}
-	defer b.workers.Done()
+	admitted = true
 
 	pkt, ihl, err := parseTransport(pkt, 6)
 	if err != nil {
@@ -460,17 +505,19 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			cur := len(b.flows)
 			b.mu.RUnlock()
 			if cur >= b.maxFlows {
+				b.parent.admission.tcpFlows.Add(1)
 				rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
 				if rst != nil {
-					_ = deliverPacket(b.parent.processor, rst)
+					_ = b.sendToGuest(nil, rst)
 				}
 				return fmt.Errorf("tcp: %w", ErrFlowLimit)
 			}
 		}
 		// One reservation spans fast dialing and asynchronous fallback.
 		if !b.dialSlots.acquire(1) {
+			b.parent.admission.pendingDials.Add(1)
 			if b.parent.processor != nil {
-				_ = deliverPacket(b.parent.processor, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
+				_ = b.sendToGuest(nil, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
 			}
 			return ErrDialLimit
 		}
@@ -501,17 +548,18 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 						switch b.errorSignal {
 						case "icmp":
 							if icmp := b.buildICMPUnreachable(dstIP, srcIP, 1, pkt); icmp != nil {
-								_ = deliverPacket(b.parent.processor, icmp)
+								_ = b.sendToGuest(nil, icmp)
 							}
 						case "rst":
 							rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
 							if rst != nil {
-								_ = deliverPacket(b.parent.processor, rst)
+								_ = b.sendToGuest(nil, rst)
 							}
 						case "none":
 						}
 					}
 					atomic.AddUint64(&b.parent.metrics.Errors, 1)
+					atomic.AddUint64(&b.metrics.Errors, 1)
 					return nil
 				}
 			}
@@ -634,13 +682,14 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			// Dialing happens outside the registry lock. Recheck admission here
 			// so concurrent candidates cannot exceed the configured active cap.
 			if b.maxFlows > 0 && len(b.flows) >= b.maxFlows {
+				b.parent.admission.tcpFlows.Add(1)
 				b.mu.Unlock()
 				candidate.stateMu.Unlock()
 				if preConn != nil {
 					preConn.Close()
 				}
 				if b.parent.processor != nil {
-					_ = deliverPacket(b.parent.processor, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
+					_ = b.sendToGuest(nil, b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, fRST|fACK, nil))
 				}
 				return fmt.Errorf("tcp: %w", ErrFlowLimit)
 			}
@@ -681,18 +730,19 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 							switch b.errorSignal {
 							case "icmp":
 								if icmp := b.buildICMPUnreachable(f.dstIP, f.srcIP, 1, quotedPacket); icmp != nil {
-									_ = deliverPacket(b.parent.processor, icmp)
+									_ = b.sendToGuest(nil, icmp)
 								}
 							case "rst":
 								rst := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, 0, f.clientISN+1, 0x04|0x10, nil)
 								if rst != nil {
-									_ = deliverPacket(b.parent.processor, rst)
+									_ = b.sendToGuest(nil, rst)
 								}
 							case "none":
 							}
 						}
 						atomic.AddUint64(&b.dialFail, 1)
 						atomic.AddUint64(&b.parent.metrics.Errors, 1)
+						atomic.AddUint64(&b.metrics.Errors, 1)
 						atomic.AddInt64(&b.dialInflight, -1)
 						// Remove the flow on dial failure
 						b.removeFlowLocked(f)
@@ -861,9 +911,23 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			case flow.ackCh <- struct{}{}:
 			default:
 			}
+		} else {
+			return nil
 		}
-		return nil
-	case tcpEstablished:
+		// The handshake ACK may also carry data and/or FIN.
+		fallthrough
+	case tcpEstablished, tcpFinWait1, tcpFinWait2, tcpCloseWait, tcpClosing, tcpLastAck, tcpTimeWait:
+		if flow.state == tcpTimeWait {
+			if flags&fFIN != 0 && seq+uint32(len(payload))+1 == flow.clientNxt {
+				b.enterTimeWaitLocked(flow, time.Now())
+				b.sendCloseACKLocked(flow)
+			}
+			return nil
+		}
+		if flags&fACK != 0 && seqAfter(ack, flow.serverNxt) {
+			b.sendCloseACKLocked(flow)
+			return nil
+		}
 		// Handle ACK updates and possible FIN teardown
 		if (flags & fACK) != 0 {
 			// dupACK detection
@@ -873,17 +937,20 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			} else {
 				flow.dupAckCnt = 0
 			}
-			if ack != 0 && ack <= flow.serverNxt && ack > flow.sndUna {
+			if !seqAfter(ack, flow.serverNxt) && seqAfter(ack, flow.sndUna) {
 				prevUna := flow.sndUna
 				flow.sndUna = ack
 				flow.lastAckTime = time.Now()
+				if !flow.closeDeadline.IsZero() {
+					b.beginCloseLocked(flow, flow.lastAckTime)
+				}
 				atomic.AddUint64(&b.ackAdv, 1)
 				// drop acknowledged segments from txQueue and update RTT/RTO
 				now := time.Now()
 				flow.txMu.Lock()
 				for len(flow.txQueue) > 0 {
 					head := flow.txQueue[0]
-					if head.seq+uint32(len(head.data)) <= ack {
+					if !seqAfter(head.seq+uint32(len(head.data)), ack) {
 						// RTT sample (Karn's algorithm: only if not retransmitted)
 						if head.retries == 0 && !head.sentAt.IsZero() {
 							sample := now.Sub(head.sentAt)
@@ -967,32 +1034,24 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			}
 			// Parse SACK blocks if any and SACK permitted
 			if flow.sackPermitted || b.tuning.EnableSACK {
-				if dataOff > 20 {
-					opts := pkt[tcpOff+20 : tcpOff+dataOff]
-					parseSACKBlocks(flow, opts)
-					// trimmed: verbose SACK block debug removed
-				}
+				// Also prune acknowledged blocks on ACKs without options.
+				parseSACKBlocks(flow, pkt[tcpOff+20:tcpOff+dataOff])
 			}
-			if len(payload) == 0 {
-				if flow.finSent && ack == flow.serverNxt {
-					b.removeFlowLocked(flow)
-					return nil
-				}
-				// Pure ACK otherwise falls through
+			b.ackFINLocked(flow, ack, time.Now())
+			if flow.closed {
+				return nil
 			}
 			// Fast retransmit on 3 dupACKs
 			if flow.dupAckCnt >= 3 {
 				flow.dupAckCnt = 0
 				// Enter SACK recovery and retransmit a hole if available
 				flow.sackRecovery = true
-				if flow.serverNxt > 0 {
-					flow.recover = flow.serverNxt - 1
-				}
-				b.retransmitNextHole(flow)
+				// Exclusive end of data outstanding when recovery begins.
+				flow.recover = flow.serverNxt
 			}
 			// Partial ACK handling: in recovery, keep sending next hole
 			if flow.sackRecovery {
-				if ack >= flow.recover {
+				if !seqBefore(ack, flow.recover) {
 					flow.sackRecovery = false
 				} else {
 					b.retransmitNextHole(flow)
@@ -1000,92 +1059,69 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) error {
 			}
 		}
 
-		// Out-of-order tolerance: duplicate or future segments -> send dup ACK
-		if seq < flow.clientNxt {
-			// Duplicate segment; ACK current next expected
-			dupAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
-			_ = b.sendToGuest(flow, dupAck)
+		// A consumed FIN closes only the guest->host direction. Continue
+		// processing ACKs/windows above for the host's response and FIN.
+		if flow.finReceived {
+			if len(payload) > 0 || flags&fFIN != 0 {
+				b.sendCloseACKLocked(flow)
+			}
 			return nil
 		}
-		if seq > flow.clientNxt {
-			b.queueFuture(flow, seq, payload)
-
-			// Request retransmit with current ACK
-			dupAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
-			_ = b.sendToGuest(flow, dupAck)
-			return nil
-		}
-
-		// In-order data
-		if len(payload) > 0 {
-			// Log the payload for debugging
-			logging.Debugf("TCP bridge handling client->server data: %d bytes, data: %q",
-				len(payload), string(payload[:minInt(len(payload), 50)]))
-
-			// If not yet connected, enqueue into bounded pending buffer and ACK
-			if flow.conn == nil {
-				flow.pendMu.Lock()
-				if len(payload) <= flow.pendCap-flow.pendingBytes && b.buffers.acquire(bufferCharge(len(payload))) {
-					cp := make([]byte, len(payload))
-					copy(cp, payload)
-					flow.pending = append(flow.pending, cp)
-					flow.pendingBytes += len(cp)
-					atomic.AddUint64(&b.pendEnq, 1)
-				} else {
-					atomic.AddUint64(&b.pendDrop, 1)
-					b.bufferDrops.Add(1)
-					// Do not advance clientNxt for dropped bytes; let client retransmit later
-					flow.pendMu.Unlock()
-					// Send immediate ACK for already accepted bytes only
-					b.scheduleAck(flow)
-					return nil
-				}
-				flow.pendMu.Unlock()
-				// Accept bytes from client: advance ack and ACK back (even before server write)
-				flow.clientNxt += uint32(len(payload))
-				b.scheduleAck(flow)
+		finSeq := seq + uint32(len(payload))
+		if seqBefore(seq, flow.clientNxt) {
+			skip := uint32(flow.clientNxt - seq)
+			if skip > uint32(len(payload)) {
+				b.sendCloseACKLocked(flow)
 				return nil
 			}
-
-			if n, err := writeTCP(flow.conn, payload); err != nil {
-				atomic.AddUint64(&b.parent.metrics.Errors, 1)
-				logging.Errorf("TCP bridge write error: %v", err)
-				return fmt.Errorf("tcp: write: %w", err)
+			// Keep a new suffix/FIN when only its prefix was retransmitted.
+			payload = payload[skip:]
+			seq = flow.clientNxt
+		}
+		if seqAfter(seq, flow.clientNxt) {
+			// Retain admitted data, but do not consume an out-of-order FIN.
+			// The cumulative ACK asks the peer to retransmit the missing range.
+			b.queueFuture(flow, seq, payload)
+			b.sendCloseACKLocked(flow)
+			return nil
+		}
+		if len(payload) > 0 {
+			if flow.conn == nil {
+				if !b.reservePending(flow, len(payload)) {
+					atomic.AddUint64(&b.pendDrop, 1)
+					b.bufferDrops.Add(1)
+					b.sendCloseACKLocked(flow)
+					return nil
+				}
+				pending := make([]byte, len(payload))
+				copy(pending, payload)
+				flow.pending = append(flow.pending, pending)
+				flow.pendingBytes += len(payload)
+				atomic.AddUint64(&b.pendEnq, 1)
 			} else {
+				n, err := writeTCP(flow.conn, payload)
+				if err != nil {
+					b.abortBufferedFlowLocked(flow)
+					return fmt.Errorf("tcp: write: %w", err)
+				}
 				atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
 				atomic.AddUint64(&b.metrics.PacketsSent, 1)
-				atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
-				atomic.AddUint64(&b.parent.metrics.PacketsSent, 1)
-				logging.Debugf("TCP bridge successfully wrote %d bytes to server", n)
 			}
 			flow.clientNxt += uint32(len(payload))
-			if err := b.flushReassembly(flow); err != nil {
-				b.removeFlowLocked(flow)
-				return fmt.Errorf("tcp: write (reassembly): %w", err)
+			if !flow.closeDeadline.IsZero() {
+				b.beginCloseLocked(flow, time.Now())
 			}
-			// delayed ACK
+			// Data buffered beyond an in-order FIN is outside the stream.
+			if flags&fFIN == 0 {
+				if err := b.flushReassembly(flow); err != nil {
+					b.abortBufferedFlowLocked(flow)
+					return fmt.Errorf("tcp: write (reassembly): %w", err)
+				}
+			}
 			b.scheduleAck(flow)
 		}
-		if (flags & fFIN) != 0 {
-			// Client closing; FIN consumes one seq
-			if seq == flow.clientNxt {
-				flow.clientNxt += 1
-			}
-			if flow.conn != nil {
-				_ = flow.conn.CloseWrite()
-			}
-			finAck := b.buildIPv4TCP(flow.dstIP, flow.srcIP, flow.dstPort, flow.srcPort, flow.serverNxt, flow.clientNxt, fACK, nil)
-			_ = b.sendToGuest(flow, finAck)
-			flow.state = tcpFinWait
-		}
-		return nil
-	case tcpFinWait:
-		// Await final ACK from client; if received, close
-		if (flags&fACK) != 0 && (!flow.finSent || ack == flow.serverNxt) {
-			if flow.finSent && ack == flow.serverNxt {
-				b.removeFlowLocked(flow)
-			}
-			// else still waiting for host side close
+		if flags&fFIN != 0 && finSeq == flow.clientNxt {
+			return b.receiveFINLocked(flow, time.Now())
 		}
 		return nil
 	default:
@@ -1117,19 +1153,27 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		if n, err := writeTCP(f.conn, p); err == nil {
 			atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
 			atomic.AddUint64(&b.metrics.PacketsSent, 1)
-			atomic.AddUint64(&b.parent.metrics.BytesSent, uint64(n))
-			atomic.AddUint64(&b.parent.metrics.PacketsSent, 1)
 			f.toSrvBytes += uint64(n)
 			f.toSrvPkts += 1
 			atomic.AddUint64(&b.pendFlush, 1)
 		} else {
 			atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			atomic.AddUint64(&b.metrics.Errors, 1)
 			b.abortBufferedFlowLocked(f)
 			return
 		}
 	}
 	if err := b.flushReassembly(f); err != nil {
-		b.removeFlowLocked(f)
+		atomic.AddUint64(&b.parent.metrics.Errors, 1)
+		atomic.AddUint64(&b.metrics.Errors, 1)
+		b.abortBufferedFlowLocked(f)
+		return
+	}
+	if f.finReceived {
+		if err := b.closeHostWriteLocked(f); err != nil {
+			atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			atomic.AddUint64(&b.metrics.Errors, 1)
+		}
 	}
 }
 func (b *tcpBridge) removeFlow(key string) {
@@ -1139,9 +1183,22 @@ func (b *tcpBridge) removeFlow(key string) {
 	if f == nil {
 		return
 	}
+	b.removeFlowIf(f, nil)
+}
+
+// removeFlowIf acts on the observed identity, never a later tuple replacement.
+// The predicate runs under stateMu so expiry/health checks cannot race progress.
+func (b *tcpBridge) removeFlowIf(f *tcpFlow, predicate func(*tcpFlow) bool) bool {
 	f.stateMu.Lock()
 	defer f.stateMu.Unlock()
+	b.mu.RLock()
+	current := b.flows[f.key] == f
+	b.mu.RUnlock()
+	if !current || f.closed || (predicate != nil && !predicate(f)) {
+		return false
+	}
 	b.removeFlowLocked(f)
+	return true
 }
 
 // removeFlowLocked requires stateMu; removal is conditional on identity so an
@@ -1156,6 +1213,7 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	}
 	b.mu.Unlock()
 	f.closed = true
+	f.state = tcpClosed
 	if f.cancelDial != nil {
 		f.cancelDial()
 	}
@@ -1173,7 +1231,9 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 		close(f.rtoStop)
 	}
 	b.rtoMu.Lock()
-	delete(b.rtoActiveFlows, f.key)
+	if b.rtoActiveFlows[f.key] == f {
+		delete(b.rtoActiveFlows, f.key)
+	}
 	b.rtoMu.Unlock()
 	atomic.AddUint64(&b.metrics.ConnectionsClosed, 1)
 	atomic.AddUint64(&b.parent.metrics.ConnectionsClosed, 1)
@@ -1188,19 +1248,16 @@ func (b *tcpBridge) reaper() {
 			return
 		case <-t.C:
 			cutoff := time.Now().Add(-b.lifetime)
-			// Collect expired flow keys under lock, then remove outside the lock.
-			b.mu.Lock()
-			expired := make([]string, 0)
-			for k, f := range b.flows {
-				if f.lastActive().Before(cutoff) {
-					expired = append(expired, k)
-				}
-			}
-			b.mu.Unlock()
-			for _, k := range expired {
-				logging.Debugf("TCP flow expired and removed: %s", k)
-				b.removeFlow(k)
-			}
+			b.expireFlows(cutoff)
+		}
+	}
+}
+
+// expireFlows rechecks liveness under flow state after registry observation.
+func (b *tcpBridge) expireFlows(cutoff time.Time) {
+	for _, f := range b.flowSnapshot() {
+		if f.lastActive().Before(cutoff) {
+			b.removeFlowIf(f, func(f *tcpFlow) bool { return f.closeDeadline.IsZero() && f.lastActive().Before(cutoff) })
 		}
 	}
 }
@@ -1401,23 +1458,38 @@ func parseSACKBlocks(f *tcpFlow, opts []byte) {
 			for j := i + 2; j+7 < i+l; j += 8 {
 				left := binary.BigEndian.Uint32(opts[j : j+4])
 				right := binary.BigEndian.Uint32(opts[j+4 : j+8])
-				if right > left {
+				if seqAfter(right, left) {
 					blocks = append(blocks, struct{ left, right uint32 }{left, right})
 				}
 			}
 		}
 		i += l
 	}
-	if len(blocks) == 0 {
-		return
-	}
+	// Merge only ranges inside the outstanding send window. Offsets from
+	// sndUna are ordered even when the actual sequence numbers wrap. Drop
+	// acknowledged/stale blocks on every ACK so they cannot survive a full lap.
+	// Caller holds stateMu; TCP windows are smaller than half the sequence space.
 	// Merge with existing, normalize and cap size
 	all := append([]struct{ left, right uint32 }{}, f.sackList...)
 	all = append(all, blocks...)
+	valid := all[:0]
+	for _, block := range all {
+		if !seqAfter(block.right, f.sndUna) || seqAfter(block.right, f.serverNxt) {
+			continue
+		}
+		if seqBefore(block.left, f.sndUna) {
+			block.left = f.sndUna
+		}
+		if !seqBefore(block.left, block.right) {
+			continue
+		}
+		valid = append(valid, block)
+	}
+	all = valid
 	// sort by left (simple insertion sort for small N)
 	for i := 1; i < len(all); i++ {
 		j := i
-		for j > 0 && all[j-1].left > all[j].left {
+		for j > 0 && all[j-1].left-f.sndUna > all[j].left-f.sndUna {
 			all[j-1], all[j] = all[j], all[j-1]
 			j--
 		}
@@ -1425,9 +1497,9 @@ func parseSACKBlocks(f *tcpFlow, opts []byte) {
 	// merge overlaps
 	merged := make([]struct{ left, right uint32 }, 0, len(all))
 	for _, b := range all {
-		if len(merged) == 0 || b.left > merged[len(merged)-1].right {
+		if len(merged) == 0 || seqAfter(b.left, merged[len(merged)-1].right) {
 			merged = append(merged, b)
-		} else if b.right > merged[len(merged)-1].right {
+		} else if seqAfter(b.right, merged[len(merged)-1].right) {
 			merged[len(merged)-1].right = b.right
 		}
 	}
@@ -1443,7 +1515,7 @@ func isSACKed(f *tcpFlow, left, right uint32) bool {
 	list := append([]struct{ left, right uint32 }{}, f.sackList...)
 	f.sackMu.Unlock()
 	for _, b := range list {
-		if left >= b.left && right <= b.right {
+		if seqBefore(left, right) && !seqBefore(left, b.left) && !seqAfter(right, b.right) {
 			return true
 		}
 	}
@@ -1457,7 +1529,7 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 	f.txMu.Lock()
 	inFlight := 0
 	for _, s := range f.txQueue {
-		if s.seq+uint32(len(s.data)) <= f.sndUna {
+		if !seqAfter(s.seq+uint32(len(s.data)), f.sndUna) {
 			continue
 		}
 		if isSACKed(f, s.seq, s.seq+uint32(len(s.data))) {
@@ -1476,7 +1548,7 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 	idx := -1
 	for i := 0; i < len(f.txQueue); i++ {
 		s := f.txQueue[i]
-		if s.seq+uint32(len(s.data)) <= f.sndUna {
+		if !seqAfter(s.seq+uint32(len(s.data)), f.sndUna) {
 			continue
 		}
 		if isSACKed(f, s.seq, s.seq+uint32(len(s.data))) {
@@ -1563,12 +1635,20 @@ func (b *tcpBridge) logSendGated(f *tcpFlow, cause string, advWnd, inFlight, cw 
 }
 
 // trackRTOFlow adds a flow to the RTO tracking map and checks if we need to dump metrics
-func (b *tcpBridge) trackRTOFlow(flowKey string) {
+func (b *tcpBridge) trackRTOFlow(f *tcpFlow) {
+	f.stateMu.Lock()
+	b.mu.RLock()
+	current := b.flows[f.key] == f
+	b.mu.RUnlock()
+	if f.closed || !current {
+		f.stateMu.Unlock()
+		return
+	}
 	// Decide whether a dump is needed without holding the lock during the dump
 	needDump := false
 	b.rtoMu.Lock()
 	// Add this flow to the active RTO flows map
-	b.rtoActiveFlows[flowKey] = true
+	b.rtoActiveFlows[f.key] = f
 	if len(b.rtoActiveFlows) >= 3 {
 		if !b.rtoMetricsDumped || time.Since(b.rtoMetricsDumpTime) > 30*time.Second {
 			// Mark as dumped and record time under lock
@@ -1586,12 +1666,13 @@ func (b *tcpBridge) trackRTOFlow(flowKey string) {
 				}
 				b.rtoMu.Lock()
 				b.rtoMetricsDumped = false
-				b.rtoActiveFlows = make(map[string]bool)
+				b.rtoActiveFlows = make(map[string]*tcpFlow)
 				b.rtoMu.Unlock()
 			})
 		}
 	}
 	b.rtoMu.Unlock()
+	f.stateMu.Unlock()
 	if needDump {
 		b.dumpDetailedMetrics()
 	}
@@ -1631,12 +1712,16 @@ func (b *tcpBridge) configureHostSocket(conn *net.TCPConn) {
 	_ = conn.SetKeepAlivePeriod(30 * time.Second)
 	if n := b.tuning.SocketReceiveBuffer; n > 0 {
 		if err := conn.SetReadBuffer(n); err != nil {
-			logging.Warnf("TCP receive buffer: %v", err)
+			if b.failureLog.Allow(time.Now()) {
+				logging.Warnf("TCP receive buffer: %v", err)
+			}
 		}
 	}
 	if n := b.tuning.SocketSendBuffer; n > 0 {
 		if err := conn.SetWriteBuffer(n); err != nil {
-			logging.Warnf("TCP send buffer: %v", err)
+			if b.failureLog.Allow(time.Now()) {
+				logging.Warnf("TCP send buffer: %v", err)
+			}
 		}
 	}
 }
