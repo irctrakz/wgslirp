@@ -3,14 +3,10 @@ package socket
 import (
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
-
-	"strconv"
 
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/logging"
@@ -22,7 +18,9 @@ import (
 // It implements the core.SocketInterface interface and the SocketWriter interface
 type SocketInterface struct {
 	// Configuration
-	config Config
+	config       Config
+	budgetOnce   sync.Once
+	bufferBudget *resourceBudget
 
 	// Packet processor for handling packets from the socket
 	processor core.PacketProcessor
@@ -33,19 +31,13 @@ type SocketInterface struct {
 	// Raw socket connection
 	conn net.PacketConn
 
-	// Datagram socket FD for ICMP when raw socket unavailable (ping_group_range)
-	dgramFd int
-
-	// ICMP datagram sockets use a kernel-selected echo ID. Keep enough state
-	// to restore the guest-facing request identity when the reply arrives.
-	dgramEchoMu      sync.Mutex
-	dgramEchoPending map[string][]pendingDgramEcho
-
 	// Control
-	mu      sync.Mutex
-	running bool
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	running  bool
+	stopped  bool
+	stopDone chan struct{}
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
 
 	// Slirp bridges
 	udp  *udpBridge
@@ -70,12 +62,12 @@ var _ SocketWriter = (*SocketInterface)(nil)
 
 // NewSocketInterface creates a new socket interface
 func NewSocketInterface(config Config) *SocketInterface {
+	_ = poolingPolicy()
+	config = config.Effective()
 	return &SocketInterface{
-		config:           config,
-		metrics:          core.SocketMetrics{},
-		stopCh:           make(chan struct{}),
-		dgramFd:          -1, // Initialize to invalid
-		dgramEchoPending: make(map[string][]pendingDgramEcho),
+		config:  config,
+		metrics: core.SocketMetrics{},
+		stopCh:  make(chan struct{}),
 	}
 }
 
@@ -84,12 +76,18 @@ func (s *SocketInterface) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.stopped {
+		return fmt.Errorf("socket interface stopped; create a new instance")
+	}
 	if s.running {
 		return fmt.Errorf("socket interface already running")
 	}
 
 	if s.processor == nil {
 		return fmt.Errorf("no packet processor set")
+	}
+	if err := s.config.Validate(); err != nil {
+		return fmt.Errorf("socket config: %w", err)
 	}
 
 	// Create a raw socket based on the protocol specified in the config
@@ -105,44 +103,10 @@ func (s *SocketInterface) Start() error {
 
 	// Create the appropriate socket based on the protocol
 	if strings.Contains(protocol, "icmp") {
-		// For ICMP, try multiple approaches in order of preference
-
-		// First try raw socket (requires CAP_NET_RAW)
+		// For ICMP, use the icmp package. This works in privileged mode ("ip4:icmp").
 		s.conn, err = icmp.ListenPacket(protocol, "0.0.0.0") // Bind to all interfaces
 		if err != nil {
-			logging.Debugf("Failed to create raw ICMP socket (CAP_NET_RAW not available): %v", err)
-
-			// Try alternative raw socket with protocol number
-			s.conn, err = icmp.ListenPacket("ip4:1", "0.0.0.0")
-			if err != nil {
-				logging.Debugf("Failed to create raw ICMP socket with ip4:1: %v", err)
-
-				// Try SOCK_DGRAM for ping_group_range support
-				logging.Debugf("Attempting to create datagram ICMP socket for ping_group_range support")
-				s.dgramFd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
-				if err != nil {
-					logging.Errorf("Failed to create datagram ICMP socket: %v", err)
-					logging.Errorf("ICMP functionality will be unavailable - need CAP_NET_RAW or working ping_group_range")
-					s.dgramFd = -1
-					return fmt.Errorf("no ICMP socket available: %v", err)
-				} else {
-					logging.Debugf("Created datagram ICMP socket fd=%d for ping_group_range compatibility", s.dgramFd)
-					// Bind to all interfaces
-					addr := syscall.SockaddrInet4{}
-					if err := syscall.Bind(s.dgramFd, &addr); err != nil {
-						logging.Errorf("Failed to bind datagram ICMP socket: %v", err)
-						syscall.Close(s.dgramFd)
-						s.dgramFd = -1
-						return fmt.Errorf("failed to bind datagram socket: %v", err)
-					} else {
-						logging.Debugf("Successfully bound datagram ICMP socket, dgramFd=%d", s.dgramFd)
-					}
-				}
-			} else {
-				logging.Debugf("Successfully created raw ICMP socket with ip4:1")
-			}
-		} else {
-			logging.Debugf("Successfully created raw ICMP socket with %s", protocol)
+			return fmt.Errorf("failed to create raw socket with protocol %s: %v", protocol, err)
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
 		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
@@ -159,38 +123,36 @@ func (s *SocketInterface) Start() error {
 		// Set a reasonable read deadline to prevent blocking indefinitely
 		err = s.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		if err != nil {
+			s.conn.Close()
+			s.conn = nil
 			return fmt.Errorf("failed to set read deadline: %v", err)
 		}
 	}
 
+	var releaseRead func()
+	if s.conn != nil {
+		releaseRead, err = s.ReservePacketBuffer(65536)
+		if err != nil {
+			_ = s.conn.Close()
+			s.conn = nil
+			return err
+		}
+	}
 	s.running = true
 	if s.conn != nil {
 		s.wg.Add(1)
-		go s.listenLoop()
-	} else if s.dgramFd >= 0 {
-		// If we have datagram socket but no raw socket, start datagram listener
-		s.wg.Add(1)
-		go s.dgramListenLoop()
+		go s.listenLoop(releaseRead)
 	}
 
 	// SIMPLE_MODE bypasses FlowManager and egress limiter to reduce moving parts
 	logging.Infof("Simple mode active: bypassing FlowManager and egress limiter; inline delivery to processor")
 
 	// Initialize UDP/TCP slirp bridges
-	// Header synthesis policy from env
-	// COPY_TOS: default 0 (do not copy DSCP/ECN); set to 1 to preserve
-	if v := strings.ToLower(strings.TrimSpace(os.Getenv("COPY_TOS"))); v == "1" || v == "true" || v == "yes" || v == "on" {
-		s.tosCopy = true
-	}
-	// IP_TTL: default 64; set <=0 to use default 64
-	s.ttlOverride = 64
-	if v := strings.TrimSpace(os.Getenv("IP_TTL")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 255 {
-			s.ttlOverride = n
-		}
-	}
+	s.tosCopy = s.config.Transport.CopyTOS
+	s.ttlOverride = s.config.Transport.TTL
 	s.udp = newUDPBridge(s)
 	s.tcp = newTCPBridge(s)
+	s.icmp = newICMPBridge(s)
 
 	// No egress limiter configuration
 
@@ -201,44 +163,45 @@ func (s *SocketInterface) Start() error {
 // Stop stops the socket interface
 func (s *SocketInterface) Stop() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.running {
+	if s.stopped {
+		done := s.stopDone
+		s.mu.Unlock()
+		<-done
 		return nil
 	}
-
-	close(s.stopCh)
-	s.wg.Wait()
-
-	if s.conn != nil {
-		s.conn.Close()
-		s.conn = nil
-	}
-
-	if s.dgramFd >= 0 {
-		syscall.Close(s.dgramFd)
-		s.dgramFd = -1
-	}
-
-	if s.udp != nil {
-		s.udp.stop()
-		s.udp = nil
-	}
-	if s.tcp != nil {
-		s.tcp.stop()
-		s.tcp = nil
-	}
-
-	// No FlowManager
-
+	s.stopped = true
 	s.running = false
-
-	logging.Debugf("Socket interface stopped")
+	s.stopDone = make(chan struct{})
+	if s.stopCh != nil {
+		close(s.stopCh)
+	}
+	conn, udp, tcp := s.conn, s.udp, s.tcp
+	s.mu.Unlock()
+	// Close descriptors before joining blocked readers. Bridge pointers remain
+	// stable after startup so concurrent snapshots never observe torn teardown.
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if udp != nil {
+		udp.stop()
+	}
+	if tcp != nil {
+		tcp.stop()
+	}
+	s.wg.Wait()
+	close(s.stopDone)
 	return nil
 }
 
-// SetPacketProcessor sets the packet processor for handling packets from the socket
+// SetPacketProcessor configures delivery before Start. Runtime replacement is
+// rejected because callbacks may own packet buffers and in-flight work.
 func (s *SocketInterface) SetPacketProcessor(processor core.PacketProcessor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running || s.stopped {
+		logging.Warnf("Socket packet processor can only be configured before startup")
+		return
+	}
 	s.processor = processor
 }
 
@@ -246,28 +209,25 @@ func (s *SocketInterface) SetPacketProcessor(processor core.PacketProcessor) {
 func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	s.mu.Lock()
 	running := s.running
+	if running {
+		s.wg.Add(1)
+	}
 	s.mu.Unlock()
 
 	if !running {
 		return fmt.Errorf("socket interface not running")
 	}
 
-	// Get the packet data
-	data := packet.Data()
-
-	// Basic validation
-	if len(data) < 20 {
-		atomic.AddUint64(&s.metrics.Errors, 1)
-		return fmt.Errorf("packet too short")
+	defer s.wg.Done()
+	if packet == nil {
+		return fmt.Errorf("nil packet")
 	}
 
-	// Check IP version
-	ver := data[0] >> 4
-	if ver != 4 {
+	data, _, err := parseIPv4(core.BorrowPacketData(packet))
+	if err != nil {
 		atomic.AddUint64(&s.metrics.Errors, 1)
-		return fmt.Errorf("unsupported IP version: %d", ver)
+		return err
 	}
-
 	// Check packet size against MTU
 	if len(data) > s.config.MTU {
 		logging.Warnf("Packet size %d exceeds MTU %d, packet will be fragmented", len(data), s.config.MTU)
@@ -304,12 +264,10 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	switch protocol {
 	case 1: // ICMP protocol
 		// Route ICMP through a thin bridge so implementation is modular.
-		if s.icmp == nil {
-			s.icmp = newICMPBridge(s)
-		}
+
 		if err := s.icmp.HandleOutbound(data); err != nil {
 			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("ICMP slirp error: %v", err)
+			return fmt.Errorf("ICMP slirp error: %w", err)
 		}
 	case 6: // TCP protocol
 		if s.tcp == nil {
@@ -318,7 +276,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		}
 		if err := s.tcp.HandleOutbound(data); err != nil {
 			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("TCP slirp error: %v", err)
+			return fmt.Errorf("TCP slirp error: %w", err)
 		}
 		break
 	case 17: // UDP protocol
@@ -329,7 +287,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		}
 		if err := s.udp.HandleOutbound(data); err != nil {
 			atomic.AddUint64(&s.metrics.Errors, 1)
-			return fmt.Errorf("UDP slirp error: %v", err)
+			return fmt.Errorf("UDP slirp error: %w", err)
 		}
 		// Metrics count the original packet bytes
 		break
@@ -357,7 +315,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 
 // Metrics returns the metrics for the socket interface
 func (s *SocketInterface) Metrics() core.SocketMetrics {
-	return s.metrics
+	return loadSocketMetrics(&s.metrics)
 }
 
 // SetTCPMSSClamp updates the TCP bridge MSS clamp at runtime.
@@ -417,68 +375,83 @@ func (s *SocketInterface) SetEgressMTU(mtu int) {
 
 // DetailedMetrics returns total and per-bridge metrics, including active flows.
 func (s *SocketInterface) DetailedMetrics() SocketDetailedMetrics {
+	s.mu.Lock()
+	udp, tcp, processor := s.udp, s.tcp, s.processor
+	s.mu.Unlock()
 	dm := SocketDetailedMetrics{
 		Total: loadSocketMetrics(&s.metrics),
 	}
-	if s.udp != nil {
-		s.udp.flowsMu.Lock()
-		active := uint64(len(s.udp.flows))
-		s.udp.flowsMu.Unlock()
-		dm.UDP.Counters = loadSocketMetrics(&s.udp.metrics)
+	if udp != nil {
+		udp.flowsMu.Lock()
+		active := uint64(len(udp.flows))
+		udp.flowsMu.Unlock()
+		dm.UDP.Counters = loadSocketMetrics(&udp.metrics)
 		dm.UDP.ActiveFlows = active
 		// Add UDP debug counters
 		enq, proc := getUDPTxDebug()
 		dm.UDPExt = map[string]uint64{"tx_enq": enq, "tx_proc": proc}
 	}
-	if s.tcp != nil {
-		s.tcp.mu.Lock()
-		active := uint64(len(s.tcp.flows))
-		// Compute ACK-idle flows under the same lock to get a consistent snapshot
+	if tcp != nil {
+		flows := tcp.flowSnapshot()
+		active := uint64(len(flows))
+		// Snapshot membership before taking individual flow locks.
 		ackIdle := uint64(0)
-		if s.tcp.ackIdleGate > 0 {
-			for _, f := range s.tcp.flows {
+		if tcp.ackIdleGate > 0 {
+			for _, f := range flows {
+				f.stateMu.Lock()
 				inFlight := int(f.serverNxt - f.sndUna)
-				minInflight := s.tcp.ackIdleMinInflight
+				minInflight := tcp.ackIdleMinInflight
 				if minInflight <= 0 {
 					minInflight = f.mss
 				}
 				if inFlight >= minInflight {
-					if time.Since(f.lastAckTime) >= s.tcp.ackIdleGate {
+					if time.Since(f.lastAckTime) >= tcp.ackIdleGate {
 						ackIdle++
 					}
 				}
+				f.stateMu.Unlock()
 			}
 		}
-		s.tcp.mu.Unlock()
-		dm.TCP.Counters = loadSocketMetrics(&s.tcp.metrics)
+		dm.TCP.Counters = loadSocketMetrics(&tcp.metrics)
 		dm.TCP.ActiveFlows = active
 		// TCP extra debug counters
-		s.tcp.rtoMu.Lock()
-		activeRTOFlows := uint64(len(s.tcp.rtoActiveFlows))
-		s.tcp.rtoMu.Unlock()
+		tcp.rtoMu.Lock()
+		activeRTOFlows := uint64(len(tcp.rtoActiveFlows))
+		tcp.rtoMu.Unlock()
 		// Compose TCPExt with RTO and ACK classification counters
+		dialUsed, dialPeak, dialLimit, dialRejected := tcp.dialSlots.snapshot()
+		bufferUsed, bufferPeak, bufferLimit, bufferRejected := tcp.buffers.snapshot()
 		dm.TCPExt = map[string]uint64{
-			"rto":               atomic.LoadUint64(&s.tcp.rtoCount),
-			"active_rto_flows":  activeRTOFlows,
-			"ack_advanced":      atomic.LoadUint64(&s.tcp.ackAdv),
-			"ack_duplicate":     atomic.LoadUint64(&s.tcp.ackDup),
-			"ack_window_update": atomic.LoadUint64(&s.tcp.ackWndOnly),
-			"ack_idle_flows":    ackIdle,
+			"dial_reserved":         dialUsed,
+			"dial_peak":             dialPeak,
+			"dial_limit":            dialLimit,
+			"dial_refused":          dialRejected,
+			"socket_buffer_bytes":   bufferUsed,
+			"socket_buffer_peak":    bufferPeak,
+			"socket_buffer_limit":   bufferLimit,
+			"socket_buffer_refused": bufferRejected,
+			"buffer_dropped":        tcp.bufferDrops.Load(),
+			"rto":                   atomic.LoadUint64(&tcp.rtoCount),
+			"active_rto_flows":      activeRTOFlows,
+			"ack_advanced":          atomic.LoadUint64(&tcp.ackAdv),
+			"ack_duplicate":         atomic.LoadUint64(&tcp.ackDup),
+			"ack_window_update":     atomic.LoadUint64(&tcp.ackWndOnly),
+			"ack_idle_flows":        ackIdle,
 			// Async dial and pending-buffer instrumentation
-			"dial_start":    atomic.LoadUint64(&s.tcp.dialStart),
-			"dial_ok":       atomic.LoadUint64(&s.tcp.dialOk),
-			"dial_fail":     atomic.LoadUint64(&s.tcp.dialFail),
-			"dial_inflight": uint64(atomic.LoadInt64(&s.tcp.dialInflight)),
-			"pend_enq":      atomic.LoadUint64(&s.tcp.pendEnq),
-			"pend_flush":    atomic.LoadUint64(&s.tcp.pendFlush),
-			"pend_drop":     atomic.LoadUint64(&s.tcp.pendDrop),
+			"dial_start":    atomic.LoadUint64(&tcp.dialStart),
+			"dial_ok":       atomic.LoadUint64(&tcp.dialOk),
+			"dial_fail":     atomic.LoadUint64(&tcp.dialFail),
+			"dial_inflight": uint64(atomic.LoadInt64(&tcp.dialInflight)),
+			"pend_enq":      atomic.LoadUint64(&tcp.pendEnq),
+			"pend_flush":    atomic.LoadUint64(&tcp.pendFlush),
+			"pend_drop":     atomic.LoadUint64(&tcp.pendDrop),
 		}
 	}
 	// FlowManager and egress limiter removed
 	// Fallback removed
 	// Include processor metrics if available
-	if s.processor != nil {
-		if m, ok := s.processor.(interface{ Metrics() map[string]uint64 }); ok {
+	if processor != nil {
+		if m, ok := processor.(interface{ Metrics() map[string]uint64 }); ok {
 			dm.Processor = m.Metrics()
 		}
 	}
@@ -539,177 +512,10 @@ func (s *SocketInterface) ResetRTOTCPFlows() int {
 	return len(rtoKeys)
 }
 
-func (s *SocketInterface) addPendingDgramEcho(key string, pending pendingDgramEcho) {
-	s.dgramEchoMu.Lock()
-	defer s.dgramEchoMu.Unlock()
-
-	if s.dgramEchoPending == nil {
-		s.dgramEchoPending = make(map[string][]pendingDgramEcho)
-	}
-
-	now := time.Now()
-	for k, queued := range s.dgramEchoPending {
-		keep := queued[:0]
-		for _, echo := range queued {
-			if echo.expiry.After(now) {
-				keep = append(keep, echo)
-			}
-		}
-		if len(keep) == 0 {
-			delete(s.dgramEchoPending, k)
-			continue
-		}
-		s.dgramEchoPending[k] = keep
-	}
-
-	s.dgramEchoPending[key] = append(s.dgramEchoPending[key], pending)
-}
-
-func (s *SocketInterface) takePendingDgramEcho(key string) (pendingDgramEcho, bool) {
-	s.dgramEchoMu.Lock()
-	defer s.dgramEchoMu.Unlock()
-
-	queued := s.dgramEchoPending[key]
-	for len(queued) > 0 {
-		pending := queued[0]
-		queued = queued[1:]
-		if len(queued) == 0 {
-			delete(s.dgramEchoPending, key)
-		} else {
-			s.dgramEchoPending[key] = queued
-		}
-		if pending.expiry.After(time.Now()) {
-			return pending, true
-		}
-	}
-
-	return pendingDgramEcho{}, false
-}
-
-// dgramListenLoop listens for ICMP packets using SOCK_DGRAM (for ping_group_range compatibility)
-func (s *SocketInterface) dgramListenLoop() {
-	defer s.wg.Done()
-
-	// Set receive timeout
-	tv := syscall.Timeval{Sec: 5, Usec: 0} // 5 second timeout
-	if err := syscall.SetsockoptTimeval(s.dgramFd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv); err != nil {
-		logging.Errorf("Failed to set datagram socket timeout: %v", err)
-		return
-	}
-
-	// Create a buffer for receiving packets
-	buf := make([]byte, 65536)
-
-	// Keep track of our own IP address to filter out loopback packets
-	myIP := net.ParseIP(s.config.IPAddress)
-	if myIP == nil {
-		logging.Errorf("Failed to parse socket IP address: %s", s.config.IPAddress)
-		return
-	}
-
-	for {
-		select {
-		case <-s.stopCh:
-			return
-		default:
-			// Read a packet using SOCK_DGRAM
-			n, fromAddr, err := syscall.Recvfrom(s.dgramFd, buf, 0)
-			if err != nil {
-				if errno, ok := err.(syscall.Errno); ok {
-					if errno == syscall.EINTR {
-						continue
-					}
-					if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
-						// Timeout, continue
-						continue
-					}
-				}
-				logging.Errorf("Failed to read from datagram socket: %v", err)
-				atomic.AddUint64(&s.metrics.Errors, 1)
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
-			// Extract peer IP address
-			fromSockaddr, ok := fromAddr.(*syscall.SockaddrInet4)
-			if !ok {
-				logging.Warnf("Unexpected sockaddr type: %T", fromAddr)
-				continue
-			}
-			peerIP := net.IPv4(fromSockaddr.Addr[0], fromSockaddr.Addr[1], fromSockaddr.Addr[2], fromSockaddr.Addr[3])
-			if peerIP.Equal(myIP) {
-				// Skip our own packets
-				continue
-			}
-
-			// Parse the ICMP message (datagram sockets receive ICMP payload without IP header)
-			msg, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), buf[:n])
-			if err != nil {
-				logging.Errorf("Failed to parse ICMP message from datagram socket: %v", err)
-				atomic.AddUint64(&s.metrics.Errors, 1)
-				continue
-			}
-
-			// Log the ICMP message details
-			logging.Debugf("SOCKET INCOMING (datagram): from=%v, type=%v, code=%v", peerIP, msg.Type, msg.Code)
-
-			// For echo replies, extract more details
-			if msg.Type == ipv4.ICMPTypeEchoReply {
-				if echo, ok := msg.Body.(*icmp.Echo); ok {
-					logging.Debugf("SOCKET INCOMING ICMP (datagram): type=0, code=0, id=%d, seq=%d",
-						echo.ID, echo.Seq)
-				}
-			}
-
-			var fullPacket []byte
-			if msg.Type == ipv4.ICMPTypeEchoReply {
-				echo, ok := msg.Body.(*icmp.Echo)
-				if !ok {
-					logging.Warnf("Unexpected ICMP datagram echo body: %T", msg.Body)
-					continue
-				}
-				pending, ok := s.takePendingDgramEcho(dgramEchoKey(peerIP, echo.Seq, echo.Data))
-				if !ok {
-					logging.Debugf("dropping unmatched datagram ICMP echo reply from %s (seq=%d)", peerIP, echo.Seq)
-					continue
-				}
-				fullPacket, err = rewriteDgramEchoReply(msg, peerIP, pending)
-				if err != nil {
-					logging.Errorf("Failed to rewrite datagram ICMP echo reply: %v", err)
-					atomic.AddUint64(&s.metrics.Errors, 1)
-					continue
-				}
-			} else {
-				fullPacket = buildIPv4ICMP(peerIP.To4(), myIP.To4(), buf[:n])
-			}
-
-			// Update metrics
-			atomic.AddUint64(&s.metrics.PacketsReceived, 1)
-			atomic.AddUint64(&s.metrics.BytesReceived, uint64(len(fullPacket)))
-
-			// Create a packet from the data
-			packet := core.NewPacket(fullPacket)
-
-			// Process the packet
-			if s.processor != nil {
-				if err := s.processor.ProcessPacket(packet); err != nil {
-					logging.Errorf("Failed to process packet from datagram socket: %v", err)
-					atomic.AddUint64(&s.metrics.Errors, 1)
-					continue
-				}
-				logging.Debugf("Packet processed by processor from datagram socket: length=%d", len(fullPacket))
-			} else {
-				logging.Warnf("No packet processor set, packet not processed from datagram socket: length=%d", len(fullPacket))
-			}
-
-			logging.Debugf("Received packet of length %d from host network via datagram socket", len(fullPacket))
-		}
-	}
-}
-
 // listenLoop listens for packets from the host network
-func (s *SocketInterface) listenLoop() {
+func (s *SocketInterface) listenLoop(releaseRead func()) {
 	defer s.wg.Done()
+	defer releaseRead()
 
 	// Create a buffer for receiving packets
 	buf := make([]byte, 65536) // Use a large buffer to accommodate jumbo frames
@@ -747,96 +553,14 @@ func (s *SocketInterface) listenLoop() {
 				continue
 			}
 
-			// Process the received packet based on the protocol
-			var fullPacket []byte
-
-			// Extract peer IP address
-			peerIP := peer.(*net.IPAddr).IP
-			if peerIP == nil || peerIP.Equal(myIP) {
-				// Skip our own packets or invalid peer addresses
+			peerAddr, ok := peer.(*net.IPAddr)
+			if !ok || peerAddr.IP.To4() == nil || peerAddr.IP.Equal(myIP) {
 				continue
 			}
-
-			// Determine the protocol based on the socket configuration
-			protocol := uint8(1) // Only ICMP supported for now
-
-			// Process the received packet based on the protocol
-			if protocol == 1 { // ICMP
-				// Parse the ICMP message
-				msg, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), buf[:n])
-				if err != nil {
-					logging.Errorf("Failed to parse ICMP message: %v", err)
-					atomic.AddUint64(&s.metrics.Errors, 1)
-					continue
-				}
-
-				// Log the ICMP message details (debug)
-				logging.Debugf("SOCKET INCOMING: from=%v, type=%v, code=%v", peer, msg.Type, msg.Code)
-
-				// For echo replies, extract more details
-				if msg.Type == ipv4.ICMPTypeEchoReply {
-					if echo, ok := msg.Body.(*icmp.Echo); ok {
-						logging.Debugf("SOCKET INCOMING ICMP: type=0, code=0, id=%d, seq=%d",
-							echo.ID, echo.Seq)
-					}
-				}
-
-				// Construct a full IP packet with the ICMP message
-				ipHeader := make([]byte, 20)
-				ipHeader[0] = 0x45 // Version 4, header length 5 (20 bytes)
-				ipHeader[1] = 0x00 // DSCP & ECN
-				total := 20 + n
-				ipHeader[2] = byte(total >> 8)   // Total length (high byte)
-				ipHeader[3] = byte(total & 0xff) // Total length (low byte)
-				// Identification
-				{
-					id := nextIPID()
-					ipHeader[4] = byte(id >> 8)
-					ipHeader[5] = byte(id)
-				}
-				ipHeader[6] = 0x00                  // Flags & Fragment offset
-				ipHeader[7] = 0x00                  // Fragment offset
-				ipHeader[8] = 64                    // TTL
-				ipHeader[9] = protocol              // Protocol
-				ipHeader[10] = 0x00                 // Header checksum (will be calculated later)
-				ipHeader[11] = 0x00                 // Header checksum
-				copy(ipHeader[12:16], peerIP.To4()) // Source IP (the peer)
-				copy(ipHeader[16:20], myIP.To4())   // Destination IP (our IP)
-
-				// Calculate IP header checksum
-				checksum := calculateChecksum(ipHeader)
-				ipHeader[10] = byte(checksum >> 8)
-				ipHeader[11] = byte(checksum & 0xff)
-
-				// Combine IP header and ICMP message
-				fullPacket = append(ipHeader, buf[:n]...)
-			} else {
-				// For unknown protocols, log a warning and skip
-				logging.Warnf("Received packet with unsupported protocol: %d", protocol)
+			if err := s.processICMPReply(buf[:n], peerAddr.IP, myIP); err != nil {
+				logging.Debugf("ICMP reply dropped: %v", err)
 				atomic.AddUint64(&s.metrics.Errors, 1)
-				continue
 			}
-
-			// Update metrics
-			atomic.AddUint64(&s.metrics.PacketsReceived, 1)
-			atomic.AddUint64(&s.metrics.BytesReceived, uint64(len(fullPacket)))
-
-			// Create a packet from the data
-			packet := core.NewPacket(fullPacket)
-
-			// Process the packet
-			if s.processor != nil {
-				if err := s.processor.ProcessPacket(packet); err != nil {
-					logging.Errorf("Failed to process packet: %v", err)
-					atomic.AddUint64(&s.metrics.Errors, 1)
-					continue
-				}
-				logging.Debugf("Packet processed by processor: length=%d", len(fullPacket))
-			} else {
-				logging.Warnf("No packet processor set, packet not processed: length=%d", len(fullPacket))
-			}
-
-			logging.Debugf("Received packet of length %d from host network", len(fullPacket))
 		}
 	}
 }
@@ -854,4 +578,43 @@ func calculateChecksum(data []byte) uint16 {
 		sum = (sum & 0xffff) + (sum >> 16)
 	}
 	return uint16(^sum)
+}
+
+// processICMPReply accounts parser scratch and the synthesized reply separately.
+func (s *SocketInterface) processICMPReply(body []byte, peerIP, myIP net.IP) error {
+	if len(body) > 65515 {
+		return fmt.Errorf("ICMP reply exceeds IPv4 length")
+	}
+	release, err := s.ReservePacketBuffer(len(body))
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), body); err != nil {
+		return err
+	}
+	packet := s.buffers().buildPacket(20+len(body), false, func() []byte {
+		out := make([]byte, 20+len(body))
+		out[0], out[8], out[9] = 0x45, 64, 1
+		total := len(out)
+		out[2], out[3] = byte(total>>8), byte(total)
+		id := nextIPID()
+		out[4], out[5] = byte(id>>8), byte(id)
+		copy(out[12:16], peerIP.To4())
+		copy(out[16:20], myIP.To4())
+		checksum := calculateChecksum(out[:20])
+		out[10], out[11] = byte(checksum>>8), byte(checksum)
+		copy(out[20:], body)
+		return out
+	})
+	if packet == nil {
+		return ErrBufferLimit
+	}
+	size := packet.Length()
+	if !deliverPacket(s.processor, packet) {
+		return fmt.Errorf("ICMP reply delivery rejected")
+	}
+	atomic.AddUint64(&s.metrics.PacketsReceived, 1)
+	atomic.AddUint64(&s.metrics.BytesReceived, uint64(size))
+	return nil
 }

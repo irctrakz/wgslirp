@@ -34,21 +34,52 @@ type Packet interface {
 	Length() int
 }
 
+// BorrowPacketData returns a read-only view valid until the packet is released.
+// It avoids diagnostic copies for built-in packets. Callers must neither mutate
+// nor retain the view beyond the packet's ownership lifetime.
+func BorrowPacketData(packet Packet) []byte {
+	switch p := packet.(type) {
+	case *SimplePacket:
+		return p.data
+	case *pooledPacket:
+		return p.data
+	default:
+		return packet.Data()
+	}
+}
+
+// PacketBufferSize reports retained slice capacity rather than payload length.
+// Built-in packets can be measured without Data's optional debug copy. Custom
+// packets must expose their retained storage through Data; allocator overhead
+// and unrelated storage hidden by a custom implementation are not included.
+func PacketBufferSize(packet Packet) int {
+	switch p := packet.(type) {
+	case *SimplePacket:
+		return cap(p.data)
+	case *pooledPacket:
+		return cap(p.data)
+	default:
+		return cap(packet.Data())
+	}
+}
+
 // pooledPacket is a Packet implementation backed by a reusable buffer.
 // The buffer must not be modified by consumers. When processing of the
 // packet completes, ReleasePacket should be called to return the buffer
 // to its pool. If the packet escapes, the buffer will be reclaimed by GC
 // but not necessarily returned to any pool.
 type pooledPacket struct {
-    data     []byte
-    releaser func([]byte)
+	data     []byte
+	releaser func([]byte)
 }
 
 // NewPooledPacket wraps an existing byte slice as a Packet with an optional
 // releaser. The releaser may be nil. Do not mutate data after passing it in.
 func NewPooledPacket(data []byte, releaser func([]byte)) Packet {
-    if data == nil { data = make([]byte, 0) }
-    return &pooledPacket{data: data, releaser: releaser}
+	if data == nil {
+		data = make([]byte, 0)
+	}
+	return &pooledPacket{data: data, releaser: releaser}
 }
 
 func (p *pooledPacket) Data() []byte { return p.data }
@@ -63,14 +94,13 @@ func (p *pooledPacket) Released() bool { return p.data == nil }
 // ReleasePacket returns a packet's underlying buffer to its pool if it was
 // created via NewPooledPacket and a releaser was provided.
 func ReleasePacket(p Packet) {
-    if pp, ok := p.(*pooledPacket); ok {
-        if pp.releaser != nil && len(pp.data) > 0 {
-            pp.releaser(pp.data)
-            // prevent double release
-            pp.data = nil
-            pp.releaser = nil
-        }
-    }
+	if pp, ok := p.(*pooledPacket); ok {
+		data, release := pp.data, pp.releaser
+		pp.data, pp.releaser = nil, nil
+		if release != nil {
+			release(data)
+		}
+	}
 }
 
 // SimplePacket is a simple implementation of Packet

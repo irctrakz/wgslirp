@@ -3,8 +3,6 @@ package socket
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -14,7 +12,8 @@ import (
 
 const ipv4MinHeaderSize = 20
 
-// SocketWriter is an interface for writing packets to a socket
+// SocketWriter synchronously borrows a packet. Implementations must copy any
+// data they retain after WritePacket returns; ownership stays with the caller.
 type SocketWriter interface {
 	WritePacket(packet core.Packet) error
 }
@@ -22,42 +21,84 @@ type SocketWriter interface {
 // SocketPacketProcessor implements core.PacketProcessor
 type SocketPacketProcessor struct {
 	// The socket interface
-	socket SocketWriter
+	socket  SocketWriter
+	buffers PacketBufferReserver
 
 	// Worker pool
 	workerCount int
-	packetCh    chan core.Packet
+	packetCh    chan queuedPacket
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
+	mu          sync.Mutex
+	started     bool
+	stopped     bool
+	stopOnce    sync.Once
 
-    // Metrics
-    packetsProcessed uint64
-    packetsDropped   uint64
-    queueFullDrops   uint64
+	// Metrics
+	packetsProcessed uint64
+	packetsDropped   uint64
+	queueFullDrops   uint64
 }
 
-// NewSocketPacketProcessor creates a new socket packet processor
-func NewSocketPacketProcessor(socket SocketWriter, workerCount int) core.PacketProcessor {
-    if workerCount <= 0 { workerCount = 4 }
-    // Env overrides for workers and queue capacity.
-    if v := strings.TrimSpace(os.Getenv("PROCESSOR_WORKERS")); v != "" {
-        if n, err := strconv.Atoi(v); err == nil && n > 0 { workerCount = n }
-    }
-    qcap := 1000
-    if v := strings.TrimSpace(os.Getenv("PROCESSOR_QUEUE_CAP")); v != "" {
-        if n, err := strconv.Atoi(v); err == nil && n > 0 { qcap = n }
-    }
+type queuedPacket struct {
+	packet  core.Packet
+	release func()
+}
 
-    return &SocketPacketProcessor{
-        socket:      socket,
-        workerCount: workerCount,
-        packetCh:    make(chan core.Packet, qcap),
-        stopCh:      make(chan struct{}),
-    }
+func (q queuedPacket) close() {
+	core.ReleasePacket(q.packet)
+	q.release()
+}
+
+// NewSocketPacketProcessor reads legacy processor environment settings once.
+// Deprecated: use NewSocketPacketProcessorWithConfig with explicit configuration.
+func NewSocketPacketProcessor(socket SocketWriter, workerCount int) core.PacketProcessor {
+	cfg := DefaultProcessorConfig()
+	if workerCount > 0 {
+		cfg.Workers = workerCount
+	}
+	next, err := ProcessorConfigFromEnv(cfg, os.LookupEnv)
+	if err != nil {
+		logging.Warnf("legacy processor configuration: %v; using defaults", err)
+		next = DefaultProcessorConfig()
+	}
+	return newSocketPacketProcessor(socket, next)
+}
+
+func NewSocketPacketProcessorWithConfig(socket SocketWriter, cfg ProcessorConfig) (*SocketPacketProcessor, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if socket == nil {
+		return nil, fmt.Errorf("packet processor requires a socket writer")
+	}
+	return newSocketPacketProcessor(socket, cfg), nil
+}
+
+func newSocketPacketProcessor(socket SocketWriter, cfg ProcessorConfig) *SocketPacketProcessor {
+	return &SocketPacketProcessor{
+		socket:      socket,
+		buffers:     PacketBufferBudgetFor(socket),
+		workerCount: cfg.Workers,
+		packetCh:    make(chan queuedPacket, cfg.QueueCapacity),
+		stopCh:      make(chan struct{}),
+	}
 }
 
 // Start starts the packet processor
 func (p *SocketPacketProcessor) Start() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped {
+		return fmt.Errorf("packet processor stopped; create a new instance")
+	}
+	if p.started {
+		return fmt.Errorf("packet processor already started")
+	}
+	if p.socket == nil {
+		return fmt.Errorf("packet processor requires a socket writer")
+	}
+	p.started = true
 	// Start the worker pool
 	p.wg.Add(p.workerCount)
 	for i := 0; i < p.workerCount; i++ {
@@ -70,9 +111,23 @@ func (p *SocketPacketProcessor) Start() error {
 
 // Stop stops the packet processor
 func (p *SocketPacketProcessor) Stop() error {
-	close(p.stopCh)
-	p.wg.Wait()
-	close(p.packetCh)
+	p.stopOnce.Do(func() {
+		p.mu.Lock()
+		p.stopped = true
+		close(p.stopCh)
+		p.mu.Unlock()
+		p.wg.Wait()
+		// Accepted packets belong to this processor even if shutdown prevents
+		// processing them. Drain and release; packetCh is never closed.
+		for {
+			select {
+			case packet := <-p.packetCh:
+				packet.close()
+			default:
+				return
+			}
+		}
+	})
 
 	logging.Infof("Socket packet processor stopped")
 	return nil
@@ -80,8 +135,16 @@ func (p *SocketPacketProcessor) Stop() error {
 
 // ProcessPacket implements core.PacketProcessor
 func (p *SocketPacketProcessor) ProcessPacket(packet core.Packet) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.started || p.stopped {
+		return fmt.Errorf("packet processor not running")
+	}
+	if packet == nil {
+		return fmt.Errorf("nil packet")
+	}
 	// Basic validation
-	data := packet.Data()
+	data := core.BorrowPacketData(packet)
 	if len(data) < ipv4MinHeaderSize {
 		atomic.AddUint64(&p.packetsDropped, 1)
 		return fmt.Errorf("packet too short")
@@ -94,19 +157,24 @@ func (p *SocketPacketProcessor) ProcessPacket(packet core.Packet) error {
 		return fmt.Errorf("unsupported IP version: %d", ver)
 	}
 
-    // Try to send the packet to the worker pool without copying.
-    // Packet safety is handled by core.NewPacket at creation time, and
-    // each packet is processed by a single worker.
-    select {
-    case p.packetCh <- packet:
-        // Packet sent to worker pool
-        atomic.AddUint64(&p.packetsProcessed, 1)
-    default:
-        // Channel is full, drop the packet
-        atomic.AddUint64(&p.packetsDropped, 1)
-        atomic.AddUint64(&p.queueFullDrops, 1)
-        return fmt.Errorf("packet dropped: worker pool is full")
-    }
+	// Admission transfers ownership only on success. A rejected packet remains
+	// the caller's responsibility, including any pooled buffer.
+	release, err := p.buffers.ReservePacketBuffer(core.PacketBufferSize(packet))
+	if err != nil {
+		atomic.AddUint64(&p.packetsDropped, 1)
+		return err
+	}
+	select {
+	case p.packetCh <- queuedPacket{packet: packet, release: release}:
+		// Packet sent to worker pool
+		atomic.AddUint64(&p.packetsProcessed, 1)
+	default:
+		release()
+		// Channel is full, drop the packet
+		atomic.AddUint64(&p.packetsDropped, 1)
+		atomic.AddUint64(&p.queueFullDrops, 1)
+		return fmt.Errorf("packet dropped: worker pool is full")
+	}
 
 	return nil
 }
@@ -129,7 +197,7 @@ func (p *SocketPacketProcessor) worker(id int) {
 			}
 
 			// Process the packet
-			err := p.processPacketInternal(packet)
+			err := p.processQueuedPacket(packet)
 			if err != nil {
 				logging.Errorf("Failed to process packet in worker %d: %v", id, err)
 			}
@@ -137,15 +205,22 @@ func (p *SocketPacketProcessor) worker(id int) {
 	}
 }
 
+func (p *SocketPacketProcessor) processQueuedPacket(packet queuedPacket) error {
+	// Keep storage charged until the synchronous writer returns, even though
+	// dequeue has already made room for another entry.
+	defer packet.release()
+	return p.processPacketInternal(packet.packet)
+}
+
 // processPacketInternal processes a packet in a worker
 func (p *SocketPacketProcessor) processPacketInternal(packet core.Packet) error {
-    // Ensure any pooled packet buffer is released after processing completes.
-    defer core.ReleasePacket(packet)
-    // Forward the packet to the socket interface
-    err := p.socket.WritePacket(packet)
-    if err != nil {
-        return fmt.Errorf("failed to write packet to socket: %v", err)
-    }
+	// Ensure any pooled packet buffer is released after processing completes.
+	defer core.ReleasePacket(packet)
+	// Forward the packet to the socket interface
+	err := p.socket.WritePacket(packet)
+	if err != nil {
+		return fmt.Errorf("failed to write packet to socket: %v", err)
+	}
 
 	logging.Debugf("Forwarded packet to socket: length=%d", packet.Length())
 	return nil
@@ -153,9 +228,9 @@ func (p *SocketPacketProcessor) processPacketInternal(packet core.Packet) error 
 
 // Metrics returns metrics for the packet processor
 func (p *SocketPacketProcessor) Metrics() map[string]uint64 {
-    return map[string]uint64{
-        "packetsProcessed": atomic.LoadUint64(&p.packetsProcessed),
-        "packetsDropped":   atomic.LoadUint64(&p.packetsDropped),
-        "queueFullDrops":   atomic.LoadUint64(&p.queueFullDrops),
-    }
+	return map[string]uint64{
+		"packetsProcessed": atomic.LoadUint64(&p.packetsProcessed),
+		"packetsDropped":   atomic.LoadUint64(&p.packetsDropped),
+		"queueFullDrops":   atomic.LoadUint64(&p.queueFullDrops),
+	}
 }
