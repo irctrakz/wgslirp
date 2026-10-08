@@ -15,6 +15,10 @@ The default-capacity TCP churn regression now exercises two 256-flow batches
 (512 connections), including refusal at TIME-WAIT capacity and simulated expiry
 recovery. The measurements below retain their original 64/256 fixture sizes;
 they are historical evidence, not measured memory sizing for the new defaults.
+The [current encrypted TCP capacity record](ENCRYPTED_CAPACITY.md) covers all
+256 slots and real TIME-WAIT expiry, with ordinary/race memory observations and
+full actual-image acceptance. It does not extend these historical UDP memory
+measurements to 512 simultaneous UDP flows.
 
 ## Historical scope and reproduction
 

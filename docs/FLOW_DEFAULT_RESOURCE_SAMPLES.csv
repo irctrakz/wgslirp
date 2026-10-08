@@ -1,0 +1,17 @@
+artifact,cgroup_peak_bytes,exit_code,oom_killed,limit_events,cleanup_verified
+capacity-ordinary-37723676221-1-1,346456064,0,False,0,True
+capacity-race-37723676221-1-1,692961280,0,False,0,True
+fragments-ordinary-37723676221-1-1,441286656,0,False,0,True
+fragments-race-37723676221-1-1,850268160,0,False,0,True
+fragments-unpaced-ordinary-37723676221-1-1,540401664,0,False,0,True
+fragments-unpaced-ordinary-37723676221-1-2,545218560,0,False,0,True
+fragments-unpaced-ordinary-37723676221-1-3,549695488,0,False,0,True
+fragments-unpaced-race-37723676221-1-1,975310848,0,False,0,True
+fragments-unpaced-race-37723676221-1-2,1010880512,0,False,0,True
+fragments-unpaced-race-37723676221-1-3,992247808,0,False,0,True
+mixed-ordinary-37723676221-1-1,518369280,0,False,0,True
+mixed-race-37723676221-1-1,939700224,0,False,0,True
+sustained-ordinary-37723676221-1-1,343900160,0,False,0,True
+sustained-race-37723676221-1-1,597426176,0,False,0,True
+wan-ordinary-37723676221-1-1,344653824,0,False,0,True
+wan-race-37723676221-1-1,550178816,0,False,0,True

@@ -5,6 +5,12 @@
 and pending-dial budgets remain unchanged. The TCP default-capacity regression
 now covers 512 connections in two 256-slot TIME-WAIT batches. Earlier 64/256
 measurements below retain their historical context; see [RESOURCE_BUDGETS.md](RESOURCE_BUDGETS.md).
+The [256-flow acceptance record](ENCRYPTED_CAPACITY.md) retains two failed race
+RSS gates and the profiling evidence for a separate 512 MiB race RSS allowance.
+Ordinary RSS/Go heap and container limits remain unchanged. Run 37723676221
+passed all 19 jobs and promoted the exact tested image. Capacity/image gates now
+precede independent long workload families; measured failure feedback fell from
+55 minutes to eight minutes, with all promotion prerequisites preserved.
 
 **Current progress and remaining work (updated 2026-10-04):** see
 [HARDENING_REVIEW.md](HARDENING_REVIEW.md) for the consolidated backlog,

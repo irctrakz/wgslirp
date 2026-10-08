@@ -23,7 +23,7 @@ without forced GC.
 The diagnostic retry, [37716760627](https://github.com/irctrakz/wgslirp/actions/runs/37716760627),
 also failed race RSS at 403,206,144 bytes with 80,734,440 bytes Go heap and 312
 goroutines. Ordinary peak RSS was 42,168,320 bytes and remained approximately
-42 MiB through the real TIME-WAIT interval. The race breach profile sampled
+40 MiB through the real TIME-WAIT interval. The race breach profile sampled
 58.44 MiB live heap: 56.91 MiB (97.40%) was WireGuard message buffers. Its sampled
 cumulative allocations were 187.16 MiB, dominated by WireGuard message pools
 (79.57%) and bind message storage (12.65%); TCP reader allocations were 0.54% flat.
@@ -42,8 +42,56 @@ substantial race memory overhead, including allocations invisible to heap profil
 The 2 GiB container ceiling, PID/CPU restrictions, deadlines, traffic volume,
 race detection and every protocol/recovery/cleanup assertion remain unchanged.
 This is a deliberate change to a test acceptance limit, not a production memory
-optimization or a claim that production needs 512 MiB. Full revised acceptance
-remains pending until CI completes.
+optimization or a claim that production needs 512 MiB. Revised acceptance is
+recorded below.
+
+The revised capacity ordinary/race pair passed in
+[run 37723676221](https://github.com/irctrakz/wgslirp/actions/runs/37723676221)
+at source `e58c8afa130a7f1bab8d634f3c001393a69c99b1`:
+
+| 256-flow measurement | Ordinary | Race |
+| --- | ---: | ---: |
+| Sampled Go heap peak (bytes) | 64,466,968 | 97,205,216 |
+| Sampled RSS peak (bytes) | 42,217,472 | 438,530,048 |
+| Shared buffer peak (bytes) | 791,976 | 927,144 |
+| Cgroup peak including compilation/tmpfs (bytes) | 346,456,064 | 692,961,280 |
+
+Both completed all 521 connections, two accounted refusals, real four-minute
+TIME-WAIT recovery, zero final reservations and worker cleanup. No race reports,
+OOM or container memory/PID-limit events occurred; owned resources were removed.
+[Phase memory samples](FLOW_CAPACITY_MEMORY_SAMPLES.csv) retain the natural
+memory progression. Race RSS declined to 246,136,832 bytes near the end of
+TIME-WAIT without forced GC or a runtime policy change. This bounded run does
+not prove absence of leaks in every workload.
+
+## Full revised acceptance and promotion
+
+Run 37723676221 passed all 19 jobs in **37 minutes 55 seconds**: Linux build/vet,
+unit/race, integration/race, bounded fuzz checks, sixteen encrypted workload
+samples, actual-image runtime validation and development promotion. This retains
+every workload and repetition while replacing the previous serial dependency chain.
+[Workload resource samples](FLOW_DEFAULT_RESOURCE_SAMPLES.csv) retain all sixteen
+containers; the largest cgroup peak was 1,010,880,512 bytes, including compilation
+and tmpfs, below the unchanged 2 GiB limit. All exited successfully without race
+reports, OOM or memory/PID-limit events, and verified owned-resource removal.
+
+The actual release image passed default-on and explicit-opt-out runtime modes
+under UID 100, dropped capabilities, no-new-privileges, read-only root, one CPU,
+256 MiB memory/no swap and 128 PIDs. Encrypted TCP/UDP forwarding and shutdown
+under traffic passed in both modes. Recorded memory peaks were 57,663,488 and
+31,436,800 bytes respectively; SIGTERM completed in 76 and 78 ms. These are the
+release fixture's bounded traffic observations, not 256-flow capacity measurements
+inside a 256 MiB container.
+
+Tested and promoted immutable image:
+`ghcr.io/irctrakz/wgslirp@sha256:971669daf76c2133dc71a7ab319c048e0f952dfcfad08fe12665bd3a7edc79c5`.
+Development tag:
+`dev-e58c8afa130a7f1bab8d634f3c001393a69c99b1-37723676221-1`.
+The build manifest, runtime reference and promotion manifest match that digest;
+promotion did not rebuild it or retag `latest`. Release cleanup verified removal
+of owned runtime containers, network, builder/cache volume and local image.
+Work and publishing stayed on `codex/architecture-hardening`; main and the private
+SSH server remained untouched.
 
 ## Pipeline feedback order
 
@@ -54,6 +102,11 @@ Development promotion explicitly requires every workload family and the actual
 image test, retaining exact-digest promotion without a rebuild. This removes the
 previous serial chain that deferred capacity until roughly 47 minutes after the
 baseline finished. Runner queue time can still affect total elapsed time.
+
+Measured failure feedback improved from 55 minutes 20 seconds in run 37711467617
+to 7 minutes 49 seconds in diagnostic run 37716760627. All long workload families
+and development promotion were skipped after the early failure. The actual-image
+test had already passed, with its owned resources removed.
 
 ## Acceptance declared before execution — 2026-10-03
 
