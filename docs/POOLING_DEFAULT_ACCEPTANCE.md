@@ -1,5 +1,9 @@
 # Full packet pooling by default
 
+**2026-10-08 API retirement:** legacy wrapping was subsequently removed.
+`POOL_WRAP` must now be absent; see [migration](API_MIGRATION.md). References to
+wrapping-off evidence below describe the tested 2026-10-07 checkpoint.
+
 ## Decision (2026-10-07)
 
 Enable the existing bounded packet cache by default for every supported packet

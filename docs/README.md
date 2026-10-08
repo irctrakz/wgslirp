@@ -190,7 +190,7 @@ Overlay routing (optional)
 
 Logging and diagnostics
 
-- `DEBUG`: enable verbose logging. Explicit packet ownership is unchanged; only legacy packet APIs retain debug-dependent copies.
+- `DEBUG`: enable verbose logging. Packet ownership and copying are explicit and independent of logging.
 - `WG_DEBUG`: verbose wireguard-go logging (chatty).
 - `WG_PCAP`: file path to write plaintext IPv4 frames (DLT_RAW) captured by the userspace TUN.
 - `WG_PCAP_MAX_BYTES`: capture file size limit, including headers; defaults to 67108864 (64 MiB). Must be an integer of at least 24. Capture stops before a complete record would exceed the limit and stays stopped until process restart. Invalid values fail startup without touching the file; capture is opened at startup and cannot follow later environment changes. Forwarding continues when capture stops. Capture files use private permissions (0600).

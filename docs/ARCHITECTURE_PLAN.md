@@ -846,7 +846,10 @@ candidate before implementation; no broad representation or lock rewrite is just
   send-gate setting. Preserve explicit ownership and resource accounting; document
   breaking migration and future policy in [API_MIGRATION.md](API_MIGRATION.md).
   Historical compatibility statements above describe earlier checkpoints.
-  Linux CI and actual-image acceptance are required before candidate promotion.
+  At `4b2e254`, release run 37825299733 passed all 19 jobs and independent run
+  37825368016 passed all eight controls. All sixteen workload resource/cleanup
+  artifacts and same-digest image promotion were independently verified; see
+  [acceptance](API_MIGRATION.md#acceptance-at-4b2e254).
 
 ## First implementation milestone
 

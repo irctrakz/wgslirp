@@ -53,3 +53,38 @@ errors. Require Linux unit/race, integration/race, fuzz and bounded encrypted
 workloads plus actual-image forwarding/shutdown validation before promoting
 the cleanup candidate. Runtime privilege, queue, byte-budget, cancellation,
 TCP negotiation and segmentation requirements remain unchanged.
+
+### Acceptance at `4b2e254`
+
+[Release pipeline 37825299733](https://github.com/irctrakz/wgslirp/actions/runs/37825299733)
+passed all 19 jobs: Linux build/vet, unit/race, integration/race, three fuzz
+checks, sixteen bounded encrypted workload samples, actual-image validation
+and promotion. The separate [Go Tests run](https://github.com/irctrakz/wgslirp/actions/runs/37825299160)
+also passed. [Independent controls 37825368016](https://github.com/irctrakz/wgslirp/actions/runs/37825368016)
+passed all eight ordinary/race mutation controls; retained artifacts confirmed
+the expected assertion failures, source identity, resource gates and cleanup.
+
+All sixteen workload resource/cleanup artifacts were independently inspected.
+Maximum cgroup memory was 1,061,855,232 bytes, below the unchanged 2 GiB limit,
+with no memory-limit/OOM/PID-limit events. Capacity recovered after the real
+four-minute TIME-WAIT interval; ordinary/race peak RSS was 42,172,416 / 421,019,648
+bytes, within the existing respective limits.
+
+The actual image ran as UID 100 with all capabilities dropped, read-only root,
+one CPU, 256 MiB RAM/no swap and 128 PIDs. Default/disabled configurations passed
+encrypted TCP/UDP, fragment and shutdown checks; SIGTERM under traffic completed
+in 80 / 77 ms. Sampled cgroup peaks after eight rounds were 57,327,616 / 27,500,544
+bytes. These are acceptance samples, not claims of a measured performance gain.
+
+The tested and promoted artifact was identical, with no rebuild:
+
+```text
+ghcr.io/irctrakz/wgslirp@sha256:be56bb216de910559d457e3b23dd7cf0b796f2577474bcbc503a2ee759973e1b
+```
+
+Development tag:
+`dev-4b2e254d0d66648af2b89384129a85a26c470ba6-37825299733-1`.
+Main/`master` and `latest` were untouched. No private server was used.
+Local focused ownership/configuration tests, package vet and Linux cross-build
+passed; the full Windows run retained its recorded empty-UDP and POSIX file-mode
+test failures. Linux CI provides the complete acceptance evidence above.
