@@ -95,7 +95,7 @@ func TestTCPIntegration_HTTP(t *testing.T) {
 	}
 
 	<-done
-	waitTCPClosed(t, s.tcp)
+	finishTCPIntegrationClose(t, s.tcp, cap, cliIP, srvIP, cliPort, srvPort, cseq+1+uint32(len(req)), false)
 
 	// Verify metrics: one connection created and closed, traffic both ways
 	dm := s.DetailedMetrics()

@@ -103,6 +103,7 @@ func TestConcurrentTCPAdmissionHonorsCap(t *testing.T) {
 	if got := len(b.flowSnapshot()); got != 2 {
 		t.Fatalf("active=%d want=2", got)
 	}
+	assertAdmission(t, parent, map[string]uint64{"tcp_flow_limit": 22})
 	if limited.Load() != 22 {
 		t.Fatalf("refused=%d want=22", limited.Load())
 	}

@@ -129,12 +129,16 @@ func (b *udpBridge) deliverDatagram(f *udpFlow, payload []byte, tos, ttl byte, m
 }
 
 func (b *udpBridge) deliverReply(packet core.Packet) bool {
-	size := packet.Length()
-	udpDebugEnqueue()
-	if !deliverPacket(b.parent.processor, packet) {
+	if packet == nil {
 		return false
 	}
-	udpDebugProcessed()
+	size := packet.Length()
+	b.txEnqueued.Add(1)
+	if !b.deliver(packet) {
+		b.deliveryRefused.Add(1)
+		return false
+	}
+	b.txProcessed.Add(1)
 	atomic.AddUint64(&b.metrics.PacketsReceived, 1)
 	atomic.AddUint64(&b.metrics.BytesReceived, uint64(size))
 	atomic.AddUint64(&b.parent.metrics.PacketsReceived, 1)
@@ -143,6 +147,10 @@ func (b *udpBridge) deliverReply(packet core.Packet) bool {
 }
 
 func (b *tcpBridge) buildICMPUnreachable(src, dst [4]byte, code byte, original []byte) core.Packet {
+	return b.buffers.buildICMPUnreachable(src, dst, code, original)
+}
+
+func (b *resourceBudget) buildICMPUnreachable(src, dst [4]byte, code byte, original []byte) core.Packet {
 	if len(original) < 20 {
 		return nil
 	}
@@ -151,7 +159,7 @@ func (b *tcpBridge) buildICMPUnreachable(src, dst [4]byte, code byte, original [
 		return nil
 	}
 	size := 28 + minInt(ihl+8, len(original))
-	return b.buffers.buildPacket(size, true, func() []byte {
+	return b.buildPacket(size, true, func() []byte {
 		return buildICMPUnreachable(src, dst, code, original)
 	})
 }
