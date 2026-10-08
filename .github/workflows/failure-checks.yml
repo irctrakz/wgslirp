@@ -76,7 +76,7 @@ jobs:
             --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m,mode=1777 \
             --mount "type=bind,src=$copies,dst=/copies,readonly" \
             --log-driver=json-file --log-opt=max-size=4m --log-opt=max-file=2 \
-            -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB -e GOCACHE=/work/cache -e GOPATH=/work/gopath \
+            -e GOMAXPROCS=1 -e GOMEMLIMIT=512MiB -e GOCACHE=/work/cache -e GOPATH=/work/gopath -e GOTMPDIR=/work \
             golang:1.23.12-bookworm timeout --signal=TERM --kill-after=10s 600s sleep 600
           docker inspect "$CONTAINER" --format '{{json .HostConfig}}' > evidence/limits.json
           python3 - <<'PY'
