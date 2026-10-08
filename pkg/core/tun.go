@@ -26,6 +26,9 @@ type TUNDevice interface {
 
 // PacketProcessor processes packets from a TUN device
 type PacketProcessor interface {
+	// Implementations must be concurrency-safe. Synchronous socket delivery may
+	// hold flow state: return promptly and do not re-enter flow operations or
+	// wait for producer shutdown. Socket RequestStop supports callback-safe stop.
 	// ProcessPacket transfers ownership on success. Accepted pooled packets must
 	// eventually be released. A rejecting producer releases its packet; a
 	// synchronous consumer may already have released it before returning an error.

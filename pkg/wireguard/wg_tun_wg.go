@@ -58,7 +58,7 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 	}
 	// forward each buffer as a packet either back into WG (overlay) or to slirp
 	sent := 0
-	var totalFromWG uint64
+
 	for _, b := range buffs {
 		if b == nil {
 			continue
@@ -83,7 +83,7 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 				return sent, err
 			}
 			sent++
-			totalFromWG += uint64(len(pkt))
+			atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
 			continue
 		}
 		// Overlay re-route: back into WG if destination is inside a peer prefix
@@ -92,6 +92,7 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 				return sent, err
 			}
 			sent++
+			atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
 			continue
 		}
 		// Default: egress via slirp
@@ -99,10 +100,7 @@ func (t *WGTun) Write(buffs [][]byte, offset int) (int, error) {
 			return sent, err
 		}
 		sent++
-		totalFromWG += uint64(len(pkt))
-	}
-	if totalFromWG > 0 {
-		atomic.AddUint64(&t.metrics.PlaintextFromWG, totalFromWG)
+		atomic.AddUint64(&t.metrics.PlaintextFromWG, uint64(len(pkt)))
 	}
 	return sent, nil
 }

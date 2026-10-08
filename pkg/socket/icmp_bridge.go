@@ -3,6 +3,7 @@ package socket
 import (
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/logging"
@@ -60,7 +61,9 @@ func (s *SocketInterface) marshalICMPPacket(body []byte) (core.Packet, error) {
 	defer releaseParse()
 	msg, err := icmp.ParseMessage(ipv4.ICMPTypeEcho.Protocol(), body)
 	if err != nil {
-		logging.Warnf("icmp: failed to parse message, sending raw: %v", err)
+		if s.failureLog.Allow(time.Now()) {
+			logging.Warnf("icmp: failed to parse message, sending raw: %v", err)
+		}
 		packet := s.buffers().buildPacket(len(body), false, func() []byte {
 			data := make([]byte, len(body))
 			copy(data, body)

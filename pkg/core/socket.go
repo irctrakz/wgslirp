@@ -35,3 +35,11 @@ type SocketMetrics struct {
 	// Errors is the number of errors encountered.
 	Errors uint64
 }
+
+// PacketWriter synchronously borrows a packet; retained data must be copied.
+// Ownership remains with the caller, including on error.
+type PacketWriter interface{ WritePacket(Packet) error }
+
+// PacketBufferReserver admits retained storage. Release is idempotent and
+// reservations never call back into consumers or acquire their flow locks.
+type PacketBufferReserver interface{ ReservePacketBuffer(int) (func(), error) }

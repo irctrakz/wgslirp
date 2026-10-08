@@ -72,6 +72,7 @@ func TestDialLimitIncludesFastAttemptsAndPreservesExistingFlow(t *testing.T) {
 		t.Fatalf("admission: %v", err)
 	}
 	assertBudget(t, b.dialSlots, 2)
+	assertAdmission(t, b.parent, map[string]uint64{"pending_dial_limit": 1})
 	if err := b.HandleOutbound(buildIPv4TCP(f.srcIP, f.dstIP, 40000, 80, 100, 1000, 0x10, nil)); err != nil {
 		t.Fatalf("existing flow blocked: %v", err)
 	}

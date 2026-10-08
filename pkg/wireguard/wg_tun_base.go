@@ -1,7 +1,9 @@
 package wireguard
 
 import (
+	"errors"
 	"fmt"
+	"github.com/irctrakz/wgslirp/pkg/core"
 	"net"
 	"os"
 	"strings"
@@ -13,6 +15,9 @@ import (
 )
 
 // Event is a minimal stand-in for wireguard-go's tun.Event for non-wg builds.
+// ErrQueueFull identifies queue-slot saturation independently of buffer admission.
+var ErrQueueFull = errors.New("wg tun queue full")
+
 type Event uint32
 
 const (
@@ -22,8 +27,8 @@ const (
 
 // TUNMetrics exposes basic counters for the WG plaintext exchange.
 type TUNMetrics struct {
-	PlaintextFromWG uint64 // frames received from WG (Write)
-	PlaintextToWG   uint64 // frames delivered to WG (Read)
+	PlaintextFromWG uint64 // IPv4 bytes accepted from WG (Write), including overlay
+	PlaintextToWG   uint64 // bytes accepted into the WG read queue (not read completions)
 	QueueDrops      uint64 // frames dropped due to full queue
 }
 
@@ -32,8 +37,8 @@ type TUNMetrics struct {
 type WGTun struct {
 	name    string
 	mtu     int
-	writer  socket.SocketWriter
-	buffers socket.PacketBufferReserver
+	writer  core.PacketWriter
+	buffers core.PacketBufferReserver
 
 	outCh   chan queuedFrame
 	events  chan Event
@@ -57,7 +62,7 @@ type queuedFrame struct {
 
 // NewWGTun reads legacy queue environment settings once.
 // Deprecated: use NewWGTunWithConfig and TunConfigFromEnv at the application boundary.
-func NewWGTun(name string, mtu int, writer socket.SocketWriter) *WGTun {
+func NewWGTun(name string, mtu int, writer core.PacketWriter) *WGTun {
 	if mtu <= 0 {
 		mtu = 1380
 	}
@@ -70,7 +75,7 @@ func NewWGTun(name string, mtu int, writer socket.SocketWriter) *WGTun {
 	return newWGTun(name, mtu, writer, cfg)
 }
 
-func NewWGTunWithConfig(name string, mtu int, writer socket.SocketWriter, cfg TunConfig) (*WGTun, error) {
+func NewWGTunWithConfig(name string, mtu int, writer core.PacketWriter, cfg TunConfig) (*WGTun, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -80,7 +85,7 @@ func NewWGTunWithConfig(name string, mtu int, writer socket.SocketWriter, cfg Tu
 	return newWGTun(name, mtu, writer, cfg), nil
 }
 
-func newWGTun(name string, mtu int, writer socket.SocketWriter, cfg TunConfig) *WGTun {
+func newWGTun(name string, mtu int, writer core.PacketWriter, cfg TunConfig) *WGTun {
 	t := &WGTun{
 		name:    name,
 		mtu:     mtu,
@@ -140,7 +145,7 @@ func (t *WGTun) InjectToPeer(b []byte) error {
 	// allocating or reserving storage for an already-full queue.
 	if len(t.outCh) == cap(t.outCh) {
 		atomic.AddUint64(&t.metrics.QueueDrops, 1)
-		return fmt.Errorf("wg tun queue full")
+		return ErrQueueFull
 	}
 	release, err := t.buffers.ReservePacketBuffer(len(b))
 	if err != nil {

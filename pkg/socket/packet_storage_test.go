@@ -84,7 +84,8 @@ func TestUDPFragmentSynthesisBudgetAndChecksums(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x67}, 3000)
 	fullCharge := 28 + len(payload) + 128
 	s := NewSocketInterface(Config{SocketBufferCapBytes: fullCharge + 600 + 128})
-	b := &udpBridge{buffers: s.buffers(), parent: s}
+	b := newUDPBridge(s)
+	defer b.stop()
 	f := &udpFlow{srcIP: [4]byte{10, 0, 0, 2}, dstIP: [4]byte{1, 1, 1, 1}, srcPort: 123, dstPort: 456}
 	var packets [][]byte
 	s.processor = packetConsumer(func(p core.Packet) error {
