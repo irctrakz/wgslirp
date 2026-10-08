@@ -34,6 +34,11 @@ func (l *packetErrorLog) Errorf(format string, args ...any) {
 	category := -1
 	if format == "Failed to write packets to TUN device: %v" && len(args) == 1 {
 		if err, ok := args[0].(error); ok {
+			// TCP owns the teardown counter/debug record. Preserve its error result
+			// for callers without turning an expected terminal socket into an alarm.
+			if errors.Is(err, socket.ErrTCPTeardown) {
+				return
+			}
 			for i, reason := range packetErrorReasons {
 				if errors.Is(err, reason.err) {
 					category = i

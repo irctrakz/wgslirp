@@ -1,10 +1,14 @@
 package socket
 
 import (
+	"errors"
 	"fmt"
-	"github.com/irctrakz/wgslirp/pkg/logging"
+	"net"
 	"sync/atomic"
+	"syscall"
 	"time"
+
+	"github.com/irctrakz/wgslirp/pkg/logging"
 )
 
 // Close recovery expires after two minutes without new data/ACK progress.
@@ -62,16 +66,51 @@ func (b *tcpBridge) emitFINLocked(f *tcpFlow, now time.Time) bool {
 	return true
 }
 
+// ErrTCPTeardown identifies a CloseWrite attempt on an already-disconnected
+// socket or during recorded local shutdown. It does not imply graceful delivery.
+// The original error remains available through errors.Is/As.
+var ErrTCPTeardown = errors.New("TCP write shutdown after disconnection")
+
 func (b *tcpBridge) closeHostWriteLocked(f *tcpFlow) error {
 	if f.conn == nil || f.hostWriteClosed {
 		return nil
 	}
 	if err := f.conn.CloseWrite(); err != nil {
-		b.abortBufferedFlowLocked(f)
-		return fmt.Errorf("tcp: close host write: %w", err)
+		return b.hostWriteCloseErrorLocked(f, err)
 	}
 	f.hostWriteClosed = true
 	return nil
+}
+
+// Caller holds stateMu. Classify before retirement so removal cannot make an
+// unexpected local close look expected. Every outcome retains the old abort path.
+func (b *tcpBridge) hostWriteCloseErrorLocked(f *tcpFlow, cause error) error {
+	expected := false
+	if errors.Is(cause, syscall.ENOTCONN) {
+		b.hostWriteDisconnected.Add(1)
+		expected = true
+	} else if errors.Is(cause, net.ErrClosed) {
+		localShutdown := f.closed
+		select {
+		case <-b.stopCh:
+			localShutdown = true
+		default:
+		}
+		if localShutdown {
+			b.hostWriteLocalClosed.Add(1)
+			expected = true
+		}
+	}
+	if expected {
+		logging.Debugf("TCP write shutdown after disconnection; retiring flow=%s state=%s: %v; graceful delivery not confirmed", f.key, f.state, cause)
+	} else {
+		b.hostWriteCloseFailed.Add(1)
+	}
+	b.abortBufferedFlowLocked(f)
+	if expected {
+		return fmt.Errorf("tcp: close host write: %w: %w", ErrTCPTeardown, cause)
+	}
+	return fmt.Errorf("tcp: close host write: %w", cause)
 }
 
 // receiveFINLocked runs only after all preceding guest bytes were accepted.

@@ -13,7 +13,7 @@ on:
         options: [basic, sustained]
         default: basic
   push:
-    branches: [master, codex/architecture-hardening, codex/integration-05-features]
+    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite]
   pull_request:                 # PRs = build-only
 
 permissions:
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   pooling-study:
-    if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/pooling.yml
     with:
       profile: ${{ inputs.pooling-profile }}
@@ -32,40 +32,40 @@ jobs:
 
   encrypted-capacity:
     needs: test
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
 
   encrypted-wan:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: wan
 
   encrypted-sustained:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: sustained
 
   encrypted-mixed:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: mixed
 
   encrypted-fragments:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: fragments
 
   encrypted-fragments-unpaced:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: fragments-unpaced
@@ -73,7 +73,7 @@ jobs:
 
   release-image-test:
     needs: test
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -213,7 +213,7 @@ jobs:
 
   promote-development:
     needs: [test, encrypted-capacity, encrypted-wan, encrypted-sustained, encrypted-mixed, encrypted-fragments, encrypted-fragments-unpaced, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

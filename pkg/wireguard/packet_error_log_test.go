@@ -119,3 +119,21 @@ func TestPacketErrorLogConcurrentFlushAndShutdown(t *testing.T) {
 		t.Fatal("repeated shutdown duplicated counts")
 	}
 }
+
+func TestPacketErrorLogQuietOnlyForClassifiedTCPTeardown(t *testing.T) {
+	var lines []string
+	l := &packetErrorLog{emit: func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }}
+	err := fmt.Errorf("TCP slirp error: %w: %w", socket.ErrTCPTeardown, syscall.ENOTCONN)
+	l.Errorf("Failed to write packets to TUN device: %v", err)
+	l.Flush()
+	if len(lines) != 0 {
+		t.Fatal("expected teardown became an error notification", lines)
+	}
+	// Raw errno and unrelated log contexts do not acquire quiet classification.
+	l.Errorf("Failed to write packets to TUN device: %v", fmt.Errorf("tcp: write: %w", syscall.ENOTCONN))
+	l.Errorf("Failed to write packets to TUN device: %v", fmt.Errorf("tcp: close host write: %w", syscall.EINVAL))
+	l.Errorf("Other WireGuard error: %v", err)
+	if len(lines) != 3 {
+		t.Fatal("unexpected failures hidden", lines)
+	}
+}

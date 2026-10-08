@@ -379,9 +379,12 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		return
 	}
 	if f.finReceived {
-		if err := b.closeHostWriteLocked(f); err != nil {
+		if err := b.closeHostWriteLocked(f); err != nil && !errors.Is(err, ErrTCPTeardown) {
 			atomic.AddUint64(&b.parent.metrics.Errors, 1)
 			atomic.AddUint64(&b.metrics.Errors, 1)
+			if b.failureLog.Allow(time.Now()) {
+				logging.Errorf("TCP host write shutdown failed; aborted flow=%s: %v", f.key, err)
+			}
 		}
 	}
 }

@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -110,6 +111,11 @@ type tcpBridge struct {
 
 	// Handshake logging toggle (SYN-ACK MSS). Enable via TCP_LOG_HANDSHAKE=1|true|on|yes
 	logHandshake bool
+
+	// CloseWrite outcomes; these do not classify payload-write errors.
+	hostWriteDisconnected atomic.Uint64
+	hostWriteLocalClosed  atomic.Uint64
+	hostWriteCloseFailed  atomic.Uint64
 }
 
 type tcpState int
@@ -333,7 +339,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 	admitted := false
 	// Publish the operation's error before allowing lifecycle waits to complete.
 	defer func() {
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrTCPTeardown) {
 			atomic.AddUint64(&b.metrics.Errors, 1)
 		}
 		if admitted {
