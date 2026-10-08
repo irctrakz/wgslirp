@@ -11,8 +11,8 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
-// icmpBridge is a thin adapter that sends guest ICMP messages over the host
-// via the SocketInterface's raw ICMP socket.
+// icmpBridge sends guest ICMP messages through the raw socket, or echo requests
+// through a ping socket when raw ICMP is unavailable.
 type icmpBridge struct {
 	parent *SocketInterface
 }
@@ -21,22 +21,25 @@ func newICMPBridge(parent *SocketInterface) *icmpBridge { return &icmpBridge{par
 func (b *icmpBridge) Name() string                      { return "icmp" }
 func (b *icmpBridge) stop()                             {}
 
-// HandleOutbound parses the IPv4 packet and sends the ICMP body using the raw
-// socket. Replies are handled by SocketInterface.listenLoop.
+// HandleOutbound validates the IPv4 packet before dispatching to the selected
+// ICMP transport. Each transport's reader handles replies and packet ownership.
 func (b *icmpBridge) HandleOutbound(pkt []byte) error {
 	pkt, ihl, err := parseTransport(pkt, 1)
 	if err != nil {
 		return err
 	}
-	// If no raw ICMP socket is available (e.g., in containers without CAP_NET_RAW),
-	// silently drop ICMP rather than failing the write path. This avoids noisy
-	// errors while keeping TCP/UDP traffic flowing.
-	if b.parent == nil || b.parent.conn == nil {
-		logging.Debugf("icmp: dropping packet (no raw socket available)")
+	if b.parent == nil {
 		return nil
 	}
 	dst := net.IPv4(pkt[16], pkt[17], pkt[18], pkt[19])
 	body := pkt[ihl:]
+	if b.parent.conn == nil {
+		if b.parent.dgram != nil {
+			return b.parent.dgram.send(b.parent, pkt[12:16], dst, body)
+		}
+		logging.Debugf("icmp: dropping packet (no ICMP socket available)")
+		return nil
+	}
 
 	packet, err := b.parent.marshalICMPPacket(body)
 	if err != nil {

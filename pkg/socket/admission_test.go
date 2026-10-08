@@ -14,7 +14,7 @@ import (
 func assertAdmission(t *testing.T, s *SocketInterface, want map[string]uint64) {
 	t.Helper()
 	got := s.DetailedMetrics().Admission
-	if len(got) != 8 {
+	if len(got) != 9 {
 		t.Fatalf("unstable admission keys: %v", got)
 	}
 	for key, value := range got {

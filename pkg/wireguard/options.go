@@ -11,10 +11,12 @@ type DeviceOptions struct {
 	WGDebug             bool
 	OverlayRouting      bool
 	OverlayExcludeCIDRs []string
-	DisableIPv6         bool
+	// DisableIPv6 explicitly opts into legacy best-effort namespace sysctl writes.
+	// TCP/UDP forwarding does not require them. The default leaves sysctls alone.
+	DisableIPv6 bool
 }
 
-func DefaultDeviceOptions() DeviceOptions { return DeviceOptions{DisableIPv6: true} }
+func DefaultDeviceOptions() DeviceOptions { return DeviceOptions{} }
 
 func (c DeviceConfig) deviceOptions() DeviceOptions {
 	if c.Options == nil {
@@ -40,7 +42,7 @@ func DeviceOptionsFromEnv(lookup func(string) (string, bool)) (DeviceOptions, er
 	c.Debug = r.Bool("DEBUG", false)
 	c.WGDebug = r.Bool("WG_DEBUG", false)
 	c.OverlayRouting = r.Bool("WG_OVERLAY_ROUTING", false)
-	c.DisableIPv6 = r.Bool("WG_DISABLE_IPV6", true)
+	c.DisableIPv6 = r.Bool("WG_DISABLE_IPV6", c.DisableIPv6)
 	c.OverlayExcludeCIDRs = splitCSV(r.Text("WG_OVERLAY_EXCLUDE_CIDRS", ""))
 	if r.Err != nil {
 		return c, r.Err

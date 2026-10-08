@@ -38,7 +38,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 		}
 		return fmt.Errorf("tcp: %w", ErrFlowLimit)
 	}
-	// One reservation spans fast dialing and asynchronous fallback.
+	// One reservation and one dial span the fast wait and asynchronous handoff.
 	if !b.dialSlots.acquire(1) {
 		b.parent.admission.pendingDials.Add(1)
 		if b.parent.processor != nil {
@@ -51,43 +51,52 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	handedOff := false
 	defer func() {
 		if !handedOff {
-			releaseDial()
+			cancelDial()
 		}
 	}()
-	// Fast pre-dial to detect immediate refusal before emitting SYN-ACK; fallback to async otherwise
-	var preConn *net.TCPConn
-	{
-		raddr := &net.TCPAddr{IP: net.IP(dstIP[:]), Port: int(dstPort)}
-		fastT := time.Duration(b.tuning.FastDialMs) * time.Millisecond
-		if fastT <= 0 {
-			fastT = time.Millisecond
-		}
-		if c, err := b.dial(dialCtx, raddr.String(), fastT); err == nil {
-			preConn = c
-			b.configureHostSocket(c)
-			releaseDial()
-		} else {
-			if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
-				// Hard failure: signal guest per policy and abort without SYN-ACK
-				if b.parent != nil && b.parent.processor != nil {
-					switch b.errorSignal {
-					case "icmp":
-						if icmp := b.buildICMPUnreachable(dstIP, srcIP, 1, pkt); icmp != nil {
-							_ = b.sendToGuest(nil, icmp)
-						}
-					case "rst":
-						rst := b.buildIPv4TCP(dstIP, srcIP, dstPort, srcPort, 0, seq+1, 0x04|0x10, nil)
-						if rst != nil {
-							_ = b.sendToGuest(nil, rst)
-						}
-					case "none":
-					}
-				}
-				atomic.AddUint64(&b.parent.metrics.Errors, 1)
-				atomic.AddUint64(&b.metrics.Errors, 1)
-				return nil
+	// The worker owns an undelivered result and the reservation. An unbuffered
+	// send transfers socket ownership to exactly one receiver; cancellation
+	// closes any socket that never transfers. Shutdown joins this worker.
+	result := make(chan tcpDialResult)
+	address := (&net.TCPAddr{IP: net.IP(dstIP[:]), Port: int(dstPort)}).String()
+	fastT := time.Duration(b.tuning.FastDialMs) * time.Millisecond
+	if fastT <= 0 {
+		fastT = time.Millisecond
+	}
+	dialTimeout := max(fastT, 5*time.Second)
+	if !b.launch(func() {
+		defer releaseDial()
+		conn, err := b.dial(dialCtx, address, dialTimeout)
+		select {
+		case result <- tcpDialResult{conn, err}:
+		case <-dialCtx.Done():
+			if conn != nil {
+				conn.Close()
 			}
 		}
+	}) {
+		releaseDial()
+		return fmt.Errorf("TCP bridge stopped")
+	}
+	// FastDialMs bounds how long SYN processing waits, not the dial's lifetime.
+	// Expiry hands the same result channel to completion; it never redials.
+	var preConn *net.TCPConn
+	timer := time.NewTimer(fastT)
+	defer timer.Stop()
+	select {
+	case outcome := <-result:
+		releaseDial()
+		if outcome.err != nil {
+			b.signalDialFailure(srcIP, dstIP, srcPort, dstPort, seq, pkt)
+			atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			atomic.AddUint64(&b.metrics.Errors, 1)
+			return nil
+		}
+		preConn = outcome.conn
+		b.configureHostSocket(preConn)
+	case <-timer.C:
+	case <-dialCtx.Done():
+		return dialCtx.Err()
 	}
 	serverISN := rand.Uint32()
 	candidate := &tcpFlow{
@@ -113,28 +122,8 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 		rto:        time.Second,
 		pendCap:    b.defaultPendCap,
 	}
-	// Default MSS from effective MTU (respects runtime override)
-	defMSS := 1460
-	if b.parent != nil {
-		mtu := b.parent.EffectiveMTU()
-		if mtu <= 0 {
-			mtu = b.parent.config.MTU
-		}
-		v := mtu - 40
-		if v < 536 {
-			v = 536
-		}
-		if v > 1460 {
-			v = 1460
-		}
-		defMSS = v
-	}
-	// Apply MSS clamp (if configured) and MTU-derived cap
-	eff := defMSS
-	if int(b.mssClamp.Load()) > 0 && int(b.mssClamp.Load()) < eff {
-		eff = int(b.mssClamp.Load())
-	}
-	candidate.clientMSS = uint16(eff)
+	// Bound the peer MSS by our current egress policy.
+	eff, _ := b.synACKMSS()
 	candidate.mss = eff
 	// Parse client SYN options for MSS, Window Scale, and SACK
 	if dataOff > 20 {
@@ -166,7 +155,6 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 					if m > eff {
 						m = eff
 					}
-					candidate.clientMSS = uint16(m)
 					candidate.mss = m
 				} else if kind == 3 && l == 3 { // Window scale
 					candidate.wsIn = opts[i+2]
@@ -180,7 +168,6 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	candidate.touch()
 	candidate.lastAckTime = time.Now()
 	if b.tuning.CongestionControl != "off" {
-		candidate.ccEnabled = true
 		candidate.cc = newNewReno(candidate.mss, b.tuning.InitialCwndMSS)
 	}
 	// Preserve state-before-registry ordering through candidate publication.
@@ -205,7 +192,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	} else {
 		flow = candidate
 		defer flow.stateMu.Unlock()
-		// Kick off async host dial; on success, attach conn, emit SYN-ACK (if not already), start reader, and flush pending
+		// Async success attaches the host socket, starts its reader and flushes pending data.
 		if flow.connecting {
 			f := flow
 			quoteLen := ihl + 8
@@ -217,148 +204,63 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 			copy(quotedPacket, pkt[:quoteLen])
 			handedOff = true
 			if !b.launch(func() {
-				defer releaseDial()
 				defer b.buffers.release(quoteLen)
 				atomic.AddUint64(&b.dialStart, 1)
 				atomic.AddInt64(&b.dialInflight, 1)
-				raddr := &net.TCPAddr{IP: net.IP(f.dstIP[:]), Port: int(f.dstPort)}
-				conn, err := b.dial(dialCtx, raddr.String(), 5*time.Second)
-				releaseDial()
-				if err != nil {
-					f.stateMu.Lock()
-					defer f.stateMu.Unlock()
-					if f.closed {
-						atomic.AddInt64(&b.dialInflight, -1)
-						return
-					}
-					// Signal guest per policy
-					if b.parent != nil && b.parent.processor != nil {
-						switch b.errorSignal {
-						case "icmp":
-							if icmp := b.buildICMPUnreachable(f.dstIP, f.srcIP, 1, quotedPacket); icmp != nil {
-								_ = b.sendToGuest(nil, icmp)
-							}
-						case "rst":
-							rst := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, 0, f.clientISN+1, 0x04|0x10, nil)
-							if rst != nil {
-								_ = b.sendToGuest(nil, rst)
-							}
-						case "none":
-						}
-					}
-					atomic.AddUint64(&b.dialFail, 1)
-					atomic.AddUint64(&b.parent.metrics.Errors, 1)
-					atomic.AddUint64(&b.metrics.Errors, 1)
+				var outcome tcpDialResult
+				select {
+				case outcome = <-result:
+				case <-dialCtx.Done():
 					atomic.AddInt64(&b.dialInflight, -1)
-					// Remove the flow on dial failure
-					b.removeFlowLocked(f)
 					return
 				}
-				b.configureHostSocket(conn)
+				releaseDial()
+				conn, err := outcome.conn, outcome.err
+				if err == nil {
+					b.configureHostSocket(conn)
+				}
 				f.stateMu.Lock()
 				defer f.stateMu.Unlock()
 				if f.closed {
-					conn.Close()
+					if err == nil {
+						conn.Close()
+					}
 					atomic.AddInt64(&b.dialInflight, -1)
 					return
 				}
-				f.conn = conn
-				f.connecting = false
-				f.lastAckTime = time.Now()
-				atomic.AddUint64(&b.dialOk, 1)
-				atomic.AddInt64(&b.dialInflight, -1)
-				// Send SYN-ACK now that dial succeeded (with MSS/WS/SACK options) unless already sent
-				{
-					mss := uint16(1460)
-					effMTU := 1500
-					if b.parent != nil {
-						effMTU = b.parent.EffectiveMTU()
-						if effMTU <= 0 {
-							effMTU = b.parent.config.MTU
-						}
-						val := effMTU - 40
-						if val < 536 {
-							val = 536
-						}
-						if val > 1460 {
-							val = 1460
-						}
-						if int(b.mssClamp.Load()) > 0 && val > int(b.mssClamp.Load()) {
-							val = int(b.mssClamp.Load())
-						}
-						mss = uint16(val)
-					} else if int(b.mssClamp.Load()) > 0 && int(mss) > int(b.mssClamp.Load()) {
-						mss = uint16(int(b.mssClamp.Load()))
-					}
-					synOpts := make([]byte, 0, 8)
-					synOpts = append(synOpts, 2, 4, byte(mss>>8), byte(mss))
-					wsOut := uint8(b.tuning.WindowScale)
-					f.wsOut = wsOut
-					synOpts = append(synOpts, 3, 3, byte(wsOut))
-					if f.sackPermitted || b.tuning.EnableSACK {
-						synOpts = append(synOpts, 4, 2)
-					}
-					if !f.synAckSent {
-						synAck := b.buildIPv4TCPOpts(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverISN, f.clientISN+1, fSYN|fACK, nil, synOpts)
-						if b.logHandshake {
-							logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
-								f.key, effMTU, int(b.mssClamp.Load()), int(f.clientMSS), int(mss))
-						}
-						if err := b.sendSYNACKLocked(f, synAck); err != nil {
-							return
-						}
-					}
+				if err != nil {
+					b.signalDialFailure(f.srcIP, f.dstIP, f.srcPort, f.dstPort, f.clientISN, quotedPacket)
+					atomic.AddUint64(&b.dialFail, 1)
+					atomic.AddUint64(&b.parent.metrics.Errors, 1)
+					atomic.AddUint64(&b.metrics.Errors, 1)
+				} else {
+					f.conn = conn
+					f.connecting = false
+					f.lastAckTime = time.Now()
+					atomic.AddUint64(&b.dialOk, 1)
 				}
+				// Completion accounting ends before teardown or pending host writes.
+				atomic.AddInt64(&b.dialInflight, -1)
+				if err != nil {
+					b.removeFlowLocked(f)
+					return
+				}
+
 				// Start reader now that conn exists
 				b.launch(func() { b.reader(f) })
 				// Flush any pre-connect pending data and contiguous reassembly
 				b.flushPending(f)
 			}) {
-				releaseDial()
+				cancelDial()
 				b.buffers.release(quoteLen)
 				b.removeFlowLocked(f)
 				return fmt.Errorf("TCP bridge stopped")
 			}
 		}
-		// Emit SYN-ACK immediately; if dial later succeeds, the goroutine will avoid duplicate send.
-		if !flow.synAckSent {
-			mss := uint16(1460)
-			effMTU := 1500
-			if b.parent != nil {
-				effMTU = b.parent.EffectiveMTU()
-				if effMTU <= 0 {
-					effMTU = b.parent.config.MTU
-				}
-				val := effMTU - 40
-				if val < 536 {
-					val = 536
-				}
-				if val > 1460 {
-					val = 1460
-				}
-				if int(b.mssClamp.Load()) > 0 && val > int(b.mssClamp.Load()) {
-					val = int(b.mssClamp.Load())
-				}
-				mss = uint16(val)
-			} else if int(b.mssClamp.Load()) > 0 && int(mss) > int(b.mssClamp.Load()) {
-				mss = uint16(int(b.mssClamp.Load()))
-			}
-			synOpts := make([]byte, 0, 8)
-			synOpts = append(synOpts, 2, 4, byte(mss>>8), byte(mss))
-			wsOut := uint8(b.tuning.WindowScale)
-			flow.wsOut = wsOut
-			synOpts = append(synOpts, 3, 3, byte(wsOut))
-			if flow.sackPermitted || b.tuning.EnableSACK {
-				synOpts = append(synOpts, 4, 2)
-			}
-			synAck := b.buildIPv4TCPOpts(dstIP, srcIP, dstPort, srcPort, serverISN, seq+1, fSYN|fACK, nil, synOpts)
-			if b.logHandshake {
-				logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
-					key, effMTU, int(b.mssClamp.Load()), int(flow.clientMSS), int(mss))
-			}
-			if err := b.sendSYNACKLocked(flow, synAck); err != nil {
-				return err
-			}
+		// Publication keeps stateMu until this send completes. Async completion
+		// cannot attach/start a reader before it; refusal closes the candidate.
+		if err := b.sendInitialSYNACKLocked(flow); err != nil {
+			return err
 		}
 		// If already connected (fast pre-dial), start reader immediately
 		if flow.conn != nil {
@@ -368,6 +270,60 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	}
 
 	return b.handleTCPFlow(flow, segment)
+}
+
+type tcpDialResult struct {
+	conn *net.TCPConn
+	err  error
+}
+
+func (b *tcpBridge) signalDialFailure(src, dst [4]byte, sport, dport uint16, seq uint32, quote []byte) {
+	if b.parent.processor == nil {
+		return
+	}
+	switch b.errorSignal {
+	case "icmp":
+		_ = b.sendToGuest(nil, b.buildICMPUnreachable(dst, src, 1, quote))
+	case "rst":
+		_ = b.sendToGuest(nil, b.buildIPv4TCP(dst, src, dport, sport, 0, seq+1, fRST|fACK, nil))
+	}
+}
+
+// synACKMSS returns our advertised MSS and the MTU used to derive it. The
+// client's MSS may lower data segment size, but does not change this offer.
+func (b *tcpBridge) synACKMSS() (int, int) {
+	mtu := b.parent.EffectiveMTU()
+	if mtu <= 0 {
+		mtu = b.parent.config.MTU
+	}
+	mss := mtu - 40
+	if mss < 536 {
+		mss = 536
+	}
+	if mss > 1460 {
+		mss = 1460
+	}
+	if clamp := int(b.mssClamp.Load()); clamp > 0 && mss > clamp {
+		mss = clamp
+	}
+	return mss, mtu
+}
+
+// sendInitialSYNACKLocked requires stateMu on the newly published candidate.
+// Establishment is its sole caller; async dial completion never emits SYN-ACK.
+func (b *tcpBridge) sendInitialSYNACKLocked(f *tcpFlow) error {
+	mss, mtu := b.synACKMSS()
+	f.wsOut = uint8(b.tuning.WindowScale)
+	opts := []byte{2, 4, byte(mss >> 8), byte(mss), 3, 3, f.wsOut}
+	if f.sackPermitted || b.tuning.EnableSACK {
+		opts = append(opts, 4, 2)
+	}
+	if b.logHandshake {
+		logging.Infof("TCP SYN-ACK MSS: flow=%s effMTU=%d clamp=%d clientMSS=%d advMSS=%d",
+			f.key, mtu, int(b.mssClamp.Load()), f.mss, mss)
+	}
+	packet := b.buildIPv4TCPOpts(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverISN, f.clientISN+1, fSYN|fACK, nil, opts)
+	return b.sendSYNACKLocked(f, packet)
 }
 
 // Caller holds f.stateMu throughout writes and reservation release.
@@ -388,24 +344,26 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		f.pendingBytes = 0
 	}
 	f.pendMu.Unlock()
+	var writeErr error
 	for _, p := range batches {
 		if f.conn == nil {
 			break
 		}
-		if n, err := writeTCP(f.conn, p); err == nil {
-			atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
-			atomic.AddUint64(&b.metrics.PacketsSent, 1)
-			f.toSrvBytes += uint64(n)
-			f.toSrvPkts += 1
-			atomic.AddUint64(&b.pendFlush, 1)
-		} else {
-			atomic.AddUint64(&b.parent.metrics.Errors, 1)
-			atomic.AddUint64(&b.metrics.Errors, 1)
-			b.abortBufferedFlowLocked(f)
-			return
+		n, err := writeTCP(f.conn, p)
+		if err != nil {
+			writeErr = err
+			break
 		}
+		atomic.AddUint64(&b.metrics.BytesSent, uint64(n))
+		atomic.AddUint64(&b.metrics.PacketsSent, 1)
+		f.toSrvBytes += uint64(n)
+		f.toSrvPkts += 1
+		atomic.AddUint64(&b.pendFlush, 1)
 	}
-	if err := b.flushReassembly(f); err != nil {
+	if writeErr == nil {
+		writeErr = b.flushReassembly(f)
+	}
+	if writeErr != nil {
 		atomic.AddUint64(&b.parent.metrics.Errors, 1)
 		atomic.AddUint64(&b.metrics.Errors, 1)
 		b.abortBufferedFlowLocked(f)

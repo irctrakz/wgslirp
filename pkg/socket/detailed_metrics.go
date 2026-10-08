@@ -15,7 +15,7 @@ type BridgeMetrics struct {
 
 // SocketDetailedMetrics exposes total and per-bridge metrics for the socket interface.
 type SocketDetailedMetrics struct {
-	// Admission contains cumulative, fixed-reason counters; see OBSERVABILITY.md.
+	// Admission contains cumulative, fixed-reason counters; see docs/OBSERVABILITY.md.
 	Admission map[string]uint64
 	Total     core.SocketMetrics
 	UDP       BridgeMetrics

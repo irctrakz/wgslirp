@@ -2,7 +2,6 @@ package socket
 
 import (
 	"fmt"
-	"github.com/irctrakz/wgslirp/pkg/logging"
 	"sync/atomic"
 	"time"
 )
@@ -80,66 +79,7 @@ func (b *tcpBridge) flowSnapshot() []*tcpFlow {
 
 // start owns periodic work; construction performs no I/O or goroutine launch.
 func (b *tcpBridge) start() {
-	b.startOnce.Do(func() { b.launch(b.reaper); b.launch(b.monitorConnectionHealth) })
-}
-
-// monitorConnectionHealth periodically checks for stalled connections and resets them.
-// This helps prevent indefinite stalls that can exhaust resources.
-func (b *tcpBridge) monitorConnectionHealth() {
-	// Check every 15 seconds for stalled connections
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	// Configure stall detection parameters
-	stallThreshold := 30 * time.Second // Consider connection stalled after 30s without ACK progress
-	minInFlight := 1024                // Only check connections with at least 1KB in flight
-
-	for {
-		select {
-		case <-b.stopCh:
-			return
-		case <-ticker.C:
-			now := time.Now()
-			stalledFlows := make([]*tcpFlow, 0)
-
-			// Identify stalled flows
-			for _, f := range b.flowSnapshot() {
-				f.stateMu.Lock()
-				k := f.key
-				// Only check established connections with in-flight data
-				if f.state == tcpEstablished {
-					inFlight := int(f.serverNxt - f.sndUna)
-					idleTime := now.Sub(f.lastAckTime)
-
-					// Connection is stalled if:
-					// 1. It has meaningful in-flight data
-					// 2. No ACK progress for a significant period
-					if inFlight >= minInFlight && idleTime >= stallThreshold {
-						stalledFlows = append(stalledFlows, f)
-						logging.Warnf("Stalled connection detected: flow=%s idle=%v inFlight=%d bytes",
-							k, idleTime.Round(time.Second), inFlight)
-					}
-				}
-				f.stateMu.Unlock()
-			}
-
-			// Reset stalled flows
-			reset := 0
-			for _, f := range stalledFlows {
-				// Recheck progress after taking a snapshot: an ACK may have arrived.
-				if b.removeFlowIf(f, func(f *tcpFlow) bool {
-					return f.state == tcpEstablished && int(f.serverNxt-f.sndUna) >= minInFlight && now.Sub(f.lastAckTime) >= stallThreshold
-				}) {
-					reset++
-				}
-			}
-
-			// Log health check summary if any issues found
-			if reset > 0 {
-				logging.Infof("Connection health check: reset %d stalled flows", reset)
-			}
-		}
-	}
+	b.startOnce.Do(func() { b.launch(b.reaper) })
 }
 
 func (b *tcpBridge) requestStop() {
@@ -235,8 +175,9 @@ func (b *tcpBridge) reaper() {
 		case <-b.stopCh:
 			return
 		case <-t.C:
-			cutoff := time.Now().Add(-b.lifetime)
-			b.expireFlows(cutoff)
+			now := time.Now()
+			b.expireFlows(now.Add(-b.lifetime))
+			b.expireACKIdleFlows(now)
 		}
 	}
 }

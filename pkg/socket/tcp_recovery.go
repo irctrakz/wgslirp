@@ -113,7 +113,6 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 		}
 		inFlight += len(s.data)
 	}
-	f.pipeBytes = inFlight
 	cw := b.cwndBytes(f)
 	budget := cw - inFlight
 	if budget < 1 {
@@ -141,7 +140,6 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 	// Mark retransmit
 	f.txQueue[idx].sentAt = time.Now()
 	f.txQueue[idx].retries++
-	f.txQueue[idx].rtx = true
 	f.txMu.Unlock()
 
 	tosOut, ttlOut := f.tos, f.ttl
@@ -152,14 +150,14 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 		seg.seq, f.clientNxt, 0x18, seg.data, tosOut, ttlOut)
 	if pkt != nil {
 		_ = b.sendToGuest(f, pkt)
-		if f.ccEnabled && f.cc != nil {
+		if f.cc != nil {
 			f.cc.OnLoss(false)
 		}
 	}
 }
 
 func (b *tcpBridge) cwndBytes(f *tcpFlow) int {
-	if f.ccEnabled && f.cc != nil {
+	if f.cc != nil {
 		cw := f.cc.Cwnd()
 		if cw < f.mss {
 			cw = f.mss
@@ -199,15 +197,22 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 		var packet core.Packet
 		for i := range f.txQueue {
 			seg := &f.txQueue[i]
-			if !seqAfter(seg.seq+uint32(len(seg.data)), f.sndUna) || isSACKed(f, seg.seq, seg.seq+uint32(len(seg.data))) {
+			if !seqAfter(seg.seq+uint32(len(seg.data)), f.sndUna) {
 				continue
 			}
 			if !seg.sentAt.IsZero() && now.Sub(seg.sentAt) < f.rto {
-				continue
+				break
 			}
+			// SACK is advisory: the receiver can discard those bytes. On RTO,
+			// invalidate the scoreboard and retry the oldest cumulatively
+			// unacknowledged segment, even if it was selectively acknowledged.
+			f.sackMu.Lock()
+			f.sackList = nil
+			f.sackMu.Unlock()
+			f.sackRecovery = false
+			f.dupAckCnt = 0
 			seg.sentAt = now
 			seg.retries++
-			seg.rtx = true
 			f.rto = minDur(2*f.rto, 2*time.Second)
 			tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
 			packet = b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seg.seq, f.clientNxt, 0x18, seg.data, tos, ttl)
@@ -216,7 +221,7 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 		f.txMu.Unlock()
 		if packet != nil {
 			_ = b.sendToGuest(f, packet)
-			if f.ccEnabled && f.cc != nil {
+			if f.cc != nil {
 				f.cc.OnLoss(true)
 			}
 			atomic.AddUint64(&b.rtoCount, 1)

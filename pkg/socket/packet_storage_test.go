@@ -148,9 +148,9 @@ func TestSYNACKRefusalRemovesCandidate(t *testing.T) {
 		f.stateMu.Lock()
 		packet := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, 0, 1, 0x12, nil)
 		err := b.sendSYNACKLocked(f, packet)
-		closed, sent := f.closed, f.synAckSent
+		closed := f.closed
 		f.stateMu.Unlock()
-		if err == nil || !closed || sent {
+		if err == nil || !closed {
 			t.Fatal("refused SYN-ACK left candidate alive")
 		}
 		if limit == 1 && !errors.Is(err, ErrBufferLimit) {
