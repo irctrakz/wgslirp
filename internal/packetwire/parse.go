@@ -16,8 +16,19 @@ var (
 // ParseIPv4 bounds all subsequent reads by the declared IP datagram length.
 // The result borrows input storage and parsing never mutates it.
 // Trailing link padding is ignored. Incoming fragments require reassembly,
-// which these bridges do not implement; never treat them as whole datagrams.
+// so this strict parser never treats them as whole datagrams.
 func ParseIPv4(packet []byte) (datagram []byte, headerLen int, err error) {
+	return parseIPv4(packet, false)
+}
+
+// ParseIPv4Header validates lengths, checksum and supported header semantics
+// without requiring a complete datagram. Its result borrows input storage;
+// callers must reassemble fragments before invoking ParseTransport.
+func ParseIPv4Header(packet []byte) ([]byte, int, error) {
+	return parseIPv4(packet, true)
+}
+
+func parseIPv4(packet []byte, allowFragments bool) (datagram []byte, headerLen int, err error) {
 	if len(packet) < 20 || packet[0]>>4 != 4 {
 		return nil, 0, fmt.Errorf("%w: IPv4 header", ErrMalformedPacket)
 	}
@@ -30,7 +41,7 @@ func ParseIPv4(packet []byte) (datagram []byte, headerLen int, err error) {
 	if flags&0x8000 != 0 {
 		return nil, 0, fmt.Errorf("%w: reserved IPv4 flag", ErrMalformedPacket)
 	}
-	if flags&0x3fff != 0 {
+	if !allowFragments && flags&0x3fff != 0 {
 		return nil, 0, ErrUnsupportedFragment
 	}
 	if Checksum(packet[:ihl]) != 0 {

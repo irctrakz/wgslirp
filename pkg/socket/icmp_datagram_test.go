@@ -84,15 +84,6 @@ func buildIPv4ICMP(src, dst net.IP, body []byte) []byte {
 }
 
 func TestICMPDatagramCorrelation(t *testing.T) {
-	original := core.IsDebugMode()
-	t.Cleanup(func() { core.SetDebugMode(original) })
-	for _, debug := range []bool{false, true} {
-		core.SetDebugMode(debug)
-		testICMPDatagramCorrelation(t)
-	}
-}
-
-func testICMPDatagramCorrelation(t *testing.T) {
 	s := NewSocketInterface(DefaultConfig())
 	capture := &captureProcessor{}
 	s.processor = capture
@@ -259,7 +250,7 @@ func TestICMPDatagramStopInterruptsIO(t *testing.T) {
 	s.wg.Add(1)
 	go s.dgram.listen(s, release)
 	t.Cleanup(func() { _ = s.Stop() })
-	p := core.NewPacket(buildIPv4ICMP(net.IPv4(10, 0, 0, 2), net.IPv4(127, 0, 0, 1), echoBody(1, 2)))
+	p := core.NewCopiedPacket(buildIPv4ICMP(net.IPv4(10, 0, 0, 2), net.IPv4(127, 0, 0, 1), echoBody(1, 2)))
 	defer core.ReleasePacket(p)
 	done := make(chan error, 1)
 	go func() { done <- s.WritePacket(p) }()

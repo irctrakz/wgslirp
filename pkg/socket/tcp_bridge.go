@@ -177,15 +177,17 @@ type tcpFlow struct {
 		seq  uint32
 		data []byte
 	}
-	futureBytes int
+	futureBytes  int
+	recentFuture uint32 // stateMu: most recently retained out-of-order segment
 
 	// Peer receive window information (from client)
 	// Immutable after publication: peer MSS bounded by the initial MTU/clamp.
 	// Current MTU/clamp can further restrict segmentation without changing it.
-	mss    int
-	wsIn   uint8  // peer's window scale (client SYN option)
-	wsOut  uint8  // our advertised window scale (SYN-ACK)
-	advWnd uint32 // latest advertised peer window in bytes
+	mss                int
+	wsIn               uint8  // peer's window scale (client SYN option)
+	wsOut              uint8  // our advertised window scale (SYN-ACK)
+	windowScaleOffered bool   // immutable: peer offered window scaling, including zero
+	advWnd             uint32 // latest advertised peer window in bytes
 
 	// delayed ack scheduling
 	ackScheduled bool

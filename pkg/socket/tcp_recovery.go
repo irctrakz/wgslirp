@@ -146,8 +146,7 @@ func (b *tcpBridge) retransmitNextHole(f *tcpFlow) {
 	if b.parent != nil {
 		tosOut, ttlOut = b.parent.effTosTTL(f.tos, f.ttl)
 	}
-	pkt := b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort,
-		seg.seq, f.clientNxt, 0x18, seg.data, tosOut, ttlOut)
+	pkt := b.buildTCPFlowLocked(f, seg.seq, 0x18, seg.data, nil, tosOut, ttlOut)
 	if pkt != nil {
 		_ = b.sendToGuest(f, pkt)
 		if f.cc != nil {
@@ -215,7 +214,7 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 			seg.retries++
 			f.rto = minDur(2*f.rto, 2*time.Second)
 			tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
-			packet = b.buildIPv4TCPWithIP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, seg.seq, f.clientNxt, 0x18, seg.data, tos, ttl)
+			packet = b.buildTCPFlowLocked(f, seg.seq, 0x18, seg.data, nil, tos, ttl)
 			break
 		}
 		f.txMu.Unlock()

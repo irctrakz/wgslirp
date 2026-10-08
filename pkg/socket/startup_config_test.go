@@ -44,7 +44,6 @@ func TestPoolingPolicyIsExplicitAndFrozen(t *testing.T) {
 	original := poolPolicy.Swap(nil)
 	defer poolPolicy.Store(original)
 	t.Setenv("POOLING", "yes")
-	t.Setenv("POOL_WRAP", "on")
 	cfg, err := PoolConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		t.Fatal(err)
@@ -54,11 +53,10 @@ func TestPoolingPolicyIsExplicitAndFrozen(t *testing.T) {
 	}
 	cfg.Enabled = false
 	t.Setenv("POOLING", "false")
-	t.Setenv("POOL_WRAP", "false")
-	if !poolingEnabled() || !poolWrapEnabled() {
+	if !poolingEnabled() {
 		t.Fatal("pooling changed after configuration")
 	}
-	if err := ConfigurePooling(PoolConfig{true, true}); err != nil {
+	if err := ConfigurePooling(PoolConfig{Enabled: true}); err != nil {
 		t.Fatal("same policy should be idempotent")
 	}
 	if err := ConfigurePooling(PoolConfig{}); err == nil {
@@ -66,17 +64,25 @@ func TestPoolingPolicyIsExplicitAndFrozen(t *testing.T) {
 	}
 	poolPolicy.Store(nil)
 	NewSocketInterface(DefaultConfig())
-	if err := ConfigurePooling(PoolConfig{true, false}); err == nil {
+	if err := ConfigurePooling(PoolConfig{}); err == nil {
 		t.Fatal("allowed policy change after construction")
 	}
-	if poolingEnabled() {
-		t.Fatal("default must be off")
+	if !poolingEnabled() {
+		t.Fatal("default pooling must be on")
 	}
-	for _, key := range []string{"POOLING", "POOL_WRAP"} {
-		t.Setenv(key, "maybe")
-		if _, err := PoolConfigFromEnv(os.LookupEnv); err == nil {
-			t.Fatal("accepted invalid pooling option")
+	t.Setenv("POOLING", "maybe")
+	if _, err := PoolConfigFromEnv(os.LookupEnv); err == nil {
+		t.Fatal("accepted invalid pooling option")
+	}
+}
+
+func TestPoolingDefaultsAndOptOut(t *testing.T) {
+	for _, value := range []string{"", "false", "true"} {
+		cfg, err := PoolConfigFromEnv(func(key string) (string, bool) {
+			return value, key == "POOLING" && value != ""
+		})
+		if err != nil || cfg.Enabled != (value != "false") {
+			t.Fatalf("pooling value %q: config=%+v error=%v", value, cfg, err)
 		}
-		t.Setenv(key, "false")
 	}
 }

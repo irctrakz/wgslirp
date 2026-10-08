@@ -22,6 +22,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.23.12'
+          cache-dependency-path: go.sum
 
       - name: Install dependencies
         run: |
@@ -61,3 +62,6 @@ jobs:
 
       - name: Fuzz shared encoding
         run: go test -run '^$' -fuzz '^FuzzEncoding$' -fuzztime 10s -timeout 120s -parallel 2 ./internal/packetwire
+
+      - name: Fuzz IPv4 reassembly
+        run: go test -run '^$' -fuzz '^FuzzIPv4FragmentReassembly$' -fuzztime 10s -timeout 120s -parallel 2 ./pkg/socket

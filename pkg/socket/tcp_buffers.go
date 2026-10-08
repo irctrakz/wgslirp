@@ -8,7 +8,7 @@ import (
 // bytes are silently discarded and unrelated flows keep their reservations.
 func (b *tcpBridge) abortBufferedFlowLocked(f *tcpFlow) {
 	b.bufferDrops.Add(1)
-	_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
+	_ = b.sendToGuest(f, b.buildTCPFlowLocked(f, f.serverNxt, 0x14, nil, nil, 0, 64))
 	b.removeFlowLocked(f)
 }
 
@@ -35,6 +35,7 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 		s := f.ooo[right]
 		sStart, sEnd := uint64(s.seq), uint64(s.seq)+uint64(len(s.data))
 		if sStart <= uint64(seq) && sEnd >= uint64(seq)+uint64(len(payload)) {
+			f.recentFuture = seq
 			return true
 		}
 		if sStart < start {
@@ -79,6 +80,7 @@ func (b *tcpBridge) queueFuture(f *tcpFlow, seq uint32, payload []byte) bool {
 		data []byte
 	}{uint32(start), merged}
 	f.futureBytes += size - oldBytes
+	f.recentFuture = seq
 	b.buffers.release(oldBytes + (right-left)*bufferEntryAllowance)
 	return true
 }

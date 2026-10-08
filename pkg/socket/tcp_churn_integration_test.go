@@ -22,7 +22,7 @@ func TestTCPDefaultCapacityChurnAndTimeWaitRecovery(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Protocol = "ip4:tcp"
 	cfg.TCPAckDelayMs = 0
-	if cfg.MaxTCPFlows != 64 {
+	if cfg.MaxTCPFlows != 256 {
 		t.Fatal("update the documented default sizing fixture")
 	}
 	s := NewSocketInterface(cfg)
@@ -44,7 +44,7 @@ func TestTCPDefaultCapacityChurnAndTimeWaitRecovery(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Stop() })
 	for batch := 0; batch < 2; batch++ {
-		for _, g := range guests[batch*64 : (batch+1)*64] {
+		for _, g := range guests[batch*cfg.MaxTCPFlows : (batch+1)*cfg.MaxTCPFlows] {
 			func() {
 				if err := g.handshake(); err != nil {
 					t.Fatal(err)
@@ -99,7 +99,7 @@ func TestTCPDefaultCapacityChurnAndTimeWaitRecovery(t *testing.T) {
 			}()
 		}
 		flows := s.tcp.flowSnapshot()
-		if len(flows) != 64 {
+		if len(flows) != cfg.MaxTCPFlows {
 			t.Fatalf("retained slots=%d", len(flows))
 		}
 		for _, f := range flows {
@@ -131,5 +131,5 @@ func TestTCPDefaultCapacityChurnAndTimeWaitRecovery(t *testing.T) {
 	s.Stop()
 	processor.Stop()
 	assertBudget(t, s.buffers(), 0)
-	t.Log("128 short TCP connections completed; each 64-flow TIME-WAIT batch refused overflow and recovered at simulated expiry")
+	t.Logf("%d short TCP connections completed; each %d-flow TIME-WAIT batch refused overflow and recovered at simulated expiry", len(guests), cfg.MaxTCPFlows)
 }

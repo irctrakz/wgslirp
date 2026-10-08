@@ -13,6 +13,9 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 	cfg := base
 	transport := base.transportConfig()
 	cfg.Transport = &transport
+	if _, present := lookup("TCP_GATE_LOG"); present {
+		return cfg, fmt.Errorf("TCP_GATE_LOG was removed because it was inactive; remove this setting")
+	}
 	for _, setting := range []struct {
 		name   string
 		target *int
@@ -38,6 +41,7 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 		{"SOCKET_BUFFER_CAP_BYTES", &cfg.SocketBufferCapBytes},
 		{"TCP_PEND_CAP_BYTES", &cfg.TCPPendingCapBytes},
 		{"TCP_RETRANSMIT_CAP_BYTES", &cfg.TCPRetransmitCapBytes},
+		{"IPV4_FRAGMENT_BUFFER_CAP_BYTES", &cfg.IPv4FragmentBufferCapBytes},
 	} {
 		if value, present := lookup(setting.name); present {
 			number, err := strconv.Atoi(strings.TrimSpace(value))
@@ -53,6 +57,7 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 	}{
 		{"TCP_ACK_TRACE", &transport.AckTrace}, {"TCP_LOG_HANDSHAKE", &transport.LogHandshake},
 		{"TCP_ENABLE_SACK", &transport.EnableSACK}, {"COPY_TOS", &transport.CopyTOS},
+		{"IPV4_REASSEMBLY", &cfg.IPv4Reassembly}, {"ICMP_ECHO", &cfg.ICMPEcho},
 	} {
 		if value, present := lookup(setting.name); present {
 			switch strings.ToLower(strings.TrimSpace(value)) {
@@ -69,18 +74,12 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 		name   string
 		target *string
 	}{
-		{"TCP_ERROR_SIGNAL", &transport.ErrorSignal}, {"TCP_GATE_LOG", &transport.GateLog},
+		{"TCP_ERROR_SIGNAL", &transport.ErrorSignal},
 		{"TCP_CC", &transport.CongestionControl},
 	} {
 		if value, present := lookup(setting.name); present {
 			*setting.target = strings.ToLower(strings.TrimSpace(value))
 		}
-	}
-	switch transport.GateLog {
-	case "0", "false", "no":
-		transport.GateLog = "off"
-	case "1", "true", "yes":
-		transport.GateLog = "info"
 	}
 	switch transport.CongestionControl {
 	case "reno", "new-reno":

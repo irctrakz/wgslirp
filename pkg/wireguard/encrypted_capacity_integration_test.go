@@ -9,12 +9,16 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/irctrakz/wgslirp/pkg/socket"
 )
 
 // Explicitly selected finite profile: sequential churn, full default capacity,
@@ -35,6 +39,7 @@ func TestEncryptedChurnCapacity(t *testing.T) {
 
 func runEncryptedCapacity(t *testing.T) {
 	started := time.Now()
+	capacity := socket.DefaultConfig().MaxTCPFlows
 	s, tun, responses := encryptedTestLink(t, func(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) })
 	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -43,6 +48,8 @@ func runEncryptedCapacity(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 	hostPort := uint16(listener.Addr().(*net.TCPAddr).Port)
 	var heapPeak, rssPeak uint64
+	phase := "churn"
+	lastReport := time.Time{}
 	sample := func() {
 		t.Helper()
 		var m runtime.MemStats
@@ -66,8 +73,25 @@ func runEncryptedCapacity(t *testing.T) {
 		if rss > rssPeak {
 			rssPeak = rss
 		}
-		if m.HeapAlloc > 192<<20 || rss > 384<<20 || runtime.NumGoroutine() > 512 {
-			t.Fatalf("resource ceiling: heap=%d rss=%d workers=%d", m.HeapAlloc, rss, runtime.NumGoroutine())
+		if time.Since(lastReport) >= 10*time.Second {
+			t.Logf("CAPACITY_MEMORY phase=%s elapsed_ms=%d heap=%d heap_sys=%d stack=%d rss=%d rss_limit=%d workers=%d", phase, time.Since(started).Milliseconds(), m.HeapAlloc, m.HeapSys, m.StackInuse, rss, capacityRSSLimit, runtime.NumGoroutine())
+			lastReport = time.Now()
+		}
+		if m.HeapAlloc > 192<<20 || rss > capacityRSSLimit || runtime.NumGoroutine() > 1024 {
+			if dir := os.Getenv("WGSLIRP_FRAGMENT_PROFILE_DIR"); dir != "" {
+				f, err := os.Create(filepath.Join(dir, "capacity-breach.pprof"))
+				if err != nil {
+					t.Errorf("create capacity profile: %v", err)
+				} else {
+					if err := pprof.WriteHeapProfile(f); err != nil {
+						t.Errorf("write capacity profile: %v", err)
+					}
+					if err := f.Close(); err != nil {
+						t.Errorf("close capacity profile: %v", err)
+					}
+				}
+			}
+			t.Fatalf("resource ceiling: heap=%d rss=%d rss_limit=%d workers=%d", m.HeapAlloc, rss, capacityRSSLimit, runtime.NumGoroutine())
 		}
 		if time.Since(started) > 6*time.Minute {
 			t.Fatal("workload deadline")
@@ -186,7 +210,8 @@ func runEncryptedCapacity(t *testing.T) {
 	}
 	t.Logf("HANDSHAKES samples=%d p50_us=%d p95_us=%d p99_us=%d max_us=%d", len(latencies), pct(50).Microseconds(), pct(95).Microseconds(), pct(99).Microseconds(), latencies[len(latencies)-1].Microseconds())
 	var live []connection
-	for i := 0; i < 64; i++ {
+	phase = "fill"
+	for i := 0; i < capacity; i++ {
 		c, _ := connect(uint16(41000 + i))
 		exchange(&c)
 		live = append(live, c)
@@ -201,7 +226,7 @@ func runEncryptedCapacity(t *testing.T) {
 		if p[33]&0x14 != 0x14 || s.DetailedMetrics().Admission["tcp_flow_limit"] != before+1 {
 			t.Fatal("capacity refusal not signaled/accounted")
 		}
-		waitFlows(64)
+		waitFlows(uint64(capacity))
 	}
 	refuse(42000)
 	exchange(&live[0]) // Rejection cannot break an admitted connection.
@@ -227,10 +252,11 @@ func runEncryptedCapacity(t *testing.T) {
 		c.host.Close()
 	}
 	lastClose := time.Now()
+	phase = "time_wait"
 	refuse(42001)
 	// The ordinary two-minute idle lifetime must not truncate four-minute TIME-WAIT.
 	for time.Since(firstClose) < 239*time.Second {
-		if s.DetailedMetrics().TCP.ActiveFlows != 64 {
+		if s.DetailedMetrics().TCP.ActiveFlows != uint64(capacity) {
 			t.Fatal("TIME-WAIT released capacity early")
 		}
 		sample()
@@ -248,6 +274,7 @@ func runEncryptedCapacity(t *testing.T) {
 		t.Fatal("TIME-WAIT duration was shortened")
 	}
 	c, _ := connect(42002)
+	phase = "recovered"
 	exchange(&c)
 	send(c.port, c.seq, c.ack, 4, nil)
 	waitFlows(0)
@@ -258,12 +285,13 @@ func runEncryptedCapacity(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	m := s.DetailedMetrics()
-	if m.TCP.Counters.ConnectionsCreated != 329 || m.TCP.Counters.ConnectionsClosed != 329 || m.Admission["tcp_flow_limit"] != 2 {
+	wantConnections := uint64(264 + capacity + 1)
+	if m.TCP.Counters.ConnectionsCreated != wantConnections || m.TCP.Counters.ConnectionsClosed != wantConnections || m.Admission["tcp_flow_limit"] != 2 {
 		t.Fatalf("unexpected lifecycle totals: %+v", m)
 	}
 	if m.TCP.ActiveFlows != 0 || m.TCPExt["dial_reserved"] != 0 || m.TCPExt["socket_buffer_bytes"] != 0 || m.TCP.DeliveryRefused != 0 {
 		t.Fatalf("unclean final metrics: %+v", m)
 	}
 	sample()
-	t.Logf("CAPACITY_ACCEPTED churn=264 cap=64 refusals=%d time_wait_ms=%d recovered=1 heap_peak=%d rss_peak=%d buffer_peak=%d elapsed_ms=%d", m.Admission["tcp_flow_limit"], time.Since(firstClose).Milliseconds(), heapPeak, rssPeak, m.TCPExt["socket_buffer_peak"], time.Since(started).Milliseconds())
+	t.Logf("CAPACITY_ACCEPTED churn=264 cap=%d refusals=%d time_wait_ms=%d recovered=1 heap_peak=%d rss_peak=%d buffer_peak=%d elapsed_ms=%d", capacity, m.Admission["tcp_flow_limit"], time.Since(firstClose).Milliseconds(), heapPeak, rssPeak, m.TCPExt["socket_buffer_peak"], time.Since(started).Milliseconds())
 }

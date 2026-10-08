@@ -19,12 +19,16 @@ func buildIPv4TCPWithIP(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack 
 
 // buildIPv4TCPOptsWith allows specifying both options and IP TOS/TTL.
 func buildIPv4TCPOptsWith(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack uint32, flags byte, payload, options []byte, tos, ttl byte) []byte {
+	return buildIPv4TCPWindow(srcIP, dstIP, srcPort, dstPort, seq, ack, flags, payload, options, tos, ttl, 0xffff)
+}
+
+func buildIPv4TCPWindow(srcIP, dstIP [4]byte, srcPort, dstPort uint16, seq, ack uint32, flags byte, payload, options []byte, tos, ttl byte, window uint16) []byte {
 	if len(options) > 40 || len(payload) > 65535-40-((len(options)+3)&^3) {
 		return nil
 	}
 	pkt := bufMaybePool(40 + ((len(options) + 3) &^ 3) + len(payload))
 	packetwire.IPv4Header(pkt, srcIP, dstIP, 6, tos, ttl, nextIPID(), 0)
-	packetwire.TCP(pkt[20:], srcIP, dstIP, srcPort, dstPort, seq, ack, flags, 0xffff, payload, options)
+	packetwire.TCP(pkt[20:], srcIP, dstIP, srcPort, dstPort, seq, ack, flags, window, payload, options)
 	return pkt
 }
 

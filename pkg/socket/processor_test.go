@@ -44,7 +44,7 @@ func TestSocketPacketProcessor_ProcessPacket(t *testing.T) {
 	packetData := []byte{
 		0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0xc0, 0xa8, 0x01, 0x01, 0xc0, 0xa8, 0x01, 0x02,
 	}
-	packet := core.NewPacket(packetData)
+	packet := core.NewCopiedPacket(packetData)
 
 	// Process the packet
 	err = processor.ProcessPacket(packet)
@@ -93,7 +93,7 @@ func TestSocketPacketProcessor_ProcessPacket_Error(t *testing.T) {
 	packetData := []byte{
 		0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0xc0, 0xa8, 0x01, 0x01, 0xc0, 0xa8, 0x01, 0x02,
 	}
-	packet := core.NewPacket(packetData)
+	packet := core.NewCopiedPacket(packetData)
 
 	// Process the packet
 	err = processor.ProcessPacket(packet)
@@ -127,7 +127,7 @@ func TestSocketPacketProcessor_ProcessPacket_InvalidPacket(t *testing.T) {
 
 	// Create an invalid packet (too short)
 	packetData := []byte{0x45, 0x00, 0x00}
-	packet := core.NewPacket(packetData)
+	packet := core.NewCopiedPacket(packetData)
 
 	// Process the packet
 	err = processor.ProcessPacket(packet)
@@ -166,7 +166,7 @@ func TestSocketPacketProcessor_ProcessPacket_UnsupportedVersion(t *testing.T) {
 	packetData := []byte{
 		0x60, 0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	}
-	packet := core.NewPacket(packetData)
+	packet := core.NewCopiedPacket(packetData)
 
 	// Process the packet
 	err = processor.ProcessPacket(packet)

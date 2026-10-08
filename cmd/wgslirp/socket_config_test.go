@@ -40,7 +40,7 @@ func TestSocketFlowDefaultMigration(t *testing.T) {
 		values   map[string]string
 		tcp, udp int
 	}{
-		{"unset", nil, 64, 256},
+		{"unset", nil, 256, 512},
 		{"explicit unlimited", map[string]string{"MAX_TCP_FLOWS": "0", "MAX_UDP_FLOWS": "0"}, 0, 0},
 		{"explicit finite", map[string]string{"MAX_TCP_FLOWS": "12", "MAX_UDP_FLOWS": "34"}, 12, 34},
 	} {
@@ -56,5 +56,66 @@ func TestSocketFlowDefaultMigration(t *testing.T) {
 				t.Fatal("flow override changed independent budgets")
 			}
 		})
+	}
+}
+
+func TestSocketIPv4ReassemblyDefaultAndOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		values  map[string]string
+		enabled bool
+		invalid bool
+	}{
+		{"unset", nil, true, false},
+		{"explicit disabled", map[string]string{"IPV4_REASSEMBLY": "false"}, false, false},
+		{"explicit enabled", map[string]string{"IPV4_REASSEMBLY": "true"}, true, false},
+		{"invalid boolean", map[string]string{"IPV4_REASSEMBLY": "invalid"}, false, true},
+		{"default unusable subcap", map[string]string{"IPV4_FRAGMENT_BUFFER_CAP_BYTES": "1"}, false, true},
+		{"disabled small subcap", map[string]string{"IPV4_REASSEMBLY": "false", "IPV4_FRAGMENT_BUFFER_CAP_BYTES": "1"}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := socketConfig(1380, func(key string) (string, bool) { v, ok := tc.values[key]; return v, ok })
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("invalid fragment configuration accepted")
+				}
+				return
+			}
+			if err != nil || cfg.IPv4Reassembly != tc.enabled {
+				t.Fatalf("fragment default/override: %+v %v", cfg, err)
+			}
+			if cfg.SocketBufferCapBytes != socket.DefaultSocketBufferCap {
+				t.Fatal("fragment policy changed aggregate budget")
+			}
+		})
+	}
+}
+
+func TestSocketICMPEchoDefaultAndOverride(t *testing.T) {
+	for _, tc := range []struct {
+		value                     string
+		present, enabled, invalid bool
+	}{
+		{"", false, true, false}, {"false", true, false, false},
+		{"true", true, true, false}, {"off", true, false, false},
+		{"", true, false, true}, {"maybe", true, false, true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			cfg, err := socketConfig(1380, func(key string) (string, bool) {
+				return tc.value, key == "ICMP_ECHO" && tc.present
+			})
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("invalid ICMP_ECHO accepted")
+				}
+				return
+			}
+			if err != nil || cfg.Protocol != "ip4:tcp" || cfg.ICMPEcho != tc.enabled {
+				t.Fatalf("echo policy: %+v %v", cfg, err)
+			}
+		})
+	}
+	if socket.DefaultConfig().ICMPEcho {
+		t.Fatal("changed legacy library protocol policy")
 	}
 }

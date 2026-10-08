@@ -16,7 +16,8 @@ func (b *resourceBudget) buildPacket(size int, pooled bool, build func() []byte)
 		return nil
 	}
 	capacity := size
-	if pooled && poolingEnabled() {
+	usePool := pooled && shouldPoolPacket(size)
+	if usePool {
 		capacity = packetCapacity(size)
 	}
 	release, err := b.ReservePacketBuffer(capacity)
@@ -29,7 +30,7 @@ func (b *resourceBudget) buildPacket(size int, pooled bool, build func() []byte)
 		return nil
 	}
 	return core.NewPooledPacket(data, func(buf []byte) {
-		if pooled && poolingEnabled() && pktShouldPut(buf) {
+		if usePool && pktShouldPut(buf) {
 			pktPut(buf)
 		}
 		release()

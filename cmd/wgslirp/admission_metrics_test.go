@@ -50,9 +50,15 @@ func TestAdmissionMetricsReachBothReportFormats(t *testing.T) {
 	if len(snapshot.Admission) != 9 || snapshot.Admission["aggregate_buffer_limit"] != 1 {
 		t.Fatalf("JSON admission: %v", snapshot.Admission)
 	}
+	if len(snapshot.PacketSize) != 2 || snapshot.PacketSize["accepted_oversized"] != 0 || snapshot.PacketSize["local_size_rejected"] != 0 {
+		t.Fatal("packet size JSON missing", snapshot.PacketSize)
+	}
 	buffer.Reset()
 	dumpMetrics(s, tun, nil, "text")
 	if !strings.Contains(buffer.String(), "aggregate_buffer_limit=1") || !strings.Contains(buffer.String(), "tcp_pending_limit=0") {
 		t.Fatal("text admission missing")
+	}
+	if !strings.Contains(buffer.String(), "packet_size: accepted_oversized=0 local_size_rejected=0") {
+		t.Fatal("packet size text missing")
 	}
 }

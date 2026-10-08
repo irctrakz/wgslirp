@@ -55,7 +55,7 @@ func TestSocketCallbackCanRequestStopAndBoundWait(t *testing.T) {
 		t.Fatal("reported complete before callback returned")
 	default:
 	}
-	if err := s.WritePacket(core.NewPacket(nil)); err == nil {
+	if err := s.WritePacket(core.NewCopiedPacket(nil)); err == nil {
 		t.Fatal("admission remained open")
 	}
 	// Both bridges are signaled even when TCP cleanup is blocked on flow state.
@@ -161,7 +161,7 @@ func TestMockSocketOwnershipAndSnapshots(t *testing.T) {
 		t.Fatal("mutable received snapshot")
 	}
 	data := []byte{4, 5}
-	if err := m.WritePacket(core.NewPacket(data)); err != nil {
+	if err := m.WritePacket(core.NewCopiedPacket(data)); err != nil {
 		t.Fatal(err)
 	}
 	data[0] = 9
@@ -187,7 +187,7 @@ func TestMockSocketCallbackStopAndConcurrentObservers(t *testing.T) {
 	defer unblock()
 	m.SetPacketProcessor(packetConsumer(func(p core.Packet) error {
 		defer core.ReleasePacket(p)
-		_ = m.WritePacket(core.NewPacket([]byte{2})) // no mock mutex held across callback
+		_ = m.WritePacket(core.NewCopiedPacket([]byte{2})) // no mock mutex held across callback
 		m.RequestStop()
 		close(entered)
 		<-release
@@ -196,7 +196,7 @@ func TestMockSocketCallbackStopAndConcurrentObservers(t *testing.T) {
 	if err := m.Start(); err != nil {
 		t.Fatal(err)
 	}
-	go func() { defer close(returned); _ = m.SimulatePacketReceived(core.NewPacket([]byte{1})) }()
+	go func() { defer close(returned); _ = m.SimulatePacketReceived(core.NewCopiedPacket([]byte{1})) }()
 	awaitLifecycle(t, entered)
 	var observers sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -208,7 +208,7 @@ func TestMockSocketCallbackStopAndConcurrentObservers(t *testing.T) {
 				_ = m.GetReceivedPackets()
 				_ = m.GetSentPackets()
 				m.SetPacketProcessor(nil)
-				_ = m.WritePacket(core.NewPacket(nil))
+				_ = m.WritePacket(core.NewCopiedPacket(nil))
 				_ = m.Start()
 				if m.RequestStop() != m.RequestStop() {
 					t.Error("completion channel changed")

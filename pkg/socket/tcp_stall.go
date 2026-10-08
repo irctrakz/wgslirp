@@ -1,6 +1,10 @@
 package socket
 
-import "time"
+import (
+	"time"
+
+	"github.com/irctrakz/wgslirp/pkg/logging"
+)
 
 // ackIdleGatedLocked requires stateMu. A zero gate disables both gating and
 // ACK-idle failure, preserving the configurable sender policy. Window-opening
@@ -23,8 +27,12 @@ func (b *tcpBridge) expireACKIdleLocked(f *tcpFlow, now time.Time) {
 	if b.ackIdleFail <= 0 || !b.ackIdleGatedLocked(f, now) || now.Sub(f.lastAckTime) < b.ackIdleFail {
 		return
 	}
+	if b.failureLog.Allow(now) {
+		logging.Warnf("TCP ACK progress timed out; removing connection: flow=%s state=%s ack_idle=%v limit=%v inflight=%d; reconnect if needed and check path loss/delay and peer responsiveness",
+			f.key, f.state, now.Sub(f.lastAckTime), b.ackIdleFail, f.serverNxt-f.sndUna)
+	}
 	if b.errorSignal != "none" {
-		_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, fRST|fACK, nil))
+		_ = b.sendToGuest(f, b.buildTCPFlowLocked(f, f.serverNxt, fRST|fACK, nil, nil, 0, 64))
 	}
 	b.removeFlowLocked(f)
 }
