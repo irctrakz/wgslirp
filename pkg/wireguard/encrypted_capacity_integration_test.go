@@ -9,7 +9,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,6 +48,8 @@ func runEncryptedCapacity(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 	hostPort := uint16(listener.Addr().(*net.TCPAddr).Port)
 	var heapPeak, rssPeak uint64
+	phase := "churn"
+	lastReport := time.Time{}
 	sample := func() {
 		t.Helper()
 		var m runtime.MemStats
@@ -69,7 +73,24 @@ func runEncryptedCapacity(t *testing.T) {
 		if rss > rssPeak {
 			rssPeak = rss
 		}
+		if time.Since(lastReport) >= 10*time.Second {
+			t.Logf("CAPACITY_MEMORY phase=%s elapsed_ms=%d heap=%d heap_sys=%d stack=%d rss=%d workers=%d", phase, time.Since(started).Milliseconds(), m.HeapAlloc, m.HeapSys, m.StackInuse, rss, runtime.NumGoroutine())
+			lastReport = time.Now()
+		}
 		if m.HeapAlloc > 192<<20 || rss > 384<<20 || runtime.NumGoroutine() > 1024 {
+			if dir := os.Getenv("WGSLIRP_FRAGMENT_PROFILE_DIR"); dir != "" {
+				f, err := os.Create(filepath.Join(dir, "capacity-breach.pprof"))
+				if err != nil {
+					t.Errorf("create capacity profile: %v", err)
+				} else {
+					if err := pprof.WriteHeapProfile(f); err != nil {
+						t.Errorf("write capacity profile: %v", err)
+					}
+					if err := f.Close(); err != nil {
+						t.Errorf("close capacity profile: %v", err)
+					}
+				}
+			}
 			t.Fatalf("resource ceiling: heap=%d rss=%d workers=%d", m.HeapAlloc, rss, runtime.NumGoroutine())
 		}
 		if time.Since(started) > 6*time.Minute {
@@ -189,6 +210,7 @@ func runEncryptedCapacity(t *testing.T) {
 	}
 	t.Logf("HANDSHAKES samples=%d p50_us=%d p95_us=%d p99_us=%d max_us=%d", len(latencies), pct(50).Microseconds(), pct(95).Microseconds(), pct(99).Microseconds(), latencies[len(latencies)-1].Microseconds())
 	var live []connection
+	phase = "fill"
 	for i := 0; i < capacity; i++ {
 		c, _ := connect(uint16(41000 + i))
 		exchange(&c)
@@ -230,6 +252,7 @@ func runEncryptedCapacity(t *testing.T) {
 		c.host.Close()
 	}
 	lastClose := time.Now()
+	phase = "time_wait"
 	refuse(42001)
 	// The ordinary two-minute idle lifetime must not truncate four-minute TIME-WAIT.
 	for time.Since(firstClose) < 239*time.Second {
@@ -251,6 +274,7 @@ func runEncryptedCapacity(t *testing.T) {
 		t.Fatal("TIME-WAIT duration was shortened")
 	}
 	c, _ := connect(42002)
+	phase = "recovered"
 	exchange(&c)
 	send(c.port, c.seq, c.ack, 4, nil)
 	waitFlows(0)

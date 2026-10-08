@@ -87,6 +87,11 @@ jobs:
                 go tool pprof -top -sample_index=alloc_space /evidence/fragment-breach.pprof > /evidence/fragment-allocations.txt
                 cat /evidence/fragment-inuse.txt /evidence/fragment-allocations.txt
               fi
+              if [ -f /evidence/capacity-breach.pprof ]; then
+                go tool pprof -top -sample_index=inuse_space /evidence/capacity-breach.pprof > /evidence/capacity-inuse.txt
+                go tool pprof -top -sample_index=alloc_space /evidence/capacity-breach.pprof > /evidence/capacity-allocations.txt
+                cat /evidence/capacity-inuse.txt /evidence/capacity-allocations.txt
+              fi
               echo CGROUP_MEMORY_PEAK
               cat /sys/fs/cgroup/memory.peak
               cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/pids.events

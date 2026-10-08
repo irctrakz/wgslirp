@@ -31,40 +31,40 @@ jobs:
     uses: ./.github/workflows/go.yml
 
   encrypted-capacity:
-    needs: [test, encrypted-wan]
+    needs: test
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/capacity.yml
 
   encrypted-wan:
-    needs: [test, encrypted-sustained]
+    needs: [test, encrypted-capacity, release-image-test]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/capacity.yml
     with:
       workload: wan
 
   encrypted-sustained:
-    needs: [test, encrypted-mixed]
+    needs: [test, encrypted-capacity, release-image-test]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/capacity.yml
     with:
       workload: sustained
 
   encrypted-mixed:
-    needs: [test, encrypted-fragments-unpaced]
+    needs: [test, encrypted-capacity, release-image-test]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/capacity.yml
     with:
       workload: mixed
 
   encrypted-fragments:
-    needs: test
+    needs: [test, encrypted-capacity, release-image-test]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/capacity.yml
     with:
       workload: fragments
 
   encrypted-fragments-unpaced:
-    needs: [test, encrypted-fragments]
+    needs: [test, encrypted-capacity, release-image-test]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     uses: ./.github/workflows/capacity.yml
     with:
@@ -72,7 +72,7 @@ jobs:
       repetitions: '[1,2,3]'
 
   release-image-test:
-    needs: [test, encrypted-capacity]
+    needs: test
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -206,7 +206,7 @@ jobs:
           if-no-files-found: error
 
   promote-development:
-    needs: release-image-test
+    needs: [test, encrypted-capacity, encrypted-wan, encrypted-sustained, encrypted-mixed, encrypted-fragments, encrypted-fragments-unpaced, release-image-test]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/architecture-hardening'
     runs-on: ubuntu-latest
     timeout-minutes: 5

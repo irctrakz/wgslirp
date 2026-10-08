@@ -11,6 +11,25 @@ resources, cleanup requirements and deadlines stay unchanged. At most 522 KiB
 of application payload is exchanged in each direction. The acceptance criteria
 and measured runs below describe the historical 64-slot profile.
 
+Run [37711467617](https://github.com/irctrakz/wgslirp/actions/runs/37711467617)
+passed the ordinary 256-slot profile but failed race instrumentation at
+404,721,664 bytes RSS against the unchanged 384 MiB process ceiling, with
+92,699,928 bytes Go heap and 312 goroutines. The 2 GiB container had no memory/PID
+limit events or OOM kill; owned container/tmpfs/toolchain cleanup passed.
+This failure remains recorded and does not qualify image promotion. The fixture
+now reports memory by phase and retains a heap/allocation profile on breach,
+without forced GC or a raised memory acceptance limit.
+
+## Pipeline feedback order
+
+Baseline checks run first. Capacity and actual-image validation then run on
+separate bounded runners. The remaining workload families wait for both early
+gates and run independently; repetitions within each family remain sequential.
+Development promotion explicitly requires every workload family and the actual
+image test, retaining exact-digest promotion without a rebuild. This removes the
+previous serial chain that deferred capacity until roughly 47 minutes after the
+baseline finished. Runner queue time can still affect total elapsed time.
+
 ## Acceptance declared before execution — 2026-10-03
 
 This profile exercises real wireguard-go encryption, the production userspace TCP
