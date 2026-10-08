@@ -74,6 +74,11 @@ func (b *tcpBridge) sendAllowanceLocked(f *tcpFlow) int {
 	if f.state == tcpSynRcvd || f.closed {
 		return 0
 	}
+	blocked := f.txBytes >= b.retransmitCap
+	if blocked && !f.retransmitBlocked {
+		b.parent.admission.retransmitWaits.Add(1)
+	}
+	f.retransmitBlocked = blocked
 	inFlight := int(f.serverNxt - f.sndUna)
 	allowed := int(f.advWnd) - inFlight
 	allowed = minInt(allowed, b.retransmitCap-f.txBytes)
@@ -150,23 +155,12 @@ func (b *tcpBridge) reader(f *tcpFlow) {
 			return
 		}
 		if errors.Is(err, io.EOF) {
-			fin := b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x11, nil)
-			f.serverNxt++
-			f.finSent = true
-			_ = b.sendToGuest(f, fin)
-			f.stateMu.Unlock()
-			// Preserve the existing short FIN grace period. Full FIN recovery
-			// remains a separate protocol change.
-			timer := time.NewTimer(50 * time.Millisecond)
-			select {
-			case <-timer.C:
-			case <-f.rtoStop:
-			case <-b.stopCh:
-			}
-			timer.Stop()
-			f.stateMu.Lock()
+			b.startFINLocked(f, time.Now())
+		} else {
+			atomic.AddUint64(&b.parent.metrics.Errors, 1)
+			atomic.AddUint64(&b.metrics.Errors, 1)
+			b.abortBufferedFlowLocked(f)
 		}
-		b.removeFlowLocked(f)
 		f.stateMu.Unlock()
 		return
 	}
@@ -176,7 +170,7 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 	for offset := 0; offset < len(payload); {
 		f.stateMu.Lock()
 		allowed := b.sendAllowanceLocked(f)
-		if f.closed {
+		if f.closed || f.finSent {
 			f.stateMu.Unlock()
 			return false
 		}
@@ -261,12 +255,17 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 			f.stateMu.Unlock()
 			return
 		}
-		f.txMu.Lock()
 		now := time.Now()
+		finRetransmit := b.closeTickLocked(f, now)
+		if f.closed {
+			f.stateMu.Unlock()
+			return
+		}
+		f.txMu.Lock()
 		var packet core.Packet
 		for i := range f.txQueue {
 			seg := &f.txQueue[i]
-			if seg.seq+uint32(len(seg.data)) <= f.sndUna || isSACKed(f, seg.seq, seg.seq+uint32(len(seg.data))) {
+			if !seqAfter(seg.seq+uint32(len(seg.data)), f.sndUna) || isSACKed(f, seg.seq, seg.seq+uint32(len(seg.data))) {
 				continue
 			}
 			if !seg.sentAt.IsZero() && now.Sub(seg.sentAt) < f.rto {
@@ -291,8 +290,8 @@ func (b *tcpBridge) retransmitLoop(f *tcpFlow) {
 		f.stateMu.Unlock()
 		// Diagnostics take snapshots of multiple flows, so run them only
 		// after releasing this flow's state lock.
-		if packet != nil {
-			b.trackRTOFlow(f.key)
+		if packet != nil || finRetransmit {
+			b.trackRTOFlow(f)
 		}
 	}
 }

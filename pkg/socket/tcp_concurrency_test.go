@@ -56,6 +56,7 @@ func TestTCPConcurrentSendACKAndMetrics(t *testing.T) {
 				ack := binary.BigEndian.Uint32(last[24:28]) + uint32(len(last)-40)
 				packet := buildIPv4TCP(f.srcIP, f.dstIP, f.srcPort, f.dstPort, 100, ack, 0x10, nil)
 				binary.BigEndian.PutUint16(packet[34:36], 1200)
+				repairTestChecksums(packet)
 				if err := b.HandleOutbound(packet); err != nil {
 					select {
 					case failures <- err:

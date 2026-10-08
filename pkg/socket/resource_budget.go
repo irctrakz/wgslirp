@@ -2,6 +2,7 @@ package socket
 
 import (
 	"errors"
+	"github.com/irctrakz/wgslirp/pkg/core"
 	"sync"
 )
 
@@ -27,9 +28,7 @@ var (
 // PacketBufferReserver admits retained packet storage, including an allowance
 // for the queue entry. The returned release function is safe to call repeatedly.
 // Reserving never calls back into a queue or acquires a flow lock.
-type PacketBufferReserver interface {
-	ReservePacketBuffer(bytes int) (release func(), err error)
-}
+type PacketBufferReserver = core.PacketBufferReserver
 
 // PacketBufferBudgetFor shares a writer's budget when supported. Other writers
 // get a finite standalone budget for their adapter; constructors remain compatible.
@@ -66,6 +65,7 @@ type resourceBudget struct {
 	used     int
 	peak     int
 	rejected uint64
+	invalid  uint64
 }
 
 func (b *resourceBudget) acquire(n int) bool {
@@ -73,6 +73,9 @@ func (b *resourceBudget) acquire(n int) bool {
 	defer b.mu.Unlock()
 	if n < 0 || n > b.limit-b.used {
 		b.rejected++
+		if n < 0 {
+			b.invalid++
+		}
 		return false
 	}
 	b.used += n

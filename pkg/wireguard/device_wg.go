@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,57 +92,8 @@ func monitorWireGuardHandshakes(h *wgHandle) {
 
 // parseAndLogHandshakeStatus parses the WireGuard device state and logs handshake information
 func parseAndLogHandshakeStatus(state string) {
-	lines := strings.Split(state, "\n")
-
-	var currentPeer string
-	var handshakeTime int64
-	var endpoint string
-	var transferRx, transferTx uint64
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		if strings.HasPrefix(line, "public_key=") {
-			// If we were processing a peer, log its info before moving to the next
-			if currentPeer != "" {
-				logPeerStatus(currentPeer, handshakeTime, endpoint, transferRx, transferTx)
-			}
-
-			// Start processing a new peer
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				currentPeer = parts[1]
-				handshakeTime = 0
-				endpoint = ""
-				transferRx = 0
-				transferTx = 0
-			}
-		} else if strings.HasPrefix(line, "latest_handshake_time_sec=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				handshakeTime, _ = strconv.ParseInt(parts[1], 10, 64)
-			}
-		} else if strings.HasPrefix(line, "endpoint=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				endpoint = parts[1]
-			}
-		} else if strings.HasPrefix(line, "rx_bytes=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				transferRx, _ = strconv.ParseUint(parts[1], 10, 64)
-			}
-		} else if strings.HasPrefix(line, "tx_bytes=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				transferTx, _ = strconv.ParseUint(parts[1], 10, 64)
-			}
-		}
-	}
-
-	// Log the last peer if there was one
-	if currentPeer != "" {
-		logPeerStatus(currentPeer, handshakeTime, endpoint, transferRx, transferTx)
+	for _, peer := range ParsePeerState(state) {
+		logPeerStatus(peer.PublicKey, peer.Handshake, peer.Endpoint, peer.RX, peer.TX)
 	}
 }
 
@@ -154,6 +104,9 @@ func logPeerStatus(publicKey string, handshakeTime int64, endpoint string, rx, t
 	if handshakeTime > 0 {
 		lastHandshake := time.Unix(handshakeTime, 0)
 		age := time.Since(lastHandshake)
+		if age < 0 {
+			age = 0
+		}
 
 		if age < time.Minute {
 			handshakeStatus = fmt.Sprintf("%d seconds ago", int(age.Seconds()))
