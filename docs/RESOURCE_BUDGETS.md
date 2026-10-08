@@ -1,6 +1,22 @@
 # Resource budget measurements
 
-## Scope and reproduction
+## Current default policy (2026-10-07)
+
+The executable and `socket.DefaultConfig()` now default to **256 TCP / 512 UDP
+registered flows**, following deployment reports of admission refusal with the
+previous 64/256 defaults. `WG_TUN_QUEUE_CAP` remains 1024. The 64 MiB shared buffer
+budget, 64 pending dials and per-flow storage limits are unchanged; increased
+flow admission does not increase those independent budgets. UDP reader storage
+alone is approximately 32 MiB at 512 flows. TCP TIME-WAIT remains four minutes
+and counts toward the TCP cap. Without extensions or other active flows, 256
+slots correspond to approximately 64 host-first closes/minute at steady state.
+
+The default-capacity TCP churn regression now exercises two 256-flow batches
+(512 connections), including refusal at TIME-WAIT capacity and simulated expiry
+recovery. The measurements below retain their original 64/256 fixture sizes;
+they are historical evidence, not measured memory sizing for the new defaults.
+
+## Historical scope and reproduction
 
 `TestMixedTrafficMemoryRecovery` exercises real loopback TCP/UDP echo peers through `SocketInterface.WritePacket`, the production bridges and `SocketPacketProcessor`. A bounded guest sink replaces the guest network stack. The fixture uses no forced GC, scavenging, runtime memory-limit changes or background workload after completion.
 
@@ -27,7 +43,7 @@ The fixture includes allocations and sockets used by the echo peers and guest si
 
 ## Default selection
 
-The application and `socket.DefaultConfig()` now select **64 TCP / 256 UDP active flows**. These counts match the tested capacity profile rather than extrapolating to unlimited admission. They are conservative starting limits, not a universal performance optimum.
+At this measurement checkpoint, the application and `socket.DefaultConfig()` selected **64 TCP / 256 UDP active flows**. These counts matched the tested capacity profile rather than extrapolating to unlimited admission. They were conservative starting limits, not a universal performance optimum. See the current policy above for the subsequent increase.
 
 The **64 MiB shared buffer budget** is retained: preliminary unpooled capacity runs peaked around **18.1 MiB** in normal traffic, leaving more than three times that observed storage available for larger bursts, retransmission and queue overlap. UDP reader storage alone consumes roughly 16 MiB at 256 flows. The deliberate overload step fills the shared budget; its peak must be distinguished from normal traffic samples.
 
@@ -70,7 +86,7 @@ TIME-WAIT records, refuses a new connection, and admits the next batch after
 explicitly advancing the expiry clock. All reservations release at shutdown.
 This is bounded capacity/recovery evidence, not a four-minute wall-clock soak.
 
-**Default-sizing decision:** retain the finite 64-flow default for the measured
+**Historical default-sizing decision:** retain the finite 64-flow default for the measured
 small deployment profile, with an explicit churn constraint. Without duplicate
 FIN extensions, 64 / 240 seconds is about **0.267 host-first closes per second
 (16 per minute)** at steady state with no other active flows. Bursts can consume

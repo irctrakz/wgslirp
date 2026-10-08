@@ -1,5 +1,16 @@
 # Bounded encrypted churn and default-capacity profile
 
+## Current profile update — 2026-10-07
+
+The default TCP cap is now 256. This fixture reads that default and fills all
+256 slots, refuses overflow, retains them through real TIME-WAIT and verifies
+re-admission. With 264 initial churn connections and one recovery connection,
+expected lifecycle totals are 521. The goroutine ceiling is now 1024 to allow
+the additional per-flow reader/retransmission workers; heap/RSS limits, container
+resources, cleanup requirements and deadlines stay unchanged. At most 522 KiB
+of application payload is exchanged in each direction. The acceptance criteria
+and measured runs below describe the historical 64-slot profile.
+
 ## Acceptance declared before execution — 2026-10-03
 
 This profile exercises real wireguard-go encryption, the production userspace TCP

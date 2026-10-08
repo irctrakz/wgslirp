@@ -40,7 +40,7 @@ func TestSocketFlowDefaultMigration(t *testing.T) {
 		values   map[string]string
 		tcp, udp int
 	}{
-		{"unset", nil, 64, 256},
+		{"unset", nil, 256, 512},
 		{"explicit unlimited", map[string]string{"MAX_TCP_FLOWS": "0", "MAX_UDP_FLOWS": "0"}, 0, 0},
 		{"explicit finite", map[string]string{"MAX_TCP_FLOWS": "12", "MAX_UDP_FLOWS": "34"}, 12, 34},
 	} {

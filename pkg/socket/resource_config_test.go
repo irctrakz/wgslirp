@@ -12,6 +12,9 @@ import (
 func TestBridgeResourceConfiguration(t *testing.T) {
 	t.Setenv("TCP_ACK_DELAY_MS", "999") // typed configuration is authoritative
 	cfg := DefaultConfig()
+	if cfg.MaxTCPFlows != 256 || cfg.MaxUDPFlows != 512 {
+		t.Fatalf("unexpected default flow limits: TCP=%d UDP=%d", cfg.MaxTCPFlows, cfg.MaxUDPFlows)
+	}
 	cfg.TCPAckDelayMs = 7
 	cfg.TCPFlowLifetimeSec = 31
 	cfg.UDPFlowLifetimeSec = 17

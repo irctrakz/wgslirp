@@ -229,8 +229,8 @@ Resource controls are parsed once before socket startup. Invalid, empty, negativ
 | `TCP_REASSEMBLY_CAP_BYTES` | 131072 | Out-of-order storage threshold per TCP flow; zero uses the default. |
 | `IPV4_REASSEMBLY` | true | Bounded incoming TCP/UDP/ICMP fragment reassembly; explicit false disables it. See [limits and acceptance gates](IPV4_FRAGMENT_REASSEMBLY.md). |
 | `IPV4_FRAGMENT_BUFFER_CAP_BYTES` | 4194304 | Finite fragment storage cap sharing the socket budget; zero uses the default. Fixed datagram/source/range quotas also apply. |
-| `MAX_TCP_FLOWS` | 64 | Maximum registered TCP flows; explicit zero is unlimited. |
-| `MAX_UDP_FLOWS` | 256 | Maximum registered UDP flows; explicit zero is unlimited. |
+| `MAX_TCP_FLOWS` | 256 | Maximum registered TCP flows, including TIME-WAIT; explicit zero is unlimited. |
+| `MAX_UDP_FLOWS` | 512 | Maximum registered UDP flows; explicit zero is unlimited. |
 | `MAX_PENDING_TCP_DIALS` | 64 | Concurrent fast/async TCP dial attempts; one reservation spans fallback. |
 | `SOCKET_BUFFER_CAP_BYTES` | 67108864 | Shared TCP/UDP and downstream queue buffer budget (64 MiB). |
 | `TCP_PEND_CAP_BYTES` | 65536 | Per-flow TCP data accepted before host connection completes. |
@@ -279,7 +279,7 @@ call `socket.ConfigFromEnv(base, os.LookupEnv)` explicitly to opt into environme
 overrides and validate the result. Existing explicit MTU/MSS/pacing runtime APIs
 remain available. WireGuard/capture settings and process-wide pooling policy also use validated startup configuration; see [CONFIGURATION.md](CONFIGURATION.md).
 
-Flow-cap migration: previously, unset flow caps were unlimited. The application and `socket.DefaultConfig()` now default to 64 TCP and 256 UDP flows. Set positive caps for larger measured workloads, or explicitly set `MAX_TCP_FLOWS=0` / `MAX_UDP_FLOWS=0` to retain unlimited flow admission. Explicit zero fields in manually constructed Go configs keep their previous meaning. Dial and buffer budgets still apply independently. See [resource-budget measurements](RESOURCE_BUDGETS.md) for the workload, rationale and limits of these defaults.
+Flow-cap migration: previously, unset flow caps were unlimited, then bounded at 64 TCP and 256 UDP. The application and `socket.DefaultConfig()` now default to 256 TCP and 512 UDP flows. Explicit positive overrides remain authoritative; explicitly set `MAX_TCP_FLOWS=0` / `MAX_UDP_FLOWS=0` to retain unlimited flow admission. Explicit zero fields in manually constructed Go configs keep their previous meaning. Dial and buffer budgets still apply independently. See [resource-budget measurements](RESOURCE_BUDGETS.md) for historical measurements and the current policy.
 
 The four new dial/buffer controls use their finite defaults when zero; zero never disables these limits. In particular, `TCP_PEND_CAP_BYTES=0` now means 64 KiB rather than unlimited buffering. Defaults are supported by the finite mixed TCP/UDP bridge workload in [RESOURCE_BUDGETS.md](RESOURCE_BUDGETS.md); F10 also covers bounded encrypted loopback round trips and TCP churn/expiry. A finite low-rate encrypted memory profile passed natural-GC acceptance with injected loss/reordering; criteria and limits are in [ENCRYPTED_WORKLOADS.md](ENCRYPTED_WORKLOADS.md). Larger WAN/soak and release validation remain tracked in [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md).
 

@@ -34,6 +34,10 @@ Unknown variables are not rejected (the process inherits unrelated OS variables)
   response validation. The default remains `example.com`.
 - `WG_TUN_QUEUE_CAP` defaults to 1024, range 1-65536. These queue slots consume
   metadata separately from the shared packet payload budget.
+- `MAX_TCP_FLOWS` defaults to 256 registered flows, including TIME-WAIT;
+  `MAX_UDP_FLOWS` defaults to 512. These limits apply across peers on the socket
+  interface. Explicit positive overrides and zero/unlimited admission remain
+  supported. Pending-dial and aggregate buffer limits are independent.
 - `PROCESSOR_WORKERS` and `PROCESSOR_QUEUE_CAP` are **inactive in the executable**,
   which forwards inline. Startup warns when either is present. Remove these
   variables from deployments. The optional library processor still supports

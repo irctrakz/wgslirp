@@ -1,5 +1,11 @@
 # Architecture improvement plan
 
+**Flow default update (2026-10-07):** deployment admission pressure prompted
+256 TCP / 512 UDP defaults; the TUN queue remains 1024 and independent storage
+and pending-dial budgets remain unchanged. The TCP default-capacity regression
+now covers 512 connections in two 256-slot TIME-WAIT batches. Earlier 64/256
+measurements below retain their historical context; see [RESOURCE_BUDGETS.md](RESOURCE_BUDGETS.md).
+
 **Current progress and remaining work (updated 2026-10-04):** see
 [HARDENING_REVIEW.md](HARDENING_REVIEW.md) for the consolidated backlog,
 benchmark limitations and code-simplicity review. The checkpoints below retain
