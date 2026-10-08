@@ -835,7 +835,9 @@ candidate before implementation; no broad representation or lock rewrite is just
   outside release dependencies: retransmission, reservation release, fragment
   source-quota recovery and late dial cancellation. Require unchanged baseline
   success, compilable mutations and exact failure diagnostics; retain bounded
-  execution, resource and cleanup evidence. CI verification is recorded separately.
+  execution, resource and cleanup evidence. Run 37818115991 at `4d6226c` passed
+  all eight ordinary/race controls; retained result/resource/cleanup artifacts
+  were independently checked. These checks do not gate publishing/promotion.
 - [ ] Expand independent failure conditions and real-client/endurance evidence
   as tracked in [the checks follow-ups](INDEPENDENT_FAILURE_CHECKS.md#scope-and-follow-ups).
 

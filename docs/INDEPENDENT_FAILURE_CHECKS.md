@@ -30,7 +30,8 @@ detection. A changed/ambiguous anchor fails closed and requires review.
 Artifacts retain the source commit, original/mutated file hashes, mutation,
 baseline/compile/mutant JSON test output, result, container settings, resource
 events and cleanup evidence for 14 days. Logs from the intentionally failing
-mutant are expected; only `result.json` with `passed: true` proves acceptance.
+mutant are expected; acceptance requires `result.json` with `passed: true`
+together with successful job resource and cleanup checks.
 
 Each fresh test container runs non-root with all capabilities dropped, a
 read-only root/source, no new privileges, one CPU, 2 GiB RAM with no swap,
@@ -39,6 +40,18 @@ supervisor also bounds each command and the workflow bounds every job.
 Resource-limit events fail the job. Cleanup removes the owned container,
 source copies, tmpfs and toolchain image, including on failure. At most two
 jobs run concurrently on separate disposable GitHub runners.
+
+## Verified initial run
+
+[Run 37818115991](https://github.com/irctrakz/wgslirp/actions/runs/37818115991)
+passed all eight ordinary/race controls at `4d6226c` on 2026-10-08. Retained
+artifacts were independently inspected: every result identified the tested
+commit, reported successful detection and removal of its disposable source,
+and included cleanup evidence and zero memory/OOM/PID-limit events. Peak cgroup
+memory ranged from 314,183,680 to 338,436,096 bytes, below the 2 GiB limit.
+The eleven supervisor acceptance-oracle tests passed, as did local controls,
+the dedicated source-quota regression and socket vet. This verifies the four
+specific injected defects; the broader checks below remain outstanding.
 
 ## Scope and follow-ups
 
