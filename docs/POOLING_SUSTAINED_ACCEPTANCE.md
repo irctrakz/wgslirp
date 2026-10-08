@@ -137,8 +137,10 @@ artifact changed; main was untouched.
 
 ## Remaining decisions
 
-- [ ] If selecting default-on, validate that separate candidate's actual release
-  image under the deployment/ownership/shutdown gates before promotion.
+- [x] Validate the separate default-on candidate's actual release image under
+  the deployment/ownership/shutdown gates before promotion.
+  [Full-pooling acceptance](POOLING_DEFAULT_ACCEPTANCE.md) records run 37705426326
+  and promotion of its exact tested digest.
 - [x] Compare a separate policy excluding tiny ACK/control packets from pooling.
   [Selective results](SELECTIVE_PACKET_POOLING.md) retain all six three-policy
   groups: correctness/resource/cleanup gates passed, with faster isolated tiny

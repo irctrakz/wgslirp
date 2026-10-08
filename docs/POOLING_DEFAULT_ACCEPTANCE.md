@@ -47,12 +47,43 @@ Read effective pooling from the image's allowlisted startup summary; do not
 persist private environment values. Promotion requires the same immutable digest
 that passed runtime checks, without rebuilding.
 
-Validation pending. Work and development-image publishing stay on
-`codex/architecture-hardening`; main and the private SSH server remain untouched.
+## Accepted evidence
+
+[Run 37705426326](https://github.com/irctrakz/wgslirp/actions/runs/37705426326)
+passed all 19 jobs at source `4c865c1608307d011f04b579e9ee71dfaec89e1b`:
+Linux build/vet, unit/race, integration/race, bounded fuzz checks, sixteen
+encrypted workload samples, actual-image validation and same-digest promotion.
+[Resource samples](POOLING_DEFAULT_RESOURCE_SAMPLES.csv) retain all sixteen
+workload checks. Every container exited successfully, with no OOM or memory/PID
+limit events. The largest workload cgroup peak was 1,035,051,008 bytes, including
+compilation and tmpfs, below the unchanged 2 GiB workload limit.
+
+| Actual-image mode | Effective pooling | Effective wrapping | Memory peak after eight verified rounds | SIGTERM completion |
+| --- | --- | --- | ---: | ---: |
+| Defaults unset | true | false | 55,439,360 B | 83 ms |
+| Explicit opt-outs | false | false | 25,042,944 B | 81 ms |
+
+Both actual-image containers passed encrypted TCP/UDP, applicable fragment
+checks and shutdown under traffic within the declared non-root, capability,
+filesystem and 256 MiB resource restrictions. These memory observations are
+fixture checkpoints, not a sustained production sizing guarantee.
+
+Tested and promoted immutable image:
+`ghcr.io/irctrakz/wgslirp@sha256:d9c5bf50a3a377bbb536f7b5601b43559f210dd8307c73eb14709ad669064891`.
+Development tag:
+`dev-4c865c1608307d011f04b579e9ee71dfaec89e1b-37705426326-1`.
+The build manifest, runtime image reference and promotion manifest identify
+the same digest; promotion did not rebuild it or retag `latest`.
+
+Cleanup evidence verifies removal of all owned workload containers, tmpfs and
+toolchain images, plus release runtime containers, network, builder/cache volume
+and image. Work and publishing stayed on `codex/architecture-hardening`; main
+and the private SSH server remained untouched. This establishes bounded acceptance,
+not unlimited capacity or a universal performance gain.
 
 The initial run `37701806315` was stopped before image validation after static
 review found that the new startup-policy assertion ran after the long expiry
-workload, when bounded log rotation could remove its evidence. Move the assertion
+workload, when bounded log rotation could remove its evidence. The assertion moved
 immediately after the first verified traffic rounds, without changing production
 code, log limits or acceptance requirements. Completed baseline and encrypted
 checks remain useful evidence, but this stopped run does not qualify promotion.

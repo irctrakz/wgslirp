@@ -775,7 +775,7 @@ controls pass; independent-stack full CI remains the acceptance gate. See
   runner: three counterbalanced encrypted mixed/WAN pairs, isolated allocations,
   retained queue saturation/recovery, separate race checks and verified cleanup.
   [Results and current policy](POOLING_ACCEPTANCE.md): run 37689880492 passed.
-  Default off remains provisional: bulk completion showed no consistent improvement,
+  At that checkpoint, default off remained provisional: bulk completion showed no consistent improvement,
   while handshake p95 improved in all three pairs. Updated deployment priorities
   favor throughput and latency, accepting higher memory use for repeatable gains;
   CPU consumption supports the decision rather than independently vetoing it.
@@ -789,11 +789,14 @@ controls pass; independent-stack full CI remains the acceptance gate. See
   37694066819 passed at identical source/bounds. Twelve pairs showed median
   throughput +0.78%, short completion p95 -1.53%, p99 +0.38%. Memory is not a
   blocker; the small throughput tendency and mixed tails support opt-in trials
-  without establishing a consistent overall advantage. Default remains unchanged.
-- [ ] Validate/promote the [full-pooling default candidate](POOLING_DEFAULT_ACCEPTANCE.md)
+  without establishing a consistent overall advantage. The default was unchanged at that checkpoint.
+- [x] Validate/promote the [full-pooling default candidate](POOLING_DEFAULT_ACCEPTANCE.md)
   under existing deployment, ownership and shutdown gates. The user selected
   default-on full pooling after reviewing the sustained and selective evidence;
   preserve an explicit opt-out, wrapping off and fixed resource limits.
+  Run 37705426326 passed all 19 jobs, including sixteen bounded workload samples
+  and actual-image default-on/explicit-off tests. Development promotion retained
+  the exact tested digest; no rebuild, main update or `latest` retag occurred.
 - [x] Validate the implemented [selective packet pooling candidate](SELECTIVE_PACKET_POOLING.md):
   exact storage below 512 bytes, existing pool classes for 512–16,384 bytes,
   shared allocation/reservation eligibility and captured release ownership.
@@ -802,7 +805,13 @@ controls pass; independent-stack full CI remains the acceptance gate. See
   throughput +0.24%, short p95 -0.86%, p99 -1.44%; vs full pooling throughput
   -0.68% and short p95 +3.32%. Tiny storage is faster in isolation, but this
   mixed-workload comparison does not establish a throughput win over full pooling.
-  Default remains off; any later default change requires actual-image acceptance.
+  The default stayed off during that comparison. The selective candidate was
+  subsequently retired in favor of the separately accepted full-pooling default.
+
+The [performance engineering review](PERFORMANCE_REVIEW.md) records conditional
+follow-ups: disabled-debug formatting, typed flow keys, TCP read scratch reuse,
+ownership-audited copy reduction and loss-specific SACK snapshots. Measure each
+candidate before implementation; no broad representation or lock rewrite is justified.
 
 ## First implementation milestone
 
