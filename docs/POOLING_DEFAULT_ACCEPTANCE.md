@@ -49,3 +49,10 @@ that passed runtime checks, without rebuilding.
 
 Validation pending. Work and development-image publishing stay on
 `codex/architecture-hardening`; main and the private SSH server remain untouched.
+
+The initial run `37701806315` was stopped before image validation after static
+review found that the new startup-policy assertion ran after the long expiry
+workload, when bounded log rotation could remove its evidence. Move the assertion
+immediately after the first verified traffic rounds, without changing production
+code, log limits or acceptance requirements. Completed baseline and encrypted
+checks remain useful evidence, but this stopped run does not qualify promotion.
