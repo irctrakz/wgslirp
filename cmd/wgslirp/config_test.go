@@ -74,7 +74,7 @@ func TestApplicationDefaultsAndInvalidSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaults.Device.ListenPort != 51820 || defaults.Device.MTU != 1380 || defaults.Device.Options.DisableIPv6 || defaults.Tun.QueueCapacity != 1024 ||
+	if !defaults.Socket.ICMPEcho || defaults.Socket.Protocol != "ip4:tcp" || defaults.Device.ListenPort != 51820 || defaults.Device.MTU != 1380 || defaults.Device.Options.DisableIPv6 || defaults.Tun.QueueCapacity != 1024 ||
 		!defaults.Pool.Enabled || defaults.Health.Enabled || defaults.Metrics || defaults.PrintConfig || defaults.MetricsInterval != 30*time.Second || defaults.MetricsFormat != "text" ||
 		defaults.Health.DNSName != "example.com" || defaults.Health.DNSIP != "1.1.1.1" || defaults.Health.HTTPURL != "https://httpbin.org/ip" || defaults.Capture.MaxBytes != 64*1024*1024 {
 		t.Fatal("unexpected defaults")

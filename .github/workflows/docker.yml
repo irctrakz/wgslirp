@@ -165,6 +165,13 @@ jobs:
               assert report['reassembly_environment'] == policy, 'wrong startup policy tested'
               assert report['pooling'] is enabled, 'wrong effective pooling policy'
               assert report['pooling_environment'] == policy, 'wrong pooling startup policy tested'
+              assert report['icmp_echo'] is enabled, 'wrong effective echo policy'
+              assert report['icmp_echo_environment'] == policy, 'wrong echo startup policy tested'
+              if enabled:
+                  assert report['verified_icmp_echo_rounds'] == 1, 'encrypted ping not verified'
+                  assert report['icmp_echo_denied_startup_verified'] is True, 'ping-denied startup not verified'
+              else:
+                  assert report['icmp_echo_disabled_verified'] is True, 'disabled ping not verified'
               assert report['image'] == os.environ['WGSLIRP_RELEASE_IMAGE'], 'wrong image tested'
               assert report['source_commit'] == os.environ['GITHUB_SHA'], 'wrong source tested'
               assert report['initial']['Image'] == open('release-evidence/image-id.txt').read().strip(), 'wrong container image'

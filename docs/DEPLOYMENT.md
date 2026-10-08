@@ -94,10 +94,22 @@ temporary filesystem is bounded and ephemeral; do not expect captures to persist
 Default `WG_DISABLE_IPV6=false` leaves sysctls unchanged. Do not add privileges
 to enable the legacy opt-in in this deployment profile.
 
-## Optional ICMP scope
+<a id="optional-icmp-scope"></a>
 
-The executable explicitly chooses TCP/UDP mode; adding `CAP_NET_RAW` does not
-activate guest ping. There is no supported executable ICMP-enable switch.
+## Guest ping and ICMP scope
+
+New builds enable guest IPv4 ping by default using only unprivileged ping
+sockets. Set `ICMP_ECHO=false` to disable it. The network namespace must permit
+the image's process group through `net.ipv4.ping_group_range`; startup fails with
+an actionable error if it cannot open the socket. The application does not change
+that policy, add capabilities or execute a ping binary. Permission is namespace
+policy managed by deployment tooling, including any Kubernetes/ECS restrictions.
+Destination firewalls and cloud rules can still block echo.
+
+Ping uses the container's normal network path. It supports echo only, not every
+ICMP type, GRE, EoIP or Ethernet tunnels. Correlation retains guest identity with
+finite request, expiry and shared-memory limits. Existing pinned images retain
+their prior activation policy; the image above predates default-enabled echo.
 
 Library callers selecting `Config.Protocol = "ip4:icmp"` (the retained library
 default) try raw ICMP, then ping sockets. Capability-free Linux ping sockets
@@ -109,7 +121,7 @@ arbitrary raw ICMP forwarding. Startup fails if neither socket is available.
 Privileged raw-ICMP deployment is **outside this validated deployment profile**.
 Its library implementation remains for compatibility; do not claim its runtime
 behavior was covered by the executable image gate. Library users wanting the
-same privilege contract as the executable should explicitly select `ip4:tcp`,
-which activates the TCP/UDP bridges. See [README.md](README.md#icmp-privileges).
+same privilege contract as the executable should select `ip4:tcp` and `ICMPEcho=true`,
+which activates the TCP/UDP bridges and unprivileged echo. See [README.md](README.md#icmp-privileges).
 
 Compose option semantics follow the [Docker Compose service reference](https://docs.docker.com/reference/compose-file/services/).

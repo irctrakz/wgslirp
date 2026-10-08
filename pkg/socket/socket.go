@@ -127,8 +127,16 @@ func (s *SocketInterface) Start() error {
 			s.conn = conn
 		}
 	} else if strings.Contains(protocol, "tcp") || strings.Contains(protocol, "udp") {
-		// Slirp modes don't require a raw socket listener. We'll rely on bridges (tcp/udp) only.
+		// TCP/UDP uses ordinary sockets. Optional echo uses only a ping socket,
+		// even if the process happens to have raw-socket privileges.
 		s.conn = nil
+		if s.config.ICMPEcho {
+			conn, echoErr := icmp.ListenPacket("udp4", "0.0.0.0")
+			if echoErr != nil {
+				return fmt.Errorf("ICMP_ECHO: guest ping unavailable: %w; permit the process group in the network namespace's net.ipv4.ping_group_range or set ICMP_ECHO=false for TCP/UDP-only operation", echoErr)
+			}
+			s.dgram = newICMPDatagram(conn)
+		}
 	} else {
 		return fmt.Errorf("unsupported protocol: %s", protocol)
 	}

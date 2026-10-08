@@ -2,6 +2,9 @@
 
 ## Unreleased — development branch
 
+- Enable guest IPv4 ping by default using unprivileged ping sockets, with
+  `ICMP_ECHO=false` as an opt-out. Unavailable sockets fail startup actionably;
+  no capabilities, sysctl writes, raw fallback or subprocesses are introduced.
 - Remove always-unsupported kernel-TUN constructors and the unused legacy
   JSON/YAML configuration package and core configuration types.
 - Retire debug-dependent packet APIs and configurable packet wrapping in favor

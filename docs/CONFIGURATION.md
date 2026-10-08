@@ -12,6 +12,12 @@ Unknown variables are not rejected (the process inherits unrelated OS variables)
 
 ## Validation and migration
 
+- `ICMP_ECHO` defaults to true in the executable and uses unprivileged ping sockets
+  exclusively. Explicit false retains TCP/UDP-only operation. Unavailable ping
+  sockets fail startup with the host-policy/disable instructions. No sysctl writes,
+  raw-socket fallback or subprocesses are introduced. Go library defaults are
+  unchanged; explicit `Config.ICMPEcho=true` adds echo in TCP/UDP mode.
+
 - Boolean controls accept `true/false`, `1/0`, `yes/no`, `on/off`, ignoring case
   and surrounding whitespace. Empty/unknown boolean values fail startup.
 - `IPV4_REASSEMBLY` defaults to true in the executable and `socket.DefaultConfig()`.

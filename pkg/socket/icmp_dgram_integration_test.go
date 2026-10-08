@@ -29,15 +29,30 @@ func (c *packetChannelCapture) ProcessPacket(p core.Packet) error {
 }
 
 func TestICMPDatagramIntegration_EchoLoopback(t *testing.T) {
+	testICMPDatagramEcho(t, false)
+}
+
+func TestICMPDatagramIntegration_TCPUDPEcho(t *testing.T) {
+	testICMPDatagramEcho(t, true)
+}
+
+func testICMPDatagramEcho(t *testing.T, echoOnly bool) {
 	required := os.Getenv("WGSLIRP_REQUIRE_ICMP_DGRAM") == "1"
 	if raw, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0"); err == nil {
 		raw.Close()
 		if required {
 			t.Fatal("test must run without raw socket privileges")
 		}
-		t.Skip("run with all capabilities dropped to exercise startup fallback")
+		if !echoOnly {
+			t.Skip("run with all capabilities dropped to exercise startup fallback")
+		}
 	}
-	s := NewSocketInterface(Config{IPAddress: "10.0.0.5", MTU: 1500, Protocol: "ip4:icmp"})
+	cfg := Config{IPAddress: "10.0.0.5", MTU: 1500, Protocol: "ip4:icmp"}
+	if echoOnly {
+		cfg.Protocol = "ip4:tcp"
+		cfg.ICMPEcho = true
+	}
+	s := NewSocketInterface(cfg)
 	capture := &packetChannelCapture{ch: make(chan []byte, 1)}
 	s.SetPacketProcessor(capture)
 	if err := s.Start(); err != nil {

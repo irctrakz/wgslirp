@@ -8,7 +8,8 @@ sockets, slirp-style. The application runs without root, kernel TUN devices,
 added capabilities or host forwarding/NAT rules. Outbound connections use the
 server's network access and egress address.
 
-The executable supports **IPv4 TCP/UDP**. It does not forward IPv6 or guest ping.
+The executable supports **IPv4 TCP/UDP and ICMP echo (ping)**. It does not forward
+IPv6 or arbitrary ICMP messages. Ping uses unprivileged host ping sockets.
 Incoming IPv4 fragment reassembly and bounded packet pooling are enabled by
 default, with explicit opt-outs. See [ICMP scope](#icmp-privileges) for library users.
 
@@ -18,6 +19,8 @@ The maintained [Compose file](../deploy/compose.yaml) runs a non-root container
 with all capabilities dropped, a read-only root, bounded logs and finite CPU,
 memory and PID limits. Its 1 CPU / 256 MiB profile is a validated small-workload
 baseline; size resources for your deployment using measurements.
+The pinned image below predates default-enabled ping; that change requires its
+own actual-image validation before promotion.
 
 Run these commands from the repository root on a Docker host. This Linux/amd64
 development image passed encrypted forwarding, fragment handling and SIGTERM
@@ -81,7 +84,7 @@ Verify forwarding from the connected client with a bounded TCP request:
 curl --max-time 10 https://example.com
 ```
 
-Guest ping is not a forwarding test for this executable. To stop and remove the
+In images with default-enabled echo, guest ping also checks forwarding. To stop and remove the
 container, run `docker compose -f deploy/compose.yaml down`.
 See [deployment guidance](DEPLOYMENT.md) and [image acceptance evidence](API_MIGRATION.md#acceptance-at-4b2e254)
 for runtime restrictions, credentials and validation details.
@@ -108,6 +111,7 @@ Important defaults are:
 | `MAX_PENDING_TCP_DIALS` | 64 | Concurrent outbound TCP dial attempts. |
 | `WG_TUN_QUEUE_CAP` | 1024 | Packets queued toward WireGuard. |
 | `SOCKET_BUFFER_CAP_BYTES` | 67108864 | Shared live buffer budget (64 MiB). |
+| `ICMP_ECHO` | true | Guest ping through unprivileged ping sockets; false disables it. |
 | `IPV4_REASSEMBLY` | true | Bounded incoming fragment reassembly. |
 | `POOLING` | true | Bounded synthesized-packet cache, including ACK/control packets. |
 
@@ -178,15 +182,27 @@ and [lifecycle contracts](LIFECYCLE.md).
 
 ### ICMP privileges
 
-The executable selects TCP/UDP-only mode. Adding `CAP_NET_RAW` does not enable
-guest ping. TCP failure signaling can still synthesize ICMP errors.
+The executable enables guest IPv4 echo through Linux ping sockets by default.
+It never falls back to raw sockets or launches a `ping` process. The container's
+network namespace must permit its process group through
+`net.ipv4.ping_group_range`. The application never writes that policy. Startup
+fails with an actionable error when echo is enabled but the socket is unavailable;
+set `ICMP_ECHO=false` to retain TCP/UDP-only operation. TCP failure signaling
+can still synthesize ICMP errors with echo disabled.
+
+The ping socket sends to the guest's destination through the container's normal
+host network stack; it does not inject packets directly into the Docker host's
+namespace. Replies preserve guest echo ID, sequence and payload. Request
+correlation is limited to 1,024 outstanding entries with five-second expiry and
+shares the socket buffer budget. Arbitrary ICMP, GRE and Ethernet tunneling are
+outside this executable's scope.
 
 Go library consumers can select `socket.Config.Protocol = "ip4:icmp"` (the library
 default). This tries raw ICMP, then echo-only ping sockets. Capability-free Linux
 ping sockets require the process group to be permitted by the host's
 `net.ipv4.ping_group_range`; the application never writes that policy. Startup
 fails if neither socket is available. Privileged raw ICMP is outside the validated
-container profile. See [optional ICMP deployment scope](DEPLOYMENT.md#optional-icmp-scope).
+container profile. See [optional ICMP deployment scope](DEPLOYMENT.md#guest-ping-and-icmp-scope).
 
 ## Troubleshooting
 
@@ -196,7 +212,7 @@ container profile. See [optional ICMP deployment scope](DEPLOYMENT.md#optional-i
 | Flow limit reached | Inspect TCP/UDP admission counters and active flows. TCP slots include four-minute TIME-WAIT; account for churn before increasing finite caps and container resources. |
 | Buffer or fragment quota refusals | Inspect shared-buffer usage, reassembly counters and expiry recovery; raising flow caps alone does not raise these budgets. |
 | MTU-related failures | Check client/server MTUs and the reported rejection reason. An accepted oversized-packet counter alone is not evidence of a drop. |
-| Guest ping fails | Expected for the executable; verify forwarding with TCP or UDP. |
+| Guest ping fails | Check `ICMP_ECHO`, namespace ping-socket permission, destination reachability and ICMP filtering. TCP/UDP success does not prove the destination accepts echo. |
 | Startup rejects a removed setting | Delete `POOL_WRAP` / `TCP_GATE_LOG`; follow the migration guide. |
 
 Recovery activity is not itself a connection failure. Confirm loss, sustained

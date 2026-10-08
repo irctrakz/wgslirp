@@ -90,3 +90,32 @@ func TestSocketIPv4ReassemblyDefaultAndOverride(t *testing.T) {
 		})
 	}
 }
+
+func TestSocketICMPEchoDefaultAndOverride(t *testing.T) {
+	for _, tc := range []struct {
+		value                     string
+		present, enabled, invalid bool
+	}{
+		{"", false, true, false}, {"false", true, false, false},
+		{"true", true, true, false}, {"off", true, false, false},
+		{"", true, false, true}, {"maybe", true, false, true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			cfg, err := socketConfig(1380, func(key string) (string, bool) {
+				return tc.value, key == "ICMP_ECHO" && tc.present
+			})
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("invalid ICMP_ECHO accepted")
+				}
+				return
+			}
+			if err != nil || cfg.Protocol != "ip4:tcp" || cfg.ICMPEcho != tc.enabled {
+				t.Fatalf("echo policy: %+v %v", cfg, err)
+			}
+		})
+	}
+	if socket.DefaultConfig().ICMPEcho {
+		t.Fatal("changed legacy library protocol policy")
+	}
+}

@@ -58,6 +58,10 @@ type Config struct {
 	// Default is ip4:icmp
 	Protocol string
 
+	// ICMPEcho enables ping sockets in TCP/UDP mode without raw-socket fallback.
+	// Startup fails if the host does not permit them. Library default is false.
+	ICMPEcho bool
+
 	// TCPAckDelayMs controls delayed ACK scheduling (milliseconds); 0 is immediate.
 	TCPAckDelayMs int
 

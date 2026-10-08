@@ -851,6 +851,17 @@ candidate before implementation; no broad representation or lock rewrite is just
   artifacts and same-digest image promotion were independently verified; see
   [acceptance](API_MIGRATION.md#acceptance-at-4b2e254).
 
+## Default-enabled guest ping
+
+- [x] Activate the existing bounded echo datagram bridge in the executable using
+  ping sockets only; retain library protocol defaults and `ICMP_ECHO=false`.
+  Namespace permission failure is actionable and fail-fast. No raw fallback,
+  subprocesses, application sysctl writes or extra capabilities.
+- [ ] Validate Linux unit/race, integration/race and actual-image encrypted echo,
+  explicit-disabled operation and deliberately denied ping-socket startup under
+  the existing resource/cleanup gates. Promote only the same tested artifact.
+  Issue #3's arbitrary-ICMP/GRE/EoIP scope is separate from echo support.
+
 ## First implementation milestone
 
 Complete Phase 0 and Phase 1 before beginning broad TCP refactoring. The milestone is reached when publishing is test-gated, sensitive diagnostics are repaired, lifecycle/health regressions pass, and invalid configuration cannot cause the identified panics. Then make resource controls effective before investing in structural cleanup.

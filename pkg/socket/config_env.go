@@ -57,7 +57,7 @@ func ConfigFromEnv(base Config, lookup func(string) (string, bool)) (Config, err
 	}{
 		{"TCP_ACK_TRACE", &transport.AckTrace}, {"TCP_LOG_HANDSHAKE", &transport.LogHandshake},
 		{"TCP_ENABLE_SACK", &transport.EnableSACK}, {"COPY_TOS", &transport.CopyTOS},
-		{"IPV4_REASSEMBLY", &cfg.IPv4Reassembly},
+		{"IPV4_REASSEMBLY", &cfg.IPv4Reassembly}, {"ICMP_ECHO", &cfg.ICMPEcho},
 	} {
 		if value, present := lookup(setting.name); present {
 			switch strings.ToLower(strings.TrimSpace(value)) {

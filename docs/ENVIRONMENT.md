@@ -45,6 +45,19 @@ zero-value rules and Go library adapters.
 - `HEALTH_DNS_NAME`: name for both host resolver and slirp DNS probes (default `example.com`).
 - `HEALTH_DNS_IP`: IPv4 DNS server for the slirp probe (default `1.1.1.1`). Success requires a complete response from the expected server to the probe's address/port, matching transaction ID and question, successful DNS status, and an A answer for `HEALTH_DNS_NAME` (including CNAME chains).
 
+## Guest ping
+
+`ICMP_ECHO` defaults to true in the executable. It enables IPv4 echo requests
+through a ping socket (`SOCK_DGRAM`), never raw sockets or subprocesses. False
+disables guest echo. The container network namespace must allow the process group
+in `net.ipv4.ping_group_range`; unavailable sockets fail startup with instructions
+to permit that group or disable echo. The application does not alter sysctls.
+Only echo request/reply is supported, not arbitrary ICMP or encapsulated tunnels.
+
+Library callers retain the legacy protocol default. For capability-free TCP/UDP
+plus echo, set `Config.Protocol="ip4:tcp"` and `Config.ICMPEcho=true`. This bool
+controls ping sockets in TCP/UDP mode; it does not override legacy `ip4:icmp` mode.
+
 ## Queues and pooling
 
 | Setting | Default | Meaning |
