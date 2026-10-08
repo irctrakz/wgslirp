@@ -1,12 +1,12 @@
 package tun
 
 import (
-    "fmt"
-    "sync"
-    "sync/atomic"
+	"fmt"
+	"sync"
+	"sync/atomic"
 
-    "github.com/irctrakz/wgslirp/pkg/core"
-    "github.com/irctrakz/wgslirp/pkg/logging"
+	"github.com/irctrakz/wgslirp/pkg/core"
+	"github.com/irctrakz/wgslirp/pkg/logging"
 )
 
 // MockTUNDevice is a mock implementation of core.TUNDevice for testing
@@ -117,7 +117,13 @@ func (m *MockTUNDevice) Stop() error {
 
 // Metrics returns metrics for the TUN device
 func (m *MockTUNDevice) Metrics() core.TUNMetrics {
-	return m.metrics
+	return core.TUNMetrics{
+		PacketsSent:     atomic.LoadUint64(&m.metrics.PacketsSent),
+		BytesSent:       atomic.LoadUint64(&m.metrics.BytesSent),
+		PacketsReceived: atomic.LoadUint64(&m.metrics.PacketsReceived),
+		BytesReceived:   atomic.LoadUint64(&m.metrics.BytesReceived),
+		Errors:          atomic.LoadUint64(&m.metrics.Errors),
+	}
 }
 
 // readLoop reads packets from the packet channel

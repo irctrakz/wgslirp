@@ -219,3 +219,43 @@ func boolToString(b bool) string {
 	}
 	return "false"
 }
+
+func TestPacketBufferSizeTracksCapacityWithDebugCopies(t *testing.T) {
+	original := IsDebugMode()
+	defer SetDebugMode(original)
+	data := make([]byte, 20, 4096)
+	simple := &SimplePacket{data: data}
+	pooled := NewPooledPacket(data, func([]byte) {})
+	for _, debug := range []bool{false, true} {
+		SetDebugMode(debug)
+		if PacketBufferSize(simple) != 4096 || PacketBufferSize(pooled) != 4096 {
+			t.Fatal("retained backing capacity was not counted")
+		}
+	}
+	ReleasePacket(pooled)
+	if PacketBufferSize(pooled) != 0 {
+		t.Fatal("released packet still retains storage")
+	}
+}
+
+func TestBorrowedPacketViewAndEmptyRelease(t *testing.T) {
+	original := IsDebugMode()
+	defer SetDebugMode(original)
+	SetDebugMode(true)
+	p := NewPacket([]byte{1, 2, 3})
+	view := BorrowPacketData(p)
+	copied := p.Data()
+	if &view[0] == &copied[0] {
+		t.Fatal("public debug Data stopped copying")
+	}
+	if testing.AllocsPerRun(100, func() { _ = BorrowPacketData(p) }) != 0 {
+		t.Fatal("borrowed view allocated")
+	}
+	releases := 0
+	empty := NewPooledPacket(nil, func([]byte) { releases++ })
+	ReleasePacket(empty)
+	ReleasePacket(empty)
+	if releases != 1 {
+		t.Fatalf("empty release calls=%d", releases)
+	}
+}

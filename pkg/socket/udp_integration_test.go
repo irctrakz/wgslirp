@@ -78,7 +78,7 @@ func TestUDPIntegration_Echo(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var got []byte
 	for time.Now().Before(deadline) {
-		for _, p := range cap.pkts {
+		for _, p := range cap.snapshot() {
 			_, _, sp, dp, pl, ok := parseIPv4UDP(p)
 			if ok && sp == srvPort && dp == cliPort && len(pl) > 0 {
 				got = pl

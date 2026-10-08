@@ -101,7 +101,7 @@ func (m *MockSocketInterface) WritePacket(packet core.Packet) error {
 
 	// Store the packet
 	m.mu.Lock()
-	m.sentPackets = append(m.sentPackets, packet)
+	m.sentPackets = append(m.sentPackets, core.NewPacket(append([]byte(nil), data...)))
 	m.mu.Unlock()
 
 	// Update metrics

@@ -73,10 +73,10 @@ func TestTCPIntegration_Echo(t *testing.T) {
 
 	// Expect SYN-ACK
 	time.Sleep(50 * time.Millisecond)
-	if len(proc.pkts) == 0 {
+	if len(proc.snapshot()) == 0 {
 		t.Fatalf("no packets captured after SYN")
 	}
-	_, _, _, _, sseq, _, flags, _ := parseTCP(proc.pkts[0])
+	_, _, _, _, sseq, _, flags, _ := parseTCP(proc.snapshot()[0])
 	if flags&0x12 != 0x12 { // SYN|ACK
 		t.Fatalf("expected SYN|ACK, got flags=0x%02x", flags)
 	}
@@ -98,9 +98,9 @@ func TestTCPIntegration_Echo(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var got []byte
 	for time.Now().Before(deadline) {
-		if len(proc.pkts) >= 2 { // SYN-ACK + ACK or data
+		if len(proc.snapshot()) >= 2 { // SYN-ACK + ACK or data
 			// Search for data segment from server
-			for _, p := range proc.pkts {
+			for _, p := range proc.snapshot() {
 				_, _, sp, dp, _, _, f, pl := parseTCP(p)
 				if sp == srvPort && dp == port && (f&0x18) == 0x18 && len(pl) > 0 {
 					got = pl
@@ -125,6 +125,7 @@ func TestTCPIntegration_Echo(t *testing.T) {
 
 	// Allow server goroutine to exit
 	<-done
+	waitTCPClosed(t, s.tcp)
 
 	// Verify metrics: one TCP connection created and closed, packets both ways
 	dm := s.DetailedMetrics()
@@ -202,10 +203,10 @@ func TestTCPIntegration_OutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
-	if len(cap.pkts) == 0 {
+	if len(cap.snapshot()) == 0 {
 		t.Fatal("no syn-ack")
 	}
-	_, _, _, _, sseq, _, _, _ := parseTCP(cap.pkts[len(cap.pkts)-1])
+	_, _, _, _, sseq, _, _, _ := parseTCP(cap.snapshot()[len(cap.snapshot())-1])
 	ack := buildIPv4TCP(cliIP, srvIP, cliPort, srvPort, cseq+1, sseq+1, 0x10, nil)
 	if err := s.tcp.HandleOutbound(ack); err != nil {
 		t.Fatal(err)
@@ -249,7 +250,7 @@ func TestTCPIntegration_OutOfOrder(t *testing.T) {
 	deadline := time.Now().Add(1 * time.Second)
 	var echoed []byte
 	for time.Now().Before(deadline) {
-		for _, p := range cap.pkts {
+		for _, p := range cap.snapshot() {
 			_, _, sp, dp, _, _, f, pl := parseTCP(p)
 			if sp == srvPort && dp == cliPort && (f&0x18) == 0x18 && len(pl) > 0 {
 				echoed = pl
