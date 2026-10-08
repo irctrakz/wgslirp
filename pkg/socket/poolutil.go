@@ -51,7 +51,12 @@ func bufMaybePool(n int) []byte {
 
 // WrapPacket wraps a buffer into a Packet according to the current
 // pooling/ownership policy. It always returns a safe Packet for asynchronous
-// processing, independently of DEBUG settings.
+// processing, independently of DEBUG settings. When pooling and wrapping are
+// enabled, callers transfer the buffer and must never mutate or reuse it.
+//
+// Deprecated: use core.NewCopiedPacket for a snapshot, core.NewBorrowedPacket
+// for immutable caller storage, or core.NewPooledPacket for explicit release.
+// This adapter retains its historical configuration-dependent behavior.
 func WrapPacket(b []byte) core.Packet {
 	if poolingEnabled() && poolWrapEnabled() {
 		return core.NewPooledPacket(b, func(buf []byte) {

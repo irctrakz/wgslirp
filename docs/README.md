@@ -4,7 +4,7 @@ A userspace WireGuard router that forwards IPv4 TCP/UDP through ordinary host
 sockets, slirp-style. The executable needs no kernel TUN device, forwarding/NAT
 rules or added kernel capabilities. Outbound traffic uses the server network path.
 
-This integration checkpoint contains: **refactor tcp responsibilities and share packet encoding**.
+This integration checkpoint contains: **validate encrypted workloads and simplify transport ownership**.
 It is a review boundary, not a newly accepted release image. Historical plans and
 benchmark records remain on the architecture-hardening branch; the PR description
 records the validation and migration relevant to this checkpoint.

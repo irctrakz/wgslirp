@@ -30,6 +30,21 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          validation_dir=$(mktemp -d)
+          trap 'rm -rf "$validation_dir"' EXIT
+          cp deploy/compose.yaml "$validation_dir/compose.yaml"
+          printf 'WG_PRIVATE_KEY=validation-only\n' > "$validation_dir/wgslirp.env"
+          if env -u WGSLIRP_IMAGE docker compose -f "$validation_dir/compose.yaml" config --quiet >/dev/null 2>&1; then
+            echo 'Deployment accepted a missing image selection' >&2
+            exit 1
+          fi
+          export WGSLIRP_IMAGE="ghcr.io/irctrakz/wgslirp@sha256:$(printf '%064d' 0)"
+          docker compose -f "$validation_dir/compose.yaml" config --quiet
+
       - name: Build and vet
         run: |
           go build ./...

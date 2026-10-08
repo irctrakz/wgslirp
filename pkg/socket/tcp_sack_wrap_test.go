@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func sackOption(left, right uint32) []byte {
@@ -81,5 +82,53 @@ func TestTCPSACKRejectsUnsentAndStaleRanges(t *testing.T) {
 	parseSACKBlocks(f, nil)
 	if len(f.sackList) != 0 {
 		t.Fatal("stale SACK retained")
+	}
+}
+
+// A receiver may discard selectively acknowledged bytes. Only cumulative ACKs
+// release ownership; an expired oldest segment must remain retransmittable.
+func TestTCPRTORetransmitsRenegedSACKAcrossWrap(t *testing.T) {
+	for _, start := range []uint32{1000, ^uint32(0) - 899} {
+		t.Run(fmt.Sprint(start), func(t *testing.T) {
+			b, f, capture := concurrentFlow(t)
+			f.sndUna, f.serverNxt = start, start
+			f.sackPermitted = true
+			payload := bytes.Repeat([]byte("renege"), 200)
+			if !b.sendPayload(f, payload) {
+				t.Fatal("send failed")
+			}
+			p := buildIPv4TCPOpts(f.srcIP, f.dstIP, f.srcPort, f.dstPort, 100, start, 0x10, nil, sackOption(start+600, start+1200))
+			if err := b.HandleOutbound(p); err != nil {
+				t.Fatal(err)
+			}
+			closeOutbound(t, b, f, 100, start+600, 0x10, nil)
+			f.stateMu.Lock()
+			if !isSACKed(f, start+600, start+1200) {
+				f.stateMu.Unlock()
+				t.Fatal("SACK was not retained")
+			}
+			f.rto = 50 * time.Millisecond
+			f.txMu.Lock()
+			f.txQueue[0].sentAt = time.Now().Add(-time.Second)
+			f.txMu.Unlock()
+			f.stateMu.Unlock()
+			before := len(capture.snapshot())
+			if !b.launch(func() { b.retransmitLoop(f) }) {
+				t.Fatal("worker rejected")
+			}
+			packet, _ := closePacket(t, capture, before, func(p []byte) bool { return len(p) > 40 })
+			if binary.BigEndian.Uint32(packet[24:28]) != start+600 || !bytes.Equal(packet[40:], payload[600:]) {
+				t.Fatal("wrong reneged segment retransmitted")
+			}
+			f.stateMu.Lock()
+			stillSACKed := isSACKed(f, start+600, start+1200)
+			f.stateMu.Unlock()
+			if stillSACKed {
+				t.Fatal("stale SACK survived RTO")
+			}
+			closeOutbound(t, b, f, 100, start+1200, 0x10, nil)
+			b.stop()
+			assertBudget(t, b.buffers, 0)
+		})
 	}
 }

@@ -25,16 +25,20 @@ func newTeeProcessor(a, b core.PacketProcessor) core.PacketProcessor {
 }
 func (t *teeProcessor) ProcessPacket(p core.Packet) error {
 	// Copy before transferring ownership: A may release a pooled packet.
-	var cp []byte
+	var observerPacket core.Packet
 	if t.b != nil {
-		cp = append([]byte(nil), p.Data()...)
+		observerPacket = core.NewCopiedPacket(core.BorrowPacketData(p))
 	}
 	var err error
 	if t.a != nil {
 		err = t.a.ProcessPacket(p)
+	} else {
+		core.ReleasePacket(p)
 	}
 	if t.b != nil {
-		_ = t.b.ProcessPacket(core.NewPacket(cp))
+		if err := t.b.ProcessPacket(observerPacket); err != nil {
+			core.ReleasePacket(observerPacket)
+		}
 	}
 	return err
 }
@@ -51,8 +55,9 @@ type healthSink struct{ ch chan []byte }
 
 func newHealthSink() *healthSink { return &healthSink{ch: make(chan []byte, 16)} }
 func (h *healthSink) ProcessPacket(p core.Packet) error {
+	defer core.ReleasePacket(p)
 	select {
-	case h.ch <- append([]byte(nil), p.Data()...):
+	case h.ch <- core.CopyPacketData(p):
 	default:
 	}
 	return nil
@@ -96,7 +101,7 @@ func runSlirpDNSHealth(ctx context.Context, si *socket.SocketInterface, sink *he
 	srcIP := [4]byte{10, 0, 0, 2}
 	dstIP := [4]byte{dst[0], dst[1], dst[2], dst[3]}
 	pkt := buildIPv4UDP(srcIP, dstIP, 40053, 53, payload)
-	if err := si.WritePacket(core.NewPacket(pkt)); err != nil {
+	if err := si.WritePacket(core.NewBorrowedPacket(pkt)); err != nil {
 		logging.Warnf("Health: slirp DNS send failed: %v", err)
 		return
 	}

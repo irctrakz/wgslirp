@@ -27,10 +27,8 @@ import (
 //   * Fast retransmit on 3 duplicate ACKs.
 //   * Simple RTO with exponential backoff and a retransmission queue.
 // - Applies backpressure end-to-end:
-//   * Reader pauses when per-flow queues exceed a high watermark and resumes
-//     on a low watermark.
-//   * Scheduler cooperates with downstream (e.g., WG TUN) backpressure by
-//     requeueing and yielding briefly instead of dropping.
+//   * Reader waits for ACK/window progress when send allowances are exhausted.
+//   * Retained payloads are charged to per-flow and aggregate buffer limits.
 //
 // The goal is a robust, generic TCP bridge that relies on TCP flow control and
 // retransmission rather than protocol-specific tweaks.
@@ -182,10 +180,12 @@ type tcpFlow struct {
 	futureBytes int
 
 	// Peer receive window information (from client)
-	clientMSS uint16
-	wsIn      uint8  // peer's window scale (client SYN option)
-	wsOut     uint8  // our advertised window scale (SYN-ACK)
-	advWnd    uint32 // latest advertised peer window in bytes
+	// Immutable after publication: peer MSS bounded by the initial MTU/clamp.
+	// Current MTU/clamp can further restrict segmentation without changing it.
+	mss    int
+	wsIn   uint8  // peer's window scale (client SYN option)
+	wsOut  uint8  // our advertised window scale (SYN-ACK)
+	advWnd uint32 // latest advertised peer window in bytes
 
 	// delayed ack scheduling
 	ackScheduled bool
@@ -207,7 +207,6 @@ type tcpFlow struct {
 		data    []byte
 		sentAt  time.Time
 		retries int
-		rtx     bool
 	}
 	dupAckCnt int
 	// RTT/RTO estimation (RFC 6298)
@@ -219,13 +218,9 @@ type tcpFlow struct {
 	// Notify sender when ACK/window updates arrive.
 	ackCh chan struct{}
 
-	// handshake state
-	synAckSent bool
-
 	// SACK loss recovery (RFC 6675 simplified)
 	sackRecovery bool
 	recover      uint32
-	pipeBytes    int
 
 	// SACK support
 	sackPermitted bool
@@ -237,9 +232,7 @@ type tcpFlow struct {
 	}
 
 	// Congestion control (server->guest)
-	cc        congestionControl
-	ccEnabled bool
-	mss       int
+	cc congestionControl // nil when congestion control is disabled
 }
 
 // newTCPBridge constructs a TCP bridge instance and wires optional per-flow

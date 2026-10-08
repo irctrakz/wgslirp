@@ -60,7 +60,6 @@ func (b *tcpBridge) sendSYNACKLocked(f *tcpFlow, packet core.Packet) error {
 		b.removeFlowLocked(f)
 		return fmt.Errorf("TCP SYN-ACK delivery refused")
 	}
-	f.synAckSent = true
 	return nil
 }
 

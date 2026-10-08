@@ -43,6 +43,45 @@ func TestSocketCountsFramesOnceWhileTCPCountsHostWrites(t *testing.T) {
 	}
 }
 
+func TestAsyncHostWriteFailureResetsOnceAndReleasesBuffers(t *testing.T) {
+	for _, stage := range []string{"pending", "reassembly", "half-close"} {
+		t.Run(stage, func(t *testing.T) {
+			b, f, capture := concurrentFlow(t)
+			conn, _ := tcpBudgetPair(t)
+			conn.Close() // Deterministic host write/deadline/half-close failure.
+			f.stateMu.Lock()
+			defer f.stateMu.Unlock()
+			f.conn = conn
+			if stage == "pending" {
+				f.pending = [][]byte{[]byte("first"), []byte("later")}
+				f.pendingBytes = 10
+				if !b.buffers.acquire(10 + 2*bufferEntryAllowance) {
+					t.Fatal("pending reservation")
+				}
+			}
+			if stage != "half-close" && !b.queueFuture(f, f.clientNxt, []byte("queued")) {
+				t.Fatal("reassembly reservation")
+			}
+			f.finReceived = true
+			b.flushPending(f)
+			if !f.closed || f.hostWriteClosed || f.clientNxt != 100 {
+				t.Fatal("failed write advanced stream or half-close")
+			}
+			if b.metrics.Errors != 1 || b.parent.metrics.Errors != 1 || b.metrics.PacketsSent != 0 || b.metrics.BytesSent != 0 || b.pendFlush != 0 || f.toSrvBytes != 0 || f.toSrvPkts != 0 || b.bufferDrops.Load() != 1 {
+				t.Fatal("failed host operation changed counters")
+			}
+			packets := capture.snapshot()
+			if len(packets) != 1 || packets[0][33] != fRST|fACK {
+				t.Fatal("failure did not emit exactly one reset")
+			}
+			assertBudget(t, b.buffers, 0)
+			if len(b.flowSnapshot()) != 0 {
+				t.Fatal("failed flow remained registered")
+			}
+		})
+	}
+}
+
 func TestUDPInjectedDialAndDeliveryCounters(t *testing.T) {
 	s := NewSocketInterface(Config{Protocol: "ip4:udp", MTU: 1500})
 	s.SetPacketProcessor(&captureProcessor{})

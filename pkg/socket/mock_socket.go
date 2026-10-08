@@ -134,11 +134,11 @@ func (m *MockSocketInterface) WritePacket(packet core.Packet) error {
 	}
 
 	// Get the packet data
-	data := packet.Data()
+	data := core.BorrowPacketData(packet)
 
 	// Store the packet
 	m.mu.Lock()
-	m.sentPackets = append(m.sentPackets, core.NewPacket(append([]byte(nil), data...)))
+	m.sentPackets = append(m.sentPackets, core.NewCopiedPacket(data))
 	m.mu.Unlock()
 
 	// Update metrics
@@ -179,10 +179,10 @@ func (m *MockSocketInterface) SimulatePacketReceived(packet core.Packet) error {
 	}
 
 	// Copy before the callback can consume/release the packet.
-	data := append([]byte(nil), core.BorrowPacketData(packet)...)
+	data := core.CopyPacketData(packet)
 	size := len(data)
 	m.mu.Lock()
-	m.receivedPackets = append(m.receivedPackets, core.NewPacket(data))
+	m.receivedPackets = append(m.receivedPackets, core.NewBorrowedPacket(data))
 	m.mu.Unlock()
 
 	// Update metrics
@@ -208,7 +208,7 @@ func (m *MockSocketInterface) GetSentPackets() []core.Packet {
 	// Return a copy to avoid race conditions
 	packets := make([]core.Packet, len(m.sentPackets))
 	for i, packet := range m.sentPackets {
-		packets[i] = core.NewPacket(append([]byte(nil), core.BorrowPacketData(packet)...))
+		packets[i] = core.NewCopiedPacket(core.BorrowPacketData(packet))
 	}
 	return packets
 }
@@ -222,7 +222,7 @@ func (m *MockSocketInterface) GetReceivedPackets() []core.Packet {
 	// Return a copy to avoid race conditions
 	packets := make([]core.Packet, len(m.receivedPackets))
 	for i, packet := range m.receivedPackets {
-		packets[i] = core.NewPacket(append([]byte(nil), core.BorrowPacketData(packet)...))
+		packets[i] = core.NewCopiedPacket(core.BorrowPacketData(packet))
 	}
 	return packets
 }

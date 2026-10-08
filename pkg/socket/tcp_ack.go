@@ -72,7 +72,7 @@ func (b *tcpBridge) processTCPACKLocked(flow *tcpFlow, segment tcpSegment) {
 		}
 		flow.txMu.Unlock()
 		// Notify CC of ACKed bytes
-		if flow.ccEnabled && flow.cc != nil {
+		if flow.cc != nil {
 			diff := int(ack - prevUna)
 			if diff > 0 {
 				flow.cc.OnAck(diff)

@@ -92,9 +92,6 @@ func TestDialReservationTransfersToFallbackAndCancelsOnRST(t *testing.T) {
 	defer b.stop()
 	started := make(chan struct{}, 1)
 	b.dial = func(ctx context.Context, _ string, timeout time.Duration) (*net.TCPConn, error) {
-		if timeout < time.Second {
-			return nil, &net.DNSError{IsTimeout: true}
-		}
 		started <- struct{}{}
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -118,6 +115,7 @@ func TestDialReservationTransfersToFallbackAndCancelsOnRST(t *testing.T) {
 
 func TestDialHardFailureReleasesReservation(t *testing.T) {
 	b, f, _ := concurrentFlow(t)
+	b.tuning.FastDialMs = 1000
 	b.dial = func(context.Context, string, time.Duration) (*net.TCPConn, error) { return nil, errors.New("refused") }
 	for i := 0; i < 5; i++ {
 		_ = b.HandleOutbound(buildIPv4TCP(f.srcIP, f.dstIP, 40001, 80, 1, 0, 2, nil))
@@ -134,6 +132,7 @@ func TestDuplicateSuccessfulDialsReleaseBothReservations(t *testing.T) {
 	parent := NewSocketInterface(DefaultConfig())
 	parent.processor = &captureProcessor{}
 	b := newTCPBridge(parent)
+	b.tuning.FastDialMs = 1000
 	defer b.stop()
 	started, gate := make(chan struct{}, 2), make(chan struct{})
 	b.dial = func(ctx context.Context, address string, _ time.Duration) (*net.TCPConn, error) {
@@ -172,7 +171,7 @@ func TestDuplicateSuccessfulDialsReleaseBothReservations(t *testing.T) {
 func TestAggregateSendExhaustionDoesNotDiscardOtherFlow(t *testing.T) {
 	b, first, _ := concurrentFlow(t)
 	b.buffers.limit = bufferCharge(4)
-	second := &tcpFlow{key: "other", state: tcpEstablished, serverNxt: 1000, sndUna: 1000, clientMSS: 600, advWnd: 1200, rtoStop: make(chan struct{}), ackCh: make(chan struct{}, 1)}
+	second := &tcpFlow{key: "other", state: tcpEstablished, serverNxt: 1000, sndUna: 1000, mss: 600, advWnd: 1200, rtoStop: make(chan struct{}), ackCh: make(chan struct{}, 1)}
 	b.mu.Lock()
 	b.flows[second.key] = second
 	b.mu.Unlock()

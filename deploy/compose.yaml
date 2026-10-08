@@ -1,0 +1,23 @@
+services:
+  wg-router:
+    image: ${WGSLIRP_IMAGE:?Set WGSLIRP_IMAGE to a validated GHCR digest}
+    platform: linux/amd64
+    env_file: ./wgslirp.env
+    ports:
+      - "51820:51820/udp"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 128
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "1"
+    stop_grace_period: 10s
+    restart: "no"

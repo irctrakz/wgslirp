@@ -72,7 +72,7 @@ func (m *MockTUNDevice) WritePacket(packet core.Packet) error {
 		return fmt.Errorf("nil packet")
 	}
 	// Get the packet data
-	data := packet.Data()
+	data := core.BorrowPacketData(packet)
 
 	// Make a copy of the data to avoid any race conditions
 	dataCopy := make([]byte, len(data))
@@ -189,7 +189,7 @@ func (m *MockTUNDevice) readLoop() {
 
 			// Process the packet
 			if m.processor != nil {
-				packet := core.NewPacket(data)
+				packet := core.NewBorrowedPacket(data)
 				if err := m.processor.ProcessPacket(packet); err != nil {
 					logging.Errorf("Failed to process packet: %v", err)
 					atomic.AddUint64(&m.metrics.Errors, 1)

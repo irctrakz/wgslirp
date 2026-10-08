@@ -49,20 +49,12 @@ func (b *tcpBridge) sendAllowanceLocked(f *tcpFlow) int {
 	inFlight := int(f.serverNxt - f.sndUna)
 	allowed := int(f.advWnd) - inFlight
 	allowed = minInt(allowed, b.retransmitCap-f.txBytes)
-	if f.ccEnabled && f.cc != nil {
+	if f.cc != nil {
 		allowed = minInt(allowed, f.cc.Cwnd()-inFlight)
 	}
-	minInflight := b.ackIdleMinInflight
-	if minInflight <= 0 {
-		minInflight = f.mss
-	}
-	if b.ackIdleGate > 0 && inFlight >= minInflight && time.Since(f.lastAckTime) >= b.ackIdleGate {
-		if b.ackIdleFail > 0 && time.Since(f.lastAckTime) >= b.ackIdleFail {
-			if b.errorSignal != "none" {
-				_ = b.sendToGuest(f, b.buildIPv4TCP(f.dstIP, f.srcIP, f.dstPort, f.srcPort, f.serverNxt, f.clientNxt, 0x14, nil))
-			}
-			b.removeFlowLocked(f)
-		}
+	now := time.Now()
+	if b.ackIdleGatedLocked(f, now) {
+		b.expireACKIdleLocked(f, now)
 		return 0
 	}
 	return allowed
@@ -148,7 +140,7 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 			}
 			continue
 		}
-		maxSegment := int(f.clientMSS)
+		maxSegment := f.mss
 		if clamp := int(b.mssClamp.Load()); clamp > 0 {
 			maxSegment = minInt(maxSegment, clamp)
 		}
@@ -183,7 +175,6 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 			data    []byte
 			sentAt  time.Time
 			retries int
-			rtx     bool
 		}{seq: seq, data: data, sentAt: time.Now()})
 		f.txMu.Unlock()
 		tos, ttl := b.parent.effTosTTL(f.tos, f.ttl)
@@ -191,9 +182,6 @@ func (b *tcpBridge) sendPayload(f *tcpFlow, payload []byte) bool {
 		if b.sendToGuest(f, pkt) {
 			f.toCliBytes += uint64(size)
 			f.toCliPkts++
-		}
-		if f.ccEnabled && f.cc != nil {
-			f.cc.OnSent(size)
 		}
 		f.stateMu.Unlock()
 		offset += size

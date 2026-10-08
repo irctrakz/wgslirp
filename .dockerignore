@@ -1,0 +1,4 @@
+.git
+scripts
+deploy/wgslirp.env
+private.key

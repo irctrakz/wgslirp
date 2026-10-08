@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Exercise both SYN-ACK paths after changing the environment, and inspect the
+// Exercise both host-dial paths after changing the environment, and inspect the
 // actual host socket rather than only asserting that configuration was stored.
 func TestTransportFlowSnapshot(t *testing.T) {
 	for _, async := range []bool{false, true} {
@@ -39,19 +39,31 @@ func TestTransportFlowSnapshot(t *testing.T) {
 				}
 				client, _ := tcpBudgetPair(t)
 				var calls atomic.Int32
-				s.tcp.dial = func(_ context.Context, _ string, timeout time.Duration) (*net.TCPConn, error) {
-					n := calls.Add(1)
-					if n == 1 && timeout != 17*time.Millisecond {
-						t.Errorf("fast dial timeout = %v", timeout)
+				gate := make(chan struct{})
+				if !async {
+					close(gate)
+				}
+				s.tcp.dial = func(ctx context.Context, _ string, timeout time.Duration) (*net.TCPConn, error) {
+					calls.Add(1)
+					if timeout != 5*time.Second {
+						t.Errorf("dial lifetime = %v", timeout)
 					}
-					if async && n == 1 {
-						return nil, &net.DNSError{IsTimeout: true}
+					select {
+					case <-gate:
+					case <-ctx.Done():
+						return nil, ctx.Err()
 					}
 					return client, nil
 				}
 				syn := buildIPv4TCP([4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}, 40000, 80, 1, 0, 2, nil)
 				if err := s.tcp.HandleOutbound(syn); err != nil {
 					t.Fatal(err)
+				}
+				if async {
+					close(gate)
+				}
+				if s.tcp.tuning.FastDialMs != 17 {
+					t.Fatal("fast wait ignored snapshot")
 				}
 				deadline := time.Now().Add(2 * time.Second)
 				var reply []byte
@@ -80,7 +92,7 @@ func TestTransportFlowSnapshot(t *testing.T) {
 				}
 				f := flows[0]
 				f.stateMu.Lock()
-				if f.wsOut != 3 || f.ccEnabled == ccOff {
+				if f.wsOut != 3 || (f.cc == nil) != ccOff {
 					t.Error("flow ignored snapshot")
 				}
 				if !ccOff && f.cc.Cwnd() != 2*f.mss {
@@ -100,6 +112,9 @@ func TestTransportFlowSnapshot(t *testing.T) {
 					time.Sleep(time.Millisecond)
 				}
 				raw, err := client.SyscallConn()
+				if calls.Load() != 1 {
+					t.Fatalf("dial calls=%d", calls.Load())
+				}
 				if err != nil {
 					t.Fatal(err)
 				}

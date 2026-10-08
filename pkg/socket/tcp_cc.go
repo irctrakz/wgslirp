@@ -7,8 +7,6 @@ import "sync/atomic"
 type congestionControl interface {
 	// Cwnd returns the current congestion window in bytes.
 	Cwnd() int
-	// OnSent informs the CC that n bytes were sent.
-	OnSent(n int)
 	// OnAck informs the CC that n bytes were cumulatively ACKed.
 	OnAck(n int)
 	// OnLoss informs the CC of a loss event. If timeout is true, it was an RTO.
@@ -49,8 +47,6 @@ func newNewReno(mss, initialCwndMSS int) *newReno {
 }
 
 func (n *newReno) Cwnd() int { return int(atomic.LoadInt64(&n.cwnd)) }
-
-func (n *newReno) OnSent(int) { /* no-op */ }
 
 func (n *newReno) OnAck(acked int) {
 	if acked <= 0 {
