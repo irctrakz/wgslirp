@@ -2,7 +2,7 @@ name: Independent failure checks
 
 on:
   push:
-    branches: [master, codex/architecture-hardening, codex/integration-05-features]
+    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite]
     paths:
       - .github/workflows/failure-checks.yml
       - tools/ci/failure_checks.py

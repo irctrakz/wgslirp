@@ -20,7 +20,9 @@ func (s *SocketInterface) recordAcceptedPacketSize(size int) {
 // an actual size rejection carries MTU advice; exceeding config.MTU is harmless
 // by itself. Keep the OS error identity and avoid a second warning for it.
 func (s *SocketInterface) outboundPacketError(protocol string, size int, err error) error {
-	atomic.AddUint64(&s.metrics.Errors, 1)
+	if !errors.Is(err, ErrTCPTeardown) {
+		atomic.AddUint64(&s.metrics.Errors, 1)
+	}
 	if errors.Is(err, syscall.EMSGSIZE) {
 		s.localSizeRejected.Add(1)
 		return fmt.Errorf("%s slirp error: local host rejected packet for size (guest_frame_bytes=%d): %w; reduce datagram size or check host path MTU", protocol, size, err)

@@ -136,6 +136,16 @@ Accepted oversized packets increment packet_size.accepted_oversized with optiona
 debug logging. They continue processing; acceptance does not prove remote delivery.
 Actual local rejection reports its reason. TCP recovery activity alone is not
 connection failure: diagnose sustained lack of progress or consequential refusal.
+CloseWrite outcomes add fixed TCP extended counters: close_write_disconnected
+(ENOTCONN), close_write_local_shutdown (net.ErrClosed during recorded local
+shutdown) and close_write_failed (other errors). JSON exposes these under tcp_ext;
+text reports a tcp_shutdown line. Known teardown retains its error
+result and the existing reset/removal/release behavior but emits only optional
+debug logging and does not increment generic Errors. It does not prove graceful
+completion. An unrecorded local close remains an error; payload-write errors are
+unaffected. The legacy buffer_dropped counter still includes this abort path and
+must not be added to shutdown counters as independent packet loss.
+
 Capture failures stop capture while forwarding continues; captures have private
 permissions and complete-record byte limits and do not reopen after exhaustion.
 

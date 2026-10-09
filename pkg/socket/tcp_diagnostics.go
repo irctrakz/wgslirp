@@ -147,6 +147,10 @@ func (tcp *tcpBridge) snapshotMetrics() (metrics BridgeMetrics, extended map[str
 		"ack_duplicate":         atomic.LoadUint64(&tcp.ackDup),
 		"ack_window_update":     atomic.LoadUint64(&tcp.ackWndOnly),
 		"ack_idle_flows":        ackIdle,
+		// Operation-specific write shutdown outcomes
+		"close_write_disconnected":   tcp.hostWriteDisconnected.Load(),
+		"close_write_local_shutdown": tcp.hostWriteLocalClosed.Load(),
+		"close_write_failed":         tcp.hostWriteCloseFailed.Load(),
 		// Async dial and pending-buffer instrumentation
 		"dial_start":    atomic.LoadUint64(&tcp.dialStart),
 		"dial_ok":       atomic.LoadUint64(&tcp.dialOk),

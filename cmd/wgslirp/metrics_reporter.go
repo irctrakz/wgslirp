@@ -226,6 +226,7 @@ func (r *metricsReporter) emit(snap metricsSnapshot, hstat map[string]uint64, fo
 	default:
 		logging.Infof("metrics schema_version=%d wg_available=%t", snap.SchemaVersion, snap.WGAvailable)
 		logging.Infof("admission: %s", admissionText(snap.Admission))
+		logging.Infof("tcp_shutdown: disconnected=%d local_shutdown=%d failed=%d", snap.TCPExt["close_write_disconnected"], snap.TCPExt["close_write_local_shutdown"], snap.TCPExt["close_write_failed"])
 		logging.Infof("packet_size: accepted_oversized=%d local_size_rejected=%d", snap.PacketSize["accepted_oversized"], snap.PacketSize["local_size_rejected"])
 		if snap.IPv4Fragments != nil {
 			f := snap.IPv4Fragments
