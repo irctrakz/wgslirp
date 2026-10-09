@@ -12,7 +12,7 @@ publication is not acceptance. The pinned image below passed
 [actual-image and encrypted workload acceptance](https://github.com/irctrakz/wgslirp/actions/runs/37842268168)
 and was promoted without rebuilding. It supports automatic peer discovery,
 bounded pooling, default fragment reassembly and default guest echo.
-Older digest pins retain their own defaults. Arm64 runtime validation is separate.
+Older digest pins retain their own defaults and architecture coverage.
 
 ```sh
 export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:197701ffd0d6453dd120838f680447a54fd166337f90808d49adb8a0e6bc02e1
@@ -21,7 +21,8 @@ export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:197701ffd0d6453dd120838f680
 ## Tested-image publishing
 
 After a `master` push, the Docker workflow builds the release Dockerfile once
-as a Linux/amd64 candidate and tests that immutable digest with non-root startup,
+as a Linux/amd64 and Linux/arm64 candidate index. Native runners test each
+architecture from that immutable digest with non-root startup,
 encrypted TCP/UDP and guest echo, disabled-feature escape hatches, and SIGTERM
 under traffic. Unit, race, integration, fuzz and bounded encrypted capacity,
 WAN, sustained, mixed and fragment workloads must also pass before promotion.
@@ -37,8 +38,9 @@ A failed acceptance run leaves the existing `latest` unchanged.
 Development branches publish only `dev-<commit>-<run>-<attempt>` after the same
 gates; pull requests build locally without registry writes. Manual dispatch on
 `master` uses the same checks and promotion policy. Pooling-study dispatches
-publish no image. The `latest` image is **Linux/amd64 only**; untested arm64
-images are not included. For reproducible deployment, use the immutable digest
+publish no image. The `latest` index includes **Linux/amd64 and Linux/arm64**
+only after both runtime fixtures pass. PR builds remain amd64-only.
+For reproducible deployment, use the immutable digest
 recorded by the successful promotion run rather than the moving `latest` tag.
 
 ## Keep credentials in a private local file
