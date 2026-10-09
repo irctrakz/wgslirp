@@ -1,5 +1,7 @@
 # --- Build stage ---
-FROM golang:1.23-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 
 # Speed up builds by caching deps (none yet, but keep pattern)
@@ -10,7 +12,7 @@ RUN go mod download
 COPY . .
 
 # Build static-ish binary
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o wgslirp ./cmd/wgslirp
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o wgslirp ./cmd/wgslirp
 
 # --- Runtime stage ---
 FROM alpine:3.20
