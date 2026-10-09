@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -131,6 +132,9 @@ func (s *SocketInterface) Start() error {
 		// even if the process happens to have raw-socket privileges.
 		s.conn = nil
 		if s.config.ICMPEcho {
+			if runtime.GOOS == "windows" {
+				return fmt.Errorf("ICMP_ECHO: unprivileged ping sockets are unavailable on Windows; set ICMP_ECHO=false for userspace TCP/UDP forwarding")
+			}
 			conn, echoErr := icmp.ListenPacket("udp4", "0.0.0.0")
 			if echoErr != nil {
 				return fmt.Errorf("ICMP_ECHO: guest ping unavailable: %w; permit the process group in the network namespace's net.ipv4.ping_group_range or set ICMP_ECHO=false for TCP/UDP-only operation", echoErr)

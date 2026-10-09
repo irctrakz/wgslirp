@@ -43,25 +43,25 @@ only after both runtime fixtures pass. PR builds remain amd64-only.
 For reproducible deployment, use the immutable digest
 recorded by the successful promotion run rather than the moving `latest` tag.
 
-## Downloadable Linux binaries
+## Downloadable binaries
 
 Version-tag pushes (`vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-SUFFIX`) run the
 same full acceptance pipeline. The tagged commit must belong to `master`.
 Both native image-test jobs extract `/usr/local/bin/wgslirp` from their tested
 immutable image, check ELF architecture and absence of a dynamic interpreter,
-and package it with `LICENSE` and `SOURCE.json`. No executable is rebuilt after
-acceptance. The metadata records the commit, image index and binary SHA-256.
+and package it with `LICENSE` and `SOURCE.json`. Linux executables are not rebuilt
+after acceptance. The metadata records the commit, image index and binary SHA-256.
 
 After all image/workload gates and image promotion pass, the workflow publishes
-both archives and `SHA256SUMS` on a versioned GitHub Release. Suffix tags produce
-prereleases. Assets are uploaded to a draft before publication; an already
+Linux amd64/arm64 tar archives, a Windows amd64 ZIP and `SHA256SUMS` on a
+versioned GitHub Release. Suffix tags produce prereleases. Assets are uploaded to a draft before publication; an already
 published version is never overwritten. Reruns may finish an incomplete draft.
 Version tags also publish the tested container index under the version tag;
 they do not change the container's `latest` tag. GitHub Release publication does
 not change the repository's existing latest-release designation.
 
-Ordinary branch builds provide seven-day CI binary artifacts after native image
-acceptance, but create no GitHub Release. PR builds do not publish binaries.
+Ordinary branch builds provide seven-day CI binary artifacts after each
+platform's validation, but create no GitHub Release. PR builds do not publish binaries.
 Download a matching architecture archive and `SHA256SUMS` from the version's
 [release page](https://github.com/irctrakz/wgslirp/releases), then verify and extract:
 
@@ -75,6 +75,29 @@ environment configuration and userspace forwarding as the container. Run it as
 an ordinary user with finite process/memory limits and working CA certificates;
 Linux ping-socket permission still applies. Container security/resource limits
 are supplied by the container runtime and are not embedded in the binary.
+
+### Windows amd64
+
+The Windows job builds `wgslirp.exe` with CGO disabled, runs native unit tests,
+and exercises encrypted TCP/UDP plus fragmented traffic against that exact
+executable before packaging. Its `SOURCE.json` records the commit, platform and
+binary hash; the Windows executable is built separately from the Linux images.
+All three platforms must pass before container promotion and binary publication.
+
+Extract the ZIP and configure the same `WG_PRIVATE_KEY` and `WG_PEER_<index>_*`
+environment variables. **Set `ICMP_ECHO=false` on Windows**: the unprivileged
+ping-socket API is unavailable there. Startup fails with an actionable error if
+echo is left enabled; no ping process or elevated raw-socket fallback is used.
+TCP/UDP forwarding requires no kernel TUN, Wintun installation or Administrator
+identity. Firewall policy and outbound access still belong to the deployment.
+Check the ZIP with PowerShell `Get-FileHash -Algorithm SHA256` against SHA256SUMS.
+
+The Windows fixture forcibly terminates its child process for bounded cleanup;
+it does not establish Linux-equivalent graceful shutdown, service integration,
+Job Object resource containment or Windows ARM64 support. Unix FD-limit metrics
+are unavailable and omitted on Windows. Capture remains off by default; if
+enabled, secure its directory with NTFS ACLs because Unix file-mode bits do not
+restrict Windows file access.
 
 ## Keep credentials in a private local file
 

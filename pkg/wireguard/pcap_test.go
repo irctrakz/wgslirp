@@ -3,6 +3,7 @@ package wireguard
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -28,7 +29,8 @@ func TestPCAPRestrictsExistingFileAndCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	// Windows file mode bits do not represent NTFS access-control lists.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("permissions=%o", info.Mode().Perm())
 	}
 	if info.Size() != 24+16+4 {

@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 WORKFLOW = Path(__file__).resolve().parents[2] / '.github/workflows/docker.yml'
@@ -75,10 +76,34 @@ class BinaryPackageTests(unittest.TestCase):
                         os.chdir(original)
 
 
+    def test_windows_pe_architecture(self):
+        code = re.search(r"@'\n(.*?)\n'@ \| python", run_block('Package the tested Windows executable'), re.S)[1]
+        original = Path.cwd()
+        for machine, accepted in [(0x8664, True), (0xAA64, False), (0x14C, False)]:
+            with self.subTest(machine=machine), tempfile.TemporaryDirectory(prefix='wgslirp-pe-test-') as directory:
+                try:
+                    os.chdir(directory)
+                    Path('binary-package').mkdir()
+                    binary = bytearray(72)
+                    binary[:2] = b'MZ'
+                    struct.pack_into('<I', binary, 60, 64)
+                    binary[64:68] = b'PE\0\0'
+                    struct.pack_into('<H', binary, 68, machine)
+                    Path('binary-package/wgslirp.exe').write_bytes(binary)
+                    with patch.dict(os.environ, GITHUB_SHA='abc'):
+                        if accepted:
+                            exec(code, {})
+                        else:
+                            with self.assertRaises(AssertionError):
+                                exec(code, {})
+                finally:
+                    os.chdir(original)
+
     def test_archive_metadata_and_content(self):
         code = python_block('Verify binary archives before publication')
         original = Path.cwd()
-        for fault in [None, 'platform', 'source_commit', 'image', 'binary_sha256', 'extra_member']:
+        for fault in [None, 'platform', 'source_commit', 'image', 'binary_sha256', 'extra_member',
+                      'windows_platform', 'windows_source_commit', 'windows_binary_sha256', 'windows_extra_member']:
             with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix='wgslirp-archive-test-') as directory:
                 try:
                     os.chdir(directory)
@@ -96,6 +121,16 @@ class BinaryPackageTests(unittest.TestCase):
                                 member = tarfile.TarInfo(name)
                                 member.size = len(data)
                                 package.addfile(member, io.BytesIO(data))
+                    metadata = {'platform': 'windows/amd64', 'source_commit': 'abc',
+                                'binary_sha256': hashlib.sha256(b'binary').hexdigest()}
+                    if fault and fault.startswith('windows_') and fault[8:] in metadata:
+                        metadata[fault[8:]] = 'incorrect'
+                    with zipfile.ZipFile('wgslirp-abc-windows-amd64.zip', 'w') as package:
+                        package.writestr('wgslirp.exe', b'binary')
+                        package.writestr('LICENSE', b'license')
+                        package.writestr('SOURCE.json', json.dumps(metadata))
+                        if fault == 'windows_extra_member':
+                            package.writestr('unexpected', b'bad')
                     with patch.dict(os.environ, GITHUB_SHA='abc', TESTED_IMAGE='test@sha256:abc'):
                         if fault is None:
                             exec(code, {})
@@ -134,7 +169,7 @@ python3() { "$TEST_PYTHON" "$@"; }
         with tempfile.TemporaryDirectory(prefix='wgslirp-release-control-') as directory:
             path = Path(directory)
             (path / 'binary-dist').mkdir()
-            for filename in ['amd64.tar.gz', 'arm64.tar.gz', 'SHA256SUMS']:
+            for filename in ['amd64.tar.gz', 'arm64.tar.gz', 'windows.zip', 'SHA256SUMS']:
                 (path / 'binary-dist' / filename).write_text('test-only')
             env = os.environ | {'RELEASE_STATE': state, 'UPLOAD_EXIT': str(upload_exit),
                                 'VERSION_TAG': tag, 'GITHUB_SHA': 'abc',

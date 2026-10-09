@@ -337,8 +337,70 @@ jobs:
           if-no-files-found: error
 
 
+  windows-binary:
+    needs: test
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      CGO_ENABLED: '0'
+      GOOS: windows
+      GOARCH: amd64
+      GOMAXPROCS: '2'
+      GOMEMLIMIT: 512MiB
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.12'
+          cache-dependency-path: go.sum
+      - name: Build and test the Windows executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory binary-package,binary-dist | Out-Null
+          go build -trimpath -ldflags "-s -w" -o binary-package/wgslirp.exe ./cmd/wgslirp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -timeout 120s -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:WGSLIRP_RELEASE_BINARY = (Resolve-Path binary-package/wgslirp.exe).Path
+          go test -tags=integration -run '^(TestReleaseBinary|TestEncryptedWireGuardTCPUDP)$' -timeout 120s -count=1 -v ./pkg/wireguard
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package the tested Windows executable
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE binary-package/LICENSE
+          @'
+          import hashlib, json, os, pathlib, struct
+          binary = pathlib.Path('binary-package/wgslirp.exe').read_bytes()
+          assert binary[:2] == b'MZ', 'expected a PE executable'
+          offset = struct.unpack_from('<I', binary, 60)[0]
+          assert binary[offset:offset+4] == b'PE\0\0', 'invalid PE signature'
+          assert struct.unpack_from('<H', binary, offset+4)[0] == 0x8664, 'wrong Windows architecture'
+          metadata = {'source_commit': os.environ['GITHUB_SHA'], 'platform': 'windows/amd64',
+                      'binary_sha256': hashlib.sha256(binary).hexdigest()}
+          pathlib.Path('binary-package/SOURCE.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $archive = "wgslirp-$env:GITHUB_SHA-windows-amd64.zip"
+          Compress-Archive -Path binary-package/wgslirp.exe,binary-package/LICENSE,binary-package/SOURCE.json -DestinationPath "binary-dist/$archive"
+          $hash = (Get-FileHash "binary-dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -Encoding utf8 "binary-dist/$archive.sha256"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: 'binaries-windows-amd64-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: binary-dist/
+          retention-days: 7
+          if-no-files-found: error
+
   promote-image:
-    needs: [test, encrypted-capacity, encrypted-wan, encrypted-sustained, encrypted-mixed, encrypted-fragments, encrypted-fragments-unpaced, release-image-build, release-image-test]
+    needs: [test, encrypted-capacity, encrypted-wan, encrypted-sustained, encrypted-mixed, encrypted-fragments, encrypted-fragments-unpaced, release-image-build, release-image-test, windows-binary]
     if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -434,7 +496,7 @@ jobs:
           if-no-files-found: error
 
   release-binaries:
-    needs: [promote-image, release-image-build, release-image-test]
+    needs: [promote-image, release-image-build, release-image-test, windows-binary]
     if: github.repository == 'irctrakz/wgslirp' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -459,13 +521,14 @@ jobs:
         run: |
           set -euo pipefail
           cd binary-dist
-          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 4
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 6
           for arch in amd64 arm64; do
             archive="wgslirp-$GITHUB_SHA-linux-$arch.tar.gz"
             sha256sum --check "$archive.sha256"
           done
+          sha256sum --check "wgslirp-$GITHUB_SHA-windows-amd64.zip.sha256"
           python3 - <<'PY'
-          import hashlib, json, os, tarfile
+          import hashlib, json, os, tarfile, zipfile
           for arch in ['amd64', 'arm64']:
               archive = f"wgslirp-{os.environ['GITHUB_SHA']}-linux-{arch}.tar.gz"
               with tarfile.open(archive, 'r:gz') as package:
@@ -478,6 +541,14 @@ jobs:
                   assert metadata['image'] == os.environ['TESTED_IMAGE'], 'wrong tested image'
                   assert metadata['platform'] == 'linux/' + arch, 'wrong archive platform'
                   assert metadata['binary_sha256'] == hashlib.sha256(binary).hexdigest(), 'wrong binary checksum'
+          with zipfile.ZipFile(f"wgslirp-{os.environ['GITHUB_SHA']}-windows-amd64.zip") as package:
+              members = package.infolist()
+              assert sorted(m.filename for m in members) == ['LICENSE', 'SOURCE.json', 'wgslirp.exe'], 'unexpected Windows archive contents'
+              assert all(not m.is_dir() and m.file_size <= 32 * 1024 * 1024 for m in members), 'invalid ZIP member'
+              metadata = json.loads(package.read('SOURCE.json'))
+              assert metadata['source_commit'] == os.environ['GITHUB_SHA'], 'wrong Windows source'
+              assert metadata['platform'] == 'windows/amd64', 'wrong Windows platform'
+              assert metadata['binary_sha256'] == hashlib.sha256(package.read('wgslirp.exe')).hexdigest(), 'wrong Windows binary checksum'
           PY
           cat *.sha256 > SHA256SUMS
       - name: Publish a complete versioned release
@@ -487,7 +558,7 @@ jobs:
           tag="$VERSION_TAG"
           prerelease=false
           if [[ "$tag" == *-* ]]; then prerelease=true; fi
-          printf 'Source: `%s`\n\nTested image: `%s`\n\nLinux amd64 and arm64 executables extracted from the tested release images. Verify downloads with SHA256SUMS.\n' \
+          printf 'Source: `%s`\n\nTested image: `%s`\n\nLinux amd64/arm64 executables extracted from tested images; Windows amd64 executable validated natively with ICMP_ECHO=false. Verify downloads with SHA256SUMS.\n' \
             "$GITHUB_SHA" "$TESTED_IMAGE" > release-notes.txt
           if gh release view "$tag" --json isDraft > existing-release.json 2>/dev/null; then
             python3 - <<'PY'
@@ -498,7 +569,7 @@ jobs:
             gh release create "$tag" --verify-tag --draft --title "$tag" \
               --notes-file release-notes.txt --prerelease="$prerelease"
           fi
-          gh release upload "$tag" binary-dist/*.tar.gz binary-dist/SHA256SUMS --clobber
+          gh release upload "$tag" binary-dist/*.tar.gz binary-dist/*.zip binary-dist/SHA256SUMS --clobber
           gh release edit "$tag" --draft=false --prerelease="$prerelease" --latest=false
           printf '### Binary release\n\nhttps://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"
 
