@@ -46,6 +46,9 @@ jobs:
           export WGSLIRP_IMAGE="ghcr.io/irctrakz/wgslirp@sha256:$(printf '%064d' 0)"
           docker compose -f "$validation_dir/compose.yaml" config --quiet
 
+      - name: Validate binary release failure controls
+        run: python3 tools/ci/test_binary_release.py -v
+
       - name: Build and vet
         run: |
           go build ./...

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/irctrakz/wgslirp/pkg/logging"
@@ -294,10 +293,9 @@ func summarizeWGHandshakes(state string) map[string]uint64 {
 func buildServerLimits(dm socket.SocketDetailedMetrics) map[string]uint64 {
 	out := map[string]uint64{}
 	// File descriptors: soft/hard and current usage
-	var rl syscall.Rlimit
-	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rl); err == nil {
-		out["nofile_soft"] = rl.Cur
-		out["nofile_hard"] = rl.Max
+	if soft, hard, ok := fileDescriptorLimits(); ok {
+		out["nofile_soft"] = soft
+		out["nofile_hard"] = hard
 	}
 	if ents, err := os.ReadDir("/proc/self/fd"); err == nil {
 		out["open_fds"] = uint64(len(ents))

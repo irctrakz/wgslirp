@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 
@@ -220,7 +221,7 @@ func (b *udpBridge) HandleOutbound(pkt []byte) (err error) {
 
 	// Write payload to remote
 	{
-		if n, err := flow.conn.Write(payload); err != nil {
+		if n, err := writeUDPPayload(flow.conn, payload); err != nil {
 			return fmt.Errorf("udp: write: %w", err)
 		} else {
 			atomic.AddUint64(&b.metrics.PacketsSent, 1)
@@ -228,6 +229,16 @@ func (b *udpBridge) HandleOutbound(pkt []byte) (err error) {
 		}
 	}
 	return nil
+}
+
+// Windows' ordinary Write treats an empty slice as a no-op. WriteMsgUDP
+// submits the zero-length datagram while retaining the connected destination.
+func writeUDPPayload(conn *net.UDPConn, payload []byte) (int, error) {
+	if runtime.GOOS == "windows" && len(payload) == 0 {
+		n, _, err := conn.WriteMsgUDP(payload, nil, nil)
+		return n, err
+	}
+	return conn.Write(payload)
 }
 
 func (b *udpBridge) reader(f *udpFlow) {

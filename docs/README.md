@@ -86,6 +86,15 @@ In images with default-enabled echo, guest ping also checks forwarding. To stop 
 container, run `docker compose -f deploy/compose.yaml down`.
 See [deployment guidance](DEPLOYMENT.md) for runtime restrictions and credentials.
 
+## Binary releases
+
+[Versioned GitHub Releases](https://github.com/irctrakz/wgslirp/releases) provide
+Linux amd64/arm64 archives and a Windows amd64 ZIP with SHA-256 checksums.
+Linux executables come from tested release images; the Windows executable is
+tested natively. Publication waits for full acceptance. Windows requires
+`ICMP_ECHO=false` for TCP/UDP operation.
+See [download and deployment instructions](DEPLOYMENT.md#downloadable-binaries).
+
 ## Configuration
 
 Startup parses and validates a single environment snapshot before opening

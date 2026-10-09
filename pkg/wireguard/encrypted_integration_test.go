@@ -174,6 +174,20 @@ func TestEncryptedWireGuardTCPUDP(t *testing.T) {
 
 func testEncryptedWireGuardTCPUDP(t *testing.T, fragments bool) {
 	s, guestTun, responses := encryptedTestLinkWithConfig(t, func(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }, nil, func(cfg *socket.Config) { cfg.IPv4Reassembly = fragments })
+	testEncryptedWireGuardRoundTrip(t, guestTun, responses, fragments)
+
+	if fragments {
+		metrics := s.DetailedMetrics().IPv4Fragments
+		if metrics["completed"] < 3 || metrics["duplicates"] < 3 {
+			t.Fatal("encrypted fragments did not reach reassembly", metrics)
+		}
+	}
+}
+
+// Shared independent guest traffic exercises both the in-process bridge and
+// a separately built release executable without duplicating TCP expectations.
+func testEncryptedWireGuardRoundTrip(t *testing.T, guestTun *WGTun, responses encryptedGuestSink, fragments bool) {
+	t.Helper()
 	var id uint16
 	send := func(p []byte) {
 		t.Helper()
@@ -276,12 +290,6 @@ func testEncryptedWireGuardTCPUDP(t *testing.T, fragments bool) {
 	}
 	// Exercise encrypted guest reset and join all production workers on cleanup.
 	send(encryptedPacket(6, tcpPort, 101+uint32(len(payload)), ack, 0x14, nil))
-	if fragments {
-		metrics := s.DetailedMetrics().IPv4Fragments
-		if metrics["completed"] < 3 || metrics["duplicates"] < 3 {
-			t.Fatal("encrypted fragments did not reach reassembly", metrics)
-		}
-	}
 }
 
 // Independent wire encoder: duplicate fragment zero before completion, then
