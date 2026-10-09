@@ -18,6 +18,29 @@ Older digest pins retain their own defaults. Arm64 runtime validation is separat
 export WGSLIRP_IMAGE=ghcr.io/irctrakz/wgslirp@sha256:197701ffd0d6453dd120838f680447a54fd166337f90808d49adb8a0e6bc02e1
 ```
 
+## Tested-image publishing
+
+After a `master` push, the Docker workflow builds the release Dockerfile once
+as a Linux/amd64 candidate and tests that immutable digest with non-root startup,
+encrypted TCP/UDP and guest echo, disabled-feature escape hatches, and SIGTERM
+under traffic. Unit, race, integration, fuzz and bounded encrypted capacity,
+WAN, sustained, mixed and fragment workloads must also pass before promotion.
+Independent failure-control jobs remain separate from this release gate.
+
+Promotion assigns `sha-<commit>` and `latest` to the **same tested manifest**;
+it does not rebuild the image. Both tags are checked against the tested digest,
+and the workflow retains runtime, cleanup and promotion evidence. Promotion is
+serialized per branch. A run whose commit is no longer the current `master`
+head skips promotion, so an older run cannot replace a newer release.
+A failed acceptance run leaves the existing `latest` unchanged.
+
+Development branches publish only `dev-<commit>-<run>-<attempt>` after the same
+gates; pull requests build locally without registry writes. Manual dispatch on
+`master` uses the same checks and promotion policy. Pooling-study dispatches
+publish no image. The `latest` image is **Linux/amd64 only**; untested arm64
+images are not included. For reproducible deployment, use the immutable digest
+recorded by the successful promotion run rather than the moving `latest` tag.
+
 ## Keep credentials in a private local file
 
 From the repository root, create `deploy/wgslirp.env` with mode 0600 (use

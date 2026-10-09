@@ -13,7 +13,7 @@ on:
         options: [basic, sustained]
         default: basic
   push:
-    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite]
+    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite, codex/master-tested-image]
   pull_request:                 # PRs = build-only
 
 permissions:
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   pooling-study:
-    if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/pooling.yml
     with:
       profile: ${{ inputs.pooling-profile }}
@@ -32,40 +32,40 @@ jobs:
 
   encrypted-capacity:
     needs: test
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
 
   encrypted-wan:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: wan
 
   encrypted-sustained:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: sustained
 
   encrypted-mixed:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: mixed
 
   encrypted-fragments:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: fragments
 
   encrypted-fragments-unpaced:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: fragments-unpaced
@@ -73,7 +73,7 @@ jobs:
 
   release-image-test:
     needs: test
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -211,12 +211,16 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  promote-development:
+  promote-image:
     needs: [test, encrypted-capacity, encrypted-wan, encrypted-sustained, encrypted-mixed, encrypted-fragments, encrypted-fragments-unpaced, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: image-promotion-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
+      contents: read
       packages: write
     env:
       RELEASE_IMAGE: ghcr.io/irctrakz/wgslirp
@@ -228,12 +232,42 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check whether this commit can be promoted
+        id: policy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p promotion-evidence
+          python3 - <<'PY'
+          import json, os, urllib.request
+          eligible = True
+          if os.environ['GITHUB_REF'] == 'refs/heads/master':
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/heads/master",
+                  headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}",
+                           'Accept': 'application/vnd.github+json', 'User-Agent': 'wgslirp-promotion'})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  current = json.load(response)['object']['sha']
+              eligible = current == os.environ['GITHUB_SHA']
+              if not eligible:
+                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                      summary.write('Master advanced; this superseded run will not update latest.\n')
+          with open('promotion-evidence/policy.json', 'w') as evidence:
+              json.dump({'source_commit': os.environ['GITHUB_SHA'],
+                         'ref': os.environ['GITHUB_REF'], 'eligible': eligible}, evidence)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'eligible={str(eligible).lower()}\n')
+          PY
       - name: Promote the tested manifest without rebuilding
+        if: steps.policy.outputs.eligible == 'true'
         shell: bash
         run: |
           set -euo pipefail
           [[ "$TESTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           tag="dev-$GITHUB_SHA-$RELEASE_RUN"
+          if [ "$GITHUB_REF" = refs/heads/master ]; then tag="sha-$GITHUB_SHA"; fi
           mkdir -p promotion-evidence
           docker buildx imagetools create --prefer-index=false \
             --tag "$RELEASE_IMAGE:$tag" "$RELEASE_IMAGE@$TESTED_DIGEST"
@@ -244,11 +278,23 @@ jobs:
           manifest = json.load(open('promotion-evidence/manifest.json'))
           assert manifest['digest'] == os.environ['TESTED_DIGEST'], 'promotion changed digest'
           PY
+          if [ "$GITHUB_REF" = refs/heads/master ]; then
+            docker buildx imagetools create --prefer-index=false \
+              --tag "$RELEASE_IMAGE:latest" "$RELEASE_IMAGE@$TESTED_DIGEST"
+            docker buildx imagetools inspect "$RELEASE_IMAGE:latest" \
+              --format '{{json .Manifest}}' > promotion-evidence/latest-manifest.json
+            python3 - <<'PY'
+          import json, os
+          manifest = json.load(open('promotion-evidence/latest-manifest.json'))
+          assert manifest['digest'] == os.environ['TESTED_DIGEST'], 'latest changed digest'
+          PY
+          fi
           printf '%s\n' "$RELEASE_IMAGE@$TESTED_DIGEST" > promotion-evidence/image-reference.txt
           printf '%s\n' "$RELEASE_IMAGE:$tag" > promotion-evidence/tag.txt
           printf '%s\n' "$GITHUB_SHA" > promotion-evidence/source-commit.txt
           {
-            echo '### Validated development image (linux/amd64)'
+            echo '### Validated image (linux/amd64)'
+            if [ "$GITHUB_REF" = refs/heads/master ]; then echo 'Promoted the tested digest to latest.'; fi
             printf '\nTag: `%s:%s`\n' "$RELEASE_IMAGE" "$tag"
             printf '\nTested and promoted digest: `%s@%s`\n' "$RELEASE_IMAGE" "$TESTED_DIGEST"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -277,37 +323,6 @@ jobs:
           context: .
           file: Dockerfile
           push: false
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  publish:
-    needs: test
-    # Suspended during curated integration; stable release policy requires separate review.
-    if: ${{ false }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          tags: ghcr.io/${{ github.repository }}:pr-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
