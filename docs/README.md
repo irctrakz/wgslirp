@@ -86,6 +86,13 @@ In images with default-enabled echo, guest ping also checks forwarding. To stop 
 container, run `docker compose -f deploy/compose.yaml down`.
 See [deployment guidance](DEPLOYMENT.md) for runtime restrictions and credentials.
 
+## Linux binary releases
+
+[Versioned GitHub Releases](https://github.com/irctrakz/wgslirp/releases) provide
+Linux amd64 and arm64 archives with SHA-256 checksums. The executables come from
+the actual tested release images, and publication waits for full acceptance.
+See [download and deployment instructions](DEPLOYMENT.md#downloadable-linux-binaries).
+
 ## Configuration
 
 Startup parses and validates a single environment snapshot before opening

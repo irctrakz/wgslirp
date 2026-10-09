@@ -43,6 +43,39 @@ only after both runtime fixtures pass. PR builds remain amd64-only.
 For reproducible deployment, use the immutable digest
 recorded by the successful promotion run rather than the moving `latest` tag.
 
+## Downloadable Linux binaries
+
+Version-tag pushes (`vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-SUFFIX`) run the
+same full acceptance pipeline. The tagged commit must belong to `master`.
+Both native image-test jobs extract `/usr/local/bin/wgslirp` from their tested
+immutable image, check ELF architecture and absence of a dynamic interpreter,
+and package it with `LICENSE` and `SOURCE.json`. No executable is rebuilt after
+acceptance. The metadata records the commit, image index and binary SHA-256.
+
+After all image/workload gates and image promotion pass, the workflow publishes
+both archives and `SHA256SUMS` on a versioned GitHub Release. Suffix tags produce
+prereleases. Assets are uploaded to a draft before publication; an already
+published version is never overwritten. Reruns may finish an incomplete draft.
+Version tags also publish the tested container index under the version tag;
+they do not change the container's `latest` tag. GitHub Release publication does
+not change the repository's existing latest-release designation.
+
+Ordinary branch builds provide seven-day CI binary artifacts after native image
+acceptance, but create no GitHub Release. PR builds do not publish binaries.
+Download a matching architecture archive and `SHA256SUMS` from the version's
+[release page](https://github.com/irctrakz/wgslirp/releases), then verify and extract:
+
+```sh
+sha256sum --ignore-missing --check SHA256SUMS
+tar -xzf wgslirp-<commit>-linux-amd64.tar.gz
+```
+
+Use the arm64 archive for ARM Linux. The standalone executable uses the same
+environment configuration and userspace forwarding as the container. Run it as
+an ordinary user with finite process/memory limits and working CA certificates;
+Linux ping-socket permission still applies. Container security/resource limits
+are supplied by the container runtime and are not embedded in the binary.
+
 ## Keep credentials in a private local file
 
 From the repository root, create `deploy/wgslirp.env` with mode 0600 (use

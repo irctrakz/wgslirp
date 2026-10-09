@@ -13,7 +13,8 @@ on:
         options: [basic, sustained]
         default: basic
   push:
-    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite, codex/master-tested-image]
+    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite, codex/master-tested-image, codex/binary-releases]
+    tags: ["v*"]
   pull_request:                 # PRs = build-only
 
 permissions:
@@ -21,7 +22,7 @@ permissions:
 
 jobs:
   pooling-study:
-    if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.event_name == 'workflow_dispatch' && inputs.pooling-study && (github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/pooling.yml
     with:
       profile: ${{ inputs.pooling-profile }}
@@ -32,40 +33,40 @@ jobs:
 
   encrypted-capacity:
     needs: test
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
 
   encrypted-wan:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: wan
 
   encrypted-sustained:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: sustained
 
   encrypted-mixed:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: mixed
 
   encrypted-fragments:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: fragments
 
   encrypted-fragments-unpaced:
     needs: [test, encrypted-capacity, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     uses: ./.github/workflows/capacity.yml
     with:
       workload: fragments-unpaced
@@ -73,7 +74,7 @@ jobs:
 
   release-image-build:
     needs: test
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -94,6 +95,22 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate the version tag and reviewed source
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re
+          assert re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', os.environ['VERSION_TAG']), 'expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-SUFFIX'
+          PY
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --unshallow --no-tags origin
+          fi
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/master
       - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
@@ -167,7 +184,7 @@ jobs:
 
   release-image-test:
     needs: [test, release-image-build]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     strategy:
       fail-fast: false
       matrix:
@@ -250,6 +267,39 @@ jobs:
               assert report['source_commit'] == os.environ['GITHUB_SHA'], 'wrong source tested'
               assert report['initial']['Image'] == open('release-evidence/image-id.txt').read().strip(), 'wrong container image'
           PY
+      - name: Package the tested executable
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p binary-package binary-dist
+          container="wgslirp-binary-$RELEASE_RUN"
+          docker create --name "$container" --label "wgslirp.release.run=$RELEASE_RUN" \
+            "$WGSLIRP_RELEASE_IMAGE"
+          docker cp "$container:/usr/local/bin/wgslirp" binary-package/wgslirp
+          docker rm "$container"
+          chmod 755 binary-package/wgslirp
+          cp LICENSE binary-package/LICENSE
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, struct
+          binary = pathlib.Path('binary-package/wgslirp').read_bytes()
+          assert binary[:6] == b'\x7fELF\x02\x01', 'expected little-endian ELF64 executable'
+          machine = struct.unpack_from('<H', binary, 18)[0]
+          assert machine == {'amd64': 62, 'arm64': 183}[os.environ['RELEASE_ARCH']], 'wrong binary architecture'
+          phoff = struct.unpack_from('<Q', binary, 32)[0]
+          phsize, phcount = struct.unpack_from('<HH', binary, 54)
+          assert phsize >= 56 and phoff + phsize * phcount <= len(binary), 'invalid ELF program headers'
+          assert all(struct.unpack_from('<I', binary, phoff + i * phsize)[0] != 3 for i in range(phcount)), 'binary requires a dynamic interpreter'
+          metadata = {'source_commit': os.environ['GITHUB_SHA'], 'image': os.environ['WGSLIRP_RELEASE_IMAGE'],
+                      'platform': 'linux/' + os.environ['RELEASE_ARCH'],
+                      'binary_sha256': hashlib.sha256(binary).hexdigest()}
+          pathlib.Path('binary-package/SOURCE.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          PY
+          archive="wgslirp-$GITHUB_SHA-linux-$RELEASE_ARCH.tar.gz"
+          tar --sort=name --mtime="@$(git show -s --format=%ct HEAD)" \
+            --owner=0 --group=0 --numeric-owner -czf "binary-dist/$archive" \
+            -C binary-package wgslirp LICENSE SOURCE.json
+          (cd binary-dist && sha256sum "$archive" > "$archive.sha256")
       - name: Remove owned test resources
         if: always()
         shell: bash
@@ -279,10 +329,17 @@ jobs:
           path: release-evidence/
           retention-days: 7
           if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: 'binaries-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: binary-dist/
+          retention-days: 7
+          if-no-files-found: error
+
 
   promote-image:
     needs: [test, encrypted-capacity, encrypted-wan, encrypted-sustained, encrypted-mixed, encrypted-fragments, encrypted-fragments-unpaced, release-image-build, release-image-test]
-    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
+    if: github.repository == 'irctrakz/wgslirp' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/binary-releases' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/codex/master-tested-image' || github.ref == 'refs/heads/codex/architecture-hardening' || github.ref == 'refs/heads/codex/integration-05-features' || github.ref == 'refs/heads/codex/integration-06-closewrite')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
@@ -337,6 +394,7 @@ jobs:
           [[ "$TESTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           tag="dev-$GITHUB_SHA-$RELEASE_RUN"
           if [ "$GITHUB_REF" = refs/heads/master ]; then tag="sha-$GITHUB_SHA"; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then tag="$GITHUB_REF_NAME"; fi
           mkdir -p promotion-evidence
           docker buildx imagetools create --prefer-index=false \
             --tag "$RELEASE_IMAGE:$tag" "$RELEASE_IMAGE@$TESTED_DIGEST"
@@ -374,6 +432,75 @@ jobs:
           path: promotion-evidence/
           retention-days: 7
           if-no-files-found: error
+
+  release-binaries:
+    needs: [promote-image, release-image-build, release-image-test]
+    if: github.repository == 'irctrakz/wgslirp' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: binary-release-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      VERSION_TAG: ${{ github.ref_name }}
+      TESTED_IMAGE: ghcr.io/irctrakz/wgslirp@${{ needs.release-image-build.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: 'binaries-*-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: binary-dist
+          merge-multiple: true
+      - name: Verify binary archives before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd binary-dist
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 4
+          for arch in amd64 arm64; do
+            archive="wgslirp-$GITHUB_SHA-linux-$arch.tar.gz"
+            sha256sum --check "$archive.sha256"
+          done
+          python3 - <<'PY'
+          import hashlib, json, os, tarfile
+          for arch in ['amd64', 'arm64']:
+              archive = f"wgslirp-{os.environ['GITHUB_SHA']}-linux-{arch}.tar.gz"
+              with tarfile.open(archive, 'r:gz') as package:
+                  members = package.getmembers()
+                  assert sorted(m.name for m in members) == ['LICENSE', 'SOURCE.json', 'wgslirp'], 'unexpected archive contents'
+                  assert all(m.isfile() and m.size <= 32 * 1024 * 1024 for m in members), 'invalid archive member'
+                  metadata = json.load(package.extractfile('SOURCE.json'))
+                  binary = package.extractfile('wgslirp').read()
+                  assert metadata['source_commit'] == os.environ['GITHUB_SHA'], 'wrong source commit'
+                  assert metadata['image'] == os.environ['TESTED_IMAGE'], 'wrong tested image'
+                  assert metadata['platform'] == 'linux/' + arch, 'wrong archive platform'
+                  assert metadata['binary_sha256'] == hashlib.sha256(binary).hexdigest(), 'wrong binary checksum'
+          PY
+          cat *.sha256 > SHA256SUMS
+      - name: Publish a complete versioned release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$VERSION_TAG"
+          prerelease=false
+          if [[ "$tag" == *-* ]]; then prerelease=true; fi
+          printf 'Source: `%s`\n\nTested image: `%s`\n\nLinux amd64 and arm64 executables extracted from the tested release images. Verify downloads with SHA256SUMS.\n' \
+            "$GITHUB_SHA" "$TESTED_IMAGE" > release-notes.txt
+          if gh release view "$tag" --json isDraft > existing-release.json 2>/dev/null; then
+            python3 - <<'PY'
+          import json
+          assert json.load(open('existing-release.json'))['isDraft'], 'version is already published; refusing to replace assets'
+          PY
+          else
+            gh release create "$tag" --verify-tag --draft --title "$tag" \
+              --notes-file release-notes.txt --prerelease="$prerelease"
+          fi
+          gh release upload "$tag" binary-dist/*.tar.gz binary-dist/SHA256SUMS --clobber
+          gh release edit "$tag" --draft=false --prerelease="$prerelease" --latest=false
+          printf '### Binary release\n\nhttps://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"
 
   docker:
     needs: test
