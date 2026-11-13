@@ -5,7 +5,7 @@ Created: 2026-10-29
 W1 was approved at `459f6f1`. W2 was approved at `8b10bbd`.
 W3 was approved at `539d884` and recorded in `623f6ff`.
 W4 was approved at `553f165` and pushed with approval commit `2155c9e`.
-W5 is ready for review on `codex/jellyfin-integration`.
+W5 was approved at `bd1de2f` on `codex/jellyfin-integration`.
 
 ## Architecture and scope
 
@@ -655,7 +655,8 @@ The Linux amd64 VM passed three runs each of fast and asynchronous
 stalled-write revocation, encrypted reconnect rejection, pending-dial
 cancellation, standalone SIGTERM and inherited helper pipes. Linux
 integration vet passed. Windows unit tests, integration vet and 100
-repetitions of the failure-reconciliation tests passed. W5 awaits review.
+repetitions of the failure-reconciliation tests passed. W5 was approved at
+`bd1de2f`.
 
 **Complete when:** revocation removes both tunnel access and associated host work
 without restarting other peers or silently leaving uncertain access state.
