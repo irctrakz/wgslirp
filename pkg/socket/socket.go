@@ -239,6 +239,12 @@ func (s *SocketInterface) RequestStop() <-chan struct{} {
 		close(s.stopCh)
 	}
 	conn, dgram, udp, tcp := s.conn, s.dgram, s.udp, s.tcp
+	// Restricted TCP closes bridge admission in the same transition,
+	// including work spawned by an already-admitted packet.
+	restricted := s.config.Destinations != nil
+	if restricted && tcp != nil {
+		tcp.requestStop()
+	}
 	go func() {
 		if conn != nil {
 			_ = conn.Close()
@@ -247,7 +253,7 @@ func (s *SocketInterface) RequestStop() <-chan struct{} {
 			_ = dgram.conn.Close()
 		}
 		// Signal both bridges before joining either callback domain.
-		if tcp != nil {
+		if !restricted && tcp != nil {
 			tcp.requestStop()
 		}
 		if udp != nil {

@@ -305,3 +305,19 @@ func TestHelperProcessErrorPrecedence(t *testing.T) {
 	p.wait(t, 0)
 	p.expectEOF(t)
 }
+
+func TestHelperProcessRefillsTwoRequestWindow(t *testing.T) {
+	p := launchHelper(t, false)
+	p.handshake(t)
+	const last = 3000
+	p.send(t, p.request(2, "status", object{}), p.request(3, "status", object{}))
+	for id := 2; id <= last; id++ {
+		p.check(t, p.receive(t), id, "status", 0, "")
+		if id+2 <= last {
+			p.send(t, p.request(id+2, "status", object{}))
+		}
+	}
+	p.roundTrip(t, last+1, "stop", object{}, 0, "")
+	p.wait(t, 0)
+	p.expectEOF(t)
+}

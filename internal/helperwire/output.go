@@ -31,14 +31,27 @@ func NewOutput(writer io.WriteCloser) *Output { return &Output{writer: writer} }
 func (o *Output) Usable() bool { return !o.failed }
 
 type contextWriter interface {
-	writeContext(context.Context, []byte) (int, error)
+	writeContext(context.Context, []byte, WriteGate) (int, error)
 }
+
+// WriteGate serializes one nonblocking write attempt with session admission.
+// The attempt reports whether it wrote the terminating LF.
+type WriteGate func(attempt func() bool)
 
 // WriteFrame writes a single pre-encoded JSON object followed by LF. A failed,
 // partial or stalled write permanently retires the output. When the writer
 // supports context cancellation, cancellation before any bytes preserves the
 // stream for a terminal diagnostic. A complete frame remains successful.
 func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
+	return o.writeFrame(ctx, payload, nil)
+}
+
+// WriteResponse publishes a correlated response under the session's gate.
+func (o *Output) WriteResponse(ctx context.Context, payload []byte, gate WriteGate) error {
+	return o.writeFrame(ctx, payload, gate)
+}
+
+func (o *Output) writeFrame(ctx context.Context, payload []byte, gate WriteGate) error {
 	if o.failed {
 		return ErrOutputClosed
 	}
@@ -54,7 +67,10 @@ func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 	copy(frame, payload)
 	frame[len(payload)] = '\n'
 	if writer, ok := o.writer.(contextWriter); ok {
-		n, err := writer.writeContext(ctx, frame)
+		if gate == nil {
+			gate = func(attempt func() bool) { attempt() }
+		}
+		n, err := writer.writeContext(ctx, frame, gate)
 		if n == len(frame) {
 			return nil
 		}
@@ -66,6 +82,9 @@ func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 		}
 		o.retire()
 		return err
+	}
+	if gate != nil {
+		return errors.New("helper response requires nonblocking pipe writes")
 	}
 
 	done := make(chan error, 1)

@@ -14,6 +14,7 @@ import (
 )
 
 const shutdownTimeout = 10 * time.Second
+const terminalWriteTimeout = time.Second
 
 type termination struct {
 	code     string
@@ -29,11 +30,12 @@ type session struct {
 	output   *helperwire.Output
 	outputMu sync.Mutex
 
-	mu       sync.Mutex
-	pending  int // includes the executing request until its reply is sent
-	stopping bool
-	requests chan object
-	shutdown chan termination
+	mu             sync.Mutex
+	pending        int // includes the executing request until its reply is sent
+	stopping       bool
+	stopForwarding func()
+	requests       chan object
+	shutdown       chan termination
 }
 
 type completion struct {
@@ -94,7 +96,9 @@ func serve(input io.Reader, output *helperwire.Output, controller controller, ti
 		if end.code != "" {
 			frame = object{"type": "session_error", "instance_id": s.instance, "code": end.code}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), helperwire.WriteTimeout)
+		// Reserve time for final process exit even when the controller
+		// leaves both stdout and stderr unread.
+		ctx, cancel := context.WithTimeout(context.Background(), terminalWriteTimeout)
 		defer cancel()
 		written := make(chan error, 1)
 		go func() {
@@ -154,11 +158,26 @@ func (s *session) stopLocked(code string, failed bool) bool {
 	if s.stopping {
 		return false
 	}
-	s.stopping = true
 	end := termination{code, failed, time.Now().Add(s.timeout)}
+	if s.stopForwarding != nil {
+		s.stopForwarding()
+	}
+	s.stopping = true
 	s.cancel()
 	s.shutdown <- end
 	return true
+}
+
+// registerForwarding runs before starting the restricted socket. A startup
+// racing shutdown gets its socket stopped before it can open admission.
+func (s *session) registerForwarding(stop func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		stop()
+		return
+	}
+	s.stopForwarding = stop
 }
 
 func (s *session) write(ctx context.Context, frame any) error {
@@ -172,13 +191,18 @@ func (s *session) write(ctx context.Context, frame any) error {
 func (s *session) respond(reply response) (err error, usable bool) {
 	s.outputMu.Lock()
 	defer s.outputMu.Unlock()
-	// Output also has an I/O deadline. The watchdog starts session cleanup
-	// even on a platform where closing a blocked write takes longer.
-	watchdog := time.AfterFunc(helperwire.WriteTimeout, func() { s.stop("", true) })
-	err = s.write(s.ctx, reply)
-	watchdog.Stop()
-	s.mu.Lock()
-	s.pending--
-	s.mu.Unlock()
+	payload, err := json.Marshal(reply)
+	if err != nil {
+		return err, s.output.Usable()
+	}
+	err = s.output.WriteResponse(s.ctx, payload, func(attempt func() bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// The pipe can expose LF before the syscall returns. Admission
+		// must wait for the slot release for that same write attempt.
+		if attempt() {
+			s.pending--
+		}
+	})
 	return err, s.output.Usable()
 }

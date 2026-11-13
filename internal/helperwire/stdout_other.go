@@ -1,8 +1,8 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package helperwire
 
-import "os"
+import "errors"
 
 // NewStdoutOutput takes ownership of the inherited protocol stream.
-func NewStdoutOutput() (*Output, error) { return NewOutput(os.Stdout), nil }
+func NewStdoutOutput() (*Output, error) { return nil, errors.New("unsupported helper stdout platform") }

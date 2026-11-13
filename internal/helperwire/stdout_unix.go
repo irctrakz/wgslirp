@@ -46,7 +46,7 @@ type stdoutWriter struct {
 	raw syscall.RawConn
 }
 
-func (w *stdoutWriter) writeContext(ctx context.Context, frame []byte) (written int, err error) {
+func (w *stdoutWriter) writeContext(ctx context.Context, frame []byte, gate WriteGate) (written int, err error) {
 	// Wake the poller without closing the descriptor. The write result tells
 	// Output whether the stream is still at a frame boundary.
 	interrupted := make(chan struct{})
@@ -62,21 +62,24 @@ func (w *stdoutWriter) writeContext(ctx context.Context, frame []byte) (written 
 	}()
 	pollErr := w.raw.Write(func(fd uintptr) bool {
 		for written < len(frame) {
-			if err = ctx.Err(); err != nil {
-				return true
-			}
-			n, writeErr := unix.Write(int(fd), frame[written:])
-			if n > 0 {
-				written += n
-			}
-			switch writeErr {
+			var n int
+			gate(func() bool {
+				if err = ctx.Err(); err == nil {
+					n, err = unix.Write(int(fd), frame[written:])
+					if n > 0 {
+						written += n
+					}
+				}
+				return written == len(frame)
+			})
+			switch err {
 			case unix.EAGAIN:
+				err = nil // RawConn owns the poll and reports its cancellation.
 				return false
 			case unix.EINTR:
 				continue
 			}
-			if writeErr != nil || n == 0 {
-				err = writeErr
+			if err != nil || n == 0 {
 				return true
 			}
 		}

@@ -81,6 +81,8 @@ the initiating error, including `queue_full`. Attempt at most one diagnostic
 frame, only when stdout is usable and at a frame boundary. If it cannot be
 delivered, exit nonzero without a complete diagnostic. The controller must
 observe process exit even when no diagnostic arrives.
+The Go helper bounds its final stdout attempt to one second, reserving time
+within the controller's shutdown grace period for the process to exit.
 
 ## Session and response rules
 

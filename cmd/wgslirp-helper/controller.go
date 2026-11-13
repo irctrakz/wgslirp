@@ -181,8 +181,9 @@ func (c *controller) configure(reply *response, params object) (*response, bool)
 	markFailure := func() { startFailed = s.stop("", true) }
 	cfg = helperConfig(cfg, c.diagnostics)
 	c.runtime, err = c.start(s.ctx, cfg, application.Observers{
-		StartFailed:    markFailure,
-		StateUncertain: func() { s.stop("runtime_state_uncertain", true) },
+		RegisterForwardingStop: s.registerForwarding,
+		StartFailed:            markFailure,
+		StateUncertain:         func() { s.stop("runtime_state_uncertain", true) },
 	})
 	if err != nil {
 		if !startFailed && !s.stop("", true) {

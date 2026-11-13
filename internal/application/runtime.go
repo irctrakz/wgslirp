@@ -54,9 +54,12 @@ func (c Config) Validate() error {
 // Observers attach standalone diagnostics to the runtime. Workers must return
 // on cancellation. They are joined before the runtime closes their resources.
 type Observers struct {
-	WrapProcessor func(core.PacketProcessor) core.PacketProcessor
-	SocketReady   func(context.Context, *socket.SocketInterface)
-	DeviceReady   func(context.Context, *socket.SocketInterface, *wg.WGTun, wg.DeviceHandle)
+	// RegisterForwardingStop installs a synchronous admission stop before
+	// starting the restricted socket. The stop function never joins workers.
+	RegisterForwardingStop func(stop func())
+	WrapProcessor          func(core.PacketProcessor) core.PacketProcessor
+	SocketReady            func(context.Context, *socket.SocketInterface)
+	DeviceReady            func(context.Context, *socket.SocketInterface, *wg.WGTun, wg.DeviceHandle)
 	// Failure callbacks run before teardown and must return without waiting
 	// for runtime operations. They let the process bound cleanup.
 	StartFailed    func()
@@ -142,13 +145,16 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 		processor = observers.WrapProcessor(processor)
 	}
 	r.socket.SetPacketProcessor(processor)
+	if r.peers != nil && observers.RegisterForwardingStop != nil {
+		observers.RegisterForwardingStop(func() { r.socket.RequestStop() })
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := r.socket.Start(); err != nil {
 		return nil, fmt.Errorf("socket start: %w", err)
 	}
-	if r.peers != nil {
+	if r.peers != nil && observers.RegisterForwardingStop == nil {
 		// Close admission without waiting for the device or an in-flight
 		// peer update. The owner still joins cleanup in Close.
 		context.AfterFunc(ctx, func() { r.socket.RequestStop() })

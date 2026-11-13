@@ -20,7 +20,17 @@ type cancelAtBoundary struct {
 	complete bool
 }
 
-func (w *cancelAtBoundary) writeContext(ctx context.Context, frame []byte) (int, error) {
+func (w *cancelAtBoundary) writeContext(ctx context.Context, frame []byte, gate WriteGate) (int, error) {
+	var n int
+	var err error
+	gate(func() bool {
+		n, err = w.write(ctx, frame)
+		return n == len(frame)
+	})
+	return n, err
+}
+
+func (w *cancelAtBoundary) write(ctx context.Context, frame []byte) (int, error) {
 	if w.cancel == nil {
 		return w.Write(frame)
 	}

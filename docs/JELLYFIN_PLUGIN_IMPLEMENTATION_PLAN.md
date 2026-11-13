@@ -703,9 +703,36 @@ contract and has verified process-lifecycle behavior.
 - Windows passed the integration suite and repeated helper subprocess tests
   with the built executable. Integration-tagged vet passed on Windows and for
   the Linux target. Linux, macOS and Windows ARM64 cross-builds passed.
-  Native stalled-pipe and abrupt pipe-owner tests ran on Linux. Windows uses
-  close-on-cancel for inherited stdout, so preserving the stream at a cancelled
-  write boundary remains a cross-platform follow-up.
+  The abrupt pipe-owner test ran on Linux.
+
+**W6 review fixes**
+
+- The request reader shares a gate with each nonblocking response write.
+  The write that publishes LF releases its request slot before the reader can
+  admit another frame. The real helper test refills the two-request window
+  after every reply while the held-startup test still rejects a third request.
+- Windows uses byte-counted, nonblocking writes on inherited stdout pipes.
+  Native subprocess tests cancel after a zero-byte write, a partial frame and
+  a completed LF. They also cover an inherited pipe prefilled in blocking mode.
+  A diagnostic arrives after zero bytes or LF. A partial frame closes the pipe
+  and leaves exactly the written prefix.
+- The session synchronously closes restricted socket and TCP worker admission
+  before publishing cancellation. Registration before socket start also
+  covers concurrent shutdown during startup. A subprocess test holds status
+  on a real restricted runtime and checks packet admission at the transition.
+- Terminal output has a one-second budget after the ten-second cleanup budget.
+  Stderr drains for at most 100 ms. The Linux regression shortens cleanup,
+  holds it past the deadline and leaves both inherited output pipes full until
+  the helper exits.
+- Windows passed 15 repeated runs of the request-window, forwarding-admission
+  and native stdout tests. The full Windows integration suite and integration
+  vet passed, along with Linux, macOS and Windows ARM64 cross-builds. The
+  fixture verifier passed 24 frame cases, 22 message shapes and 54 transcripts.
+- The unprivileged Linux amd64 VM passed the built-helper pipe tests, the
+  request-window and forwarding-admission regressions, and the stalled cleanup
+  with full stdout and stderr. The scaled-down stalled-cleanup case exited in
+  about 1.37 seconds. Linux inherited-pipe cancellation, standalone SIGTERM,
+  peer isolation, stalled host I/O and restricted fragment regressions passed.
 
 W6 awaits review before W7.
 
