@@ -530,6 +530,22 @@ lifecycle, standalone SIGTERM and helper pipes passed. Windows unit tests,
 integration vet, ten runs each of restricted and unrestricted encrypted
 forwarding, and both Linux ARM64 cross-builds passed. W4 awaits review.
 
+Fourth W4 review follow-up
+
+- [x] Keep denial tracking through completion of a mapped datagram that
+  reuses the IP ID. Verify that a delayed fragment still cannot reopen the
+  denied assembly or reserve buffer space after mapped completion.
+- [x] Track up to 128 denied keys per source, across the 128 sources the
+  restricted runtime admits. Only the saturated source temporarily loses
+  new out-of-order assemblies. Verify that another source can reserve and
+  continue a mapped assembly with the same IP ID while saturation is active.
+
+The fragment regressions passed ten Linux runs and 100 Windows repetitions.
+Linux encrypted two-peer isolation, lifecycle, standalone SIGTERM, helper
+pipes and integration vet passed. Windows unit tests, integration vet and
+ten runs each of encrypted restricted and unrestricted forwarding passed.
+Both binaries cross-built for Linux ARM64. W4 awaits review before W5.
+
 **Complete when:** a WireGuard client can reach a mapped service, and alternate
 destinations or forwarding paths cannot escape the configured policy.
 

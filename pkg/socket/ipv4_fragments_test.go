@@ -498,16 +498,31 @@ func TestRestrictedFragmentsRejectUnmappedPort(t *testing.T) {
 			if got := s.DetailedMetrics().IPv4Fragments["live"]; got != 0 {
 				t.Fatalf("denied assembly left %d live reservations", got)
 			}
-			if err := write(1, 0, guest.Port()); err != nil {
+			src, dst := [4]byte{10, 0, 0, 2}, guest.Addr().As4()
+			var segment [20]byte
+			if !packetwire.TCP(segment[:], src, dst, 42000, guest.Port(), 1, 0, fRST, 0, nil, nil) {
+				t.Fatal("could not encode mapped TCP segment")
+			}
+			send := func(start, end int) error {
+				packet := fragmentFixture(6, 1, start, end != len(segment), segment[start:end])
+				copy(packet[16:20], dst[:])
+				fragmentChecksum(packet)
+				return s.WritePacket(core.NewBorrowedPacket(packet))
+			}
+			if err := send(0, 8); err != nil {
 				t.Fatalf("mapped first fragment could not reuse the IP ID: %v", err)
 			}
-			if err := write(1, 8, 0); err != nil {
+			if err := send(8, len(segment)); err != nil {
 				t.Fatalf("later fragment for reused IP ID: %v", err)
 			}
-			assertBudget(t, s.buffers(), ipv4FragmentCharge)
-			if s.DetailedMetrics().IPv4Fragments["duplicates"] != 0 {
-				t.Fatal("the reused IP ID retained a fragment from the denied assembly")
+			assertBudget(t, s.buffers(), 0)
+			if got := s.DetailedMetrics().IPv4Fragments["completed"]; got != 1 {
+				t.Fatalf("completed assemblies = %d, want one mapped datagram", got)
 			}
+			if err := write(1, 8, 0); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("delayed fragment after mapped completion: %v", err)
+			}
+			assertBudget(t, s.buffers(), 0)
 		})
 	}
 }
@@ -525,47 +540,58 @@ func TestRestrictedFragmentsDenialCapacityAndExpiry(t *testing.T) {
 	r.destinations = policy
 	defer r.close()
 	now := time.Now()
-	add := func(id uint16, offset int, port uint16, at time.Time) error {
+	noisy, other := [4]byte{10, 0, 0, 2}, [4]byte{10, 0, 0, 3}
+	add := func(src [4]byte, id uint16, offset int, port uint16, at time.Time) error {
 		body := make([]byte, 8)
 		binary.BigEndian.PutUint16(body[2:4], port)
 		packet := fragmentFixture(6, id, offset, true, body)
+		copy(packet[12:16], src[:])
 		copy(packet[16:20], guest.Addr().AsSlice())
 		fragmentChecksum(packet)
 		_, _, err := r.add(packet, at)
 		return err
 	}
 
-	for id := uint16(1); id <= ipv4FragmentDenials+1; id++ {
-		if err := add(id, 0, guest.Port()+1, now); !errors.Is(err, ErrDestinationDenied) {
+	const overflowID = ipv4FragmentDenialsPerSource + 1
+	for id := uint16(1); id <= overflowID; id++ {
+		if err := add(noisy, id, 0, guest.Port()+1, now); !errors.Is(err, ErrDestinationDenied) {
 			t.Fatalf("deny IP ID %d: %v", id, err)
 		}
 	}
-	if got := len(r.deniedUntil); got != ipv4FragmentDenials {
-		t.Fatalf("tracked denials = %d, want %d", got, ipv4FragmentDenials)
+	if got := len(r.denials[noisy].keys); got != ipv4FragmentDenialsPerSource {
+		t.Fatalf("tracked denials = %d, want %d", got, ipv4FragmentDenialsPerSource)
 	}
-	for _, id := range []uint16{1, ipv4FragmentDenials + 1} {
-		if err := add(id, 8, 0, now); !errors.Is(err, ErrDestinationDenied) {
+	for _, id := range []uint16{1, overflowID} {
+		if err := add(noisy, id, 8, 0, now); !errors.Is(err, ErrDestinationDenied) {
 			t.Fatalf("later fragment for denied IP ID %d: %v", id, err)
 		}
 	}
 	assertBudget(t, budget, 0)
 
-	if err := add(ipv4FragmentDenials+1, 0, guest.Port(), now); err != nil {
-		t.Fatalf("mapped first fragment during saturation: %v", err)
+	if err := add(other, overflowID, 8, 0, now); err != nil {
+		t.Fatalf("saturation blocked another source's out-of-order fragment: %v", err)
 	}
-	if err := add(ipv4FragmentDenials+1, 8, 0, now); err != nil {
-		t.Fatalf("later fragment for admitted datagram during saturation: %v", err)
+	if err := add(other, overflowID, 0, guest.Port(), now); err != nil {
+		t.Fatalf("another source's mapped first fragment: %v", err)
 	}
 	assertBudget(t, budget, ipv4FragmentCharge)
+
+	if err := add(noisy, overflowID, 0, guest.Port(), now); err != nil {
+		t.Fatalf("mapped first fragment during saturation: %v", err)
+	}
+	if err := add(noisy, overflowID, 8, 0, now); err != nil {
+		t.Fatalf("later fragment for admitted datagram during saturation: %v", err)
+	}
+	assertBudget(t, budget, 2*ipv4FragmentCharge)
 
 	expiry := now.Add(ipv4FragmentLifetime)
 	for _, d := range r.expire(expiry) {
 		r.release(d)
 	}
-	if len(r.deniedUntil) != 0 {
+	if len(r.denials) != 0 {
 		t.Fatal("expired denial entries were retained")
 	}
-	if err := add(1, 8, 0, expiry); err != nil {
+	if err := add(noisy, 1, 8, 0, expiry); err != nil {
 		t.Fatalf("out-of-order reuse after denial expiry: %v", err)
 	}
 	assertBudget(t, budget, ipv4FragmentCharge)
