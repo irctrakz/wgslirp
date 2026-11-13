@@ -29,7 +29,8 @@ cannot express. Both are part of the contract. The shared
   and refusal counters are canonical decimal strings from `0` through
   `18446744073709551615` so they retain full uint64 precision.
 - Process requests in arrival order with at most one executing and one queued.
-  Emit one correlated response per accepted request. The controller normally
+  Emit one correlated response per accepted request unless shutdown interrupts
+  it. The controller normally
   sends one request at a time. It may queue one `status` behind a timed-out peer
   mutation to reconcile it. There are no unsolicited status updates.
 - Bound input and output to the same frame size. The helper must continue to
@@ -37,20 +38,22 @@ cannot express. Both are part of the contract. The shared
   off the forwarding path. A broken stdout or a write stalled for 5 seconds
   triggers shutdown, rather than allowing a blocked controller to hold the
   helper indefinitely.
-- EOF at a line boundary triggers cleanup and exit without a reply. Discard
-  queued requests on EOF or terminal failure. An incomplete final line,
-  malformed frame, oversized frame or queue overflow is terminal. If possible,
-  emit one uncorrelated `session_error` with `invalid_frame`, `frame_too_large`
-  or `queue_full`, then clean up and exit nonzero. A pipe failure can prevent
-  delivery of that frame. The controller must also observe process exit.
+- EOF at a line boundary triggers cleanup and exit without a reply. An
+  incomplete final line, malformed frame, oversized frame or queue overflow is
+  terminal and exits nonzero. The corresponding diagnostic is
+  `invalid_frame`, `frame_too_large` or `queue_full` when it can be delivered.
 
 EOF, a terminal framing or queue error, and stdout failure all close admission
 to new requests and new forwarding work. At that point, discard queued requests
 and cancel the executing request, if any. Serialize this transition with
 publication of readiness, peer revisions and correlated responses. Once shutdown
 has begun, the interrupted request cannot publish a new runtime or revision or
-send a correlated response. A response already written before shutdown remains
-valid.
+send a correlated response. A response whose terminating LF was already written
+remains valid. If shutdown interrupts a write after a prefix has reached stdout,
+stop writing and close stdout. Do not complete that response, add a newline, or
+append a terminal frame. The controller discards the unterminated prefix on EOF
+and treats the pending request outcome as uncertain. An interrupted output
+frame is a pipe failure and exits nonzero.
 
 An executing operation may already own resources or have changed the device.
 Wait for it to relinquish those resources before finishing teardown. If an
@@ -60,6 +63,13 @@ Tear down the entire runtime, including partial startup and any peer work. The
 10-second shutdown limit covers both waiting for the interrupted operation and
 cleanup. EOF at a line boundary exits zero after cleanup. A fatal pipe or protocol
 error exits nonzero, as does shutdown exceeding the deadline.
+
+Choose the terminal diagnostic after cleanup completes or the shutdown deadline
+expires. If the deadline expires, `shutdown_timeout` takes precedence over
+the initiating error, including `queue_full`. Attempt at most one diagnostic
+frame, only when stdout is usable and at a frame boundary. If it cannot be
+delivered, exit nonzero without a complete diagnostic. The controller must
+observe process exit even when no diagnostic arrives.
 
 ## Session and response rules
 
@@ -152,9 +162,8 @@ The controller can select a user-facing message without parsing stderr.
 
 Successful `stop` responds only after runtime cleanup is complete,
 then exits zero. A terminal operation drops queued requests. If cleanup cannot
-finish within 10 seconds after shutdown begins, report `shutdown_timeout` as a
-terminal session error if possible and exit nonzero. A terminal error takes
-precedence over a success response for the interrupted operation.
+finish within 10 seconds after shutdown begins, apply the terminal diagnostic
+and exit rules above.
 
 ## Restricted configuration and status
 
@@ -190,7 +199,8 @@ Use `invalid_config` for semantically invalid values that pass schema checks.
 Status always includes state, listener port, server public key, uptime, applied
 peers and counters. For `idle`, the listener port, server key and metrics are
 `null`, uptime is zero, and the peer list is empty. For `running`, the listener
-port and server public key are known. Uptime is milliseconds since runtime
+port and server public key match the successful `start` response for the life
+of the process. Uptime is milliseconds since runtime
 readiness measured with a monotonic clock. Order peers by public key using ASCII
 order. The applied peer list is authoritative even when per-peer telemetry is
 unavailable. If that list cannot be established safely, fail the session with
@@ -216,8 +226,10 @@ control pipe, keeping it out of the command line and environment.
 
 Both peer operations include `expected_revision`, the controller's last known
 applied revision. A mismatch returns `revision_conflict` before any side effects.
-`peer_add` takes a peer record and returns `peer_conflict` if its public key or
-source address is in use or its address was previously revoked in this process.
+`peer_add` takes a peer record. An address used by a virtual service returns
+`invalid_config` before conflict or capacity checks. Return `peer_conflict` if
+its public key or source address is in use or its address was previously
+revoked in this process.
 To avoid reassigning queued traffic in v1, restoring a revoked address requires
 replacing the helper.
 Keep up to 1,024 distinct assignments (active or revoked) per process. The

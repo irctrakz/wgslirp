@@ -159,36 +159,43 @@ def check_session(case, validator):
     high_id = 0
     capabilities = None
     applied_peers = {}
+    assigned_addresses = set()
+    service_addresses = set()
+    startup_identity = None
     in_flight = None
-    queue_overflow = False
+    terminal_code = None
+    terminal_response_sent = False
+    stdout_failed = False
     input_closed = False
     terminal_failure = False
     for index, step in enumerate(case["steps"]):
         require(len(step) == 1, "each step needs one action")
         action, value = next(iter(step.items()))
-        if queue_overflow:
-            require(action == "receive" and value.get("code") == "queue_full",
-                    "overflow must produce a terminal queue_full error")
         if action == "send":
             require(not input_closed, "request follows a closed session")
             pending.append(value)
             if len(pending) > 2:
                 require(in_flight == pending[0]["id"], "overflow needs a held executing request")
-                queue_overflow = True
+                terminal_code = "queue_full"
+                input_closed = terminal_failure = True
+                pending.clear()
             requests[value["id"]] = value
         elif action == "receive":
+            require(not stdout_failed and not terminal_response_sent,
+                    "response after terminal output closed")
             validator.validate(value)
             check_counters(value)
             instance = instance or value["instance_id"]
             require(value["instance_id"] == instance, "helper response changed instance")
             if value.get("type") == "session_error":
-                require(not terminal_failure, "response follows terminal failure")
-                require(not input_closed or value["code"] == "shutdown_timeout",
-                        "only shutdown_timeout may follow EOF")
-                require((value["code"] == "queue_full") == queue_overflow,
-                        "queue_full requires one executing, one queued and one excess request")
+                if terminal_code:
+                    require(value["code"] == terminal_code, f"expected terminal {terminal_code}")
+                else:
+                    require(not input_closed or value["code"] == "shutdown_timeout",
+                            "only shutdown_timeout may follow EOF")
+                    require(value["code"] != "queue_full", "queue_full requires an overflow")
                 input_closed = terminal_failure = True
-                queue_overflow = False
+                terminal_response_sent = True
                 pending.clear()
                 continue
             require(not input_closed and pending, "correlated response without open pending work")
@@ -212,6 +219,20 @@ def check_session(case, validator):
                     require(code == "unsupported_version", "missing version mismatch error")
             else:
                 expected = request_rejection(request, validator, instance, capabilities, revision, duplicate)
+                if expected is None and request["op"] in {"start", "validate"}:
+                    config = request["params"]
+                    guest_addresses = {mapping["guest_ip"] for mapping in config["mappings"]}
+                    if any(peer["address"] in guest_addresses for peer in config["peers"]):
+                        expected = "invalid_config"
+                if expected is None and request["op"] == "peer_add":
+                    peer = request["params"]["peer"]
+                    if peer["address"] in service_addresses:
+                        expected = "invalid_config"
+                    elif (peer["address"] in assigned_addresses
+                          or peer["public_key"] in applied_peers):
+                        expected = "peer_conflict"
+                    elif len(applied_peers) >= 128 or len(assigned_addresses) >= 1024:
+                        expected = "peer_limit"
                 if expected:
                     require(code == expected, f"expected {expected}, got {code}")
                 else:
@@ -221,15 +242,16 @@ def check_session(case, validator):
                             f"unexpected rejection: {code}")
             if value["ok"] and request["op"] == "start":
                 applied_peers = peer_set(request["params"]["peers"])
+                assigned_addresses = set(applied_peers.values())
+                service_addresses = {mapping["guest_ip"] for mapping in request["params"]["mappings"]}
+                startup_identity = (value["result"]["listen_port"], value["result"]["server_public_key"])
                 revision = 1
             if value["ok"] and request["op"] in PEER_OPERATIONS:
                 params = request["params"]
                 if request["op"] == "peer_add":
                     peer = params["peer"]
-                    require(peer["public_key"] not in applied_peers
-                            and peer["address"] not in applied_peers.values(),
-                            "successful add would replace an active peer")
                     applied_peers[peer["public_key"]] = peer["address"]
+                    assigned_addresses.add(peer["address"])
                 else:
                     require(params["public_key"] in applied_peers, "successful removal of unknown peer")
                     del applied_peers[params["public_key"]]
@@ -240,10 +262,17 @@ def check_session(case, validator):
                 require(value["result"]["state"] == state, "status disagrees with runtime state")
                 require(peer_set(value["result"]["peers"]) == applied_peers,
                         "status does not contain the complete applied peer set")
+                if state == "running":
+                    identity = (value["result"]["listen_port"], value["result"]["server_public_key"])
+                    require(identity == startup_identity, "status identity disagrees with start")
             if code in {"unsupported_version", "start_failed"}:
                 input_closed = terminal_failure = True
+                terminal_response_sent = True
+                pending.clear()
             if value["ok"] and request["op"] == "stop":
                 input_closed = True
+                terminal_response_sent = True
+                pending.clear()
             replies[value["id"]] = value
         elif action == "in_flight":
             require(not input_closed and len(pending) == 1 and pending[0]["id"] == value
@@ -258,6 +287,17 @@ def check_session(case, validator):
             require(value is True and not input_closed, "unexpected EOF step")
             input_closed = True
             pending.clear()
+        elif action == "stdout_failed":
+            require(isinstance(value, str) and "\n" not in value and not stdout_failed
+                    and not terminal_response_sent,
+                    "stdout failure must give an unterminated prefix or an empty string")
+            stdout_failed = input_closed = terminal_failure = True
+            pending.clear()
+        elif action == "cleanup_timeout":
+            require(value is True and input_closed and not terminal_response_sent
+                    and terminal_code != "shutdown_timeout", "unexpected cleanup timeout")
+            terminal_code = "shutdown_timeout"
+            terminal_failure = True
         elif action == "exit":
             require(index == len(case["steps"]) - 1, "exit must be last")
             require(input_closed and not pending, "exit without terminal action or with pending work")

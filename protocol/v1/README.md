@@ -37,6 +37,8 @@ For a session case, interpret each step in order:
 | `deadline` | The controller's response deadline expired for this request ID |
 | `decision` | After the specified status reply, the controller determines whether the timed-out mutation applied |
 | `eof` | Controller closes stdin |
+| `stdout_failed` | Stdout becomes unusable. The string is the unterminated response prefix observed by the controller, or empty if no bytes reached it. |
+| `cleanup_timeout` | The harness advances cleanup past the shutdown deadline before any terminal diagnostic is written |
 | `exit` | Helper process exits with the specified status, where `1` denotes any nonzero exit |
 
 Controller tests can script these responses with a fake helper. Helper tests can
@@ -52,6 +54,11 @@ published after that transition and that resources acquired before cancellation
 are closed. The transcript records the wire outcome. Future helper tests can
 verify cancellation and resource cleanup directly.
 
+For `stdout_failed` with a nonempty prefix, the harness holds the response
+write after that prefix reaches stdout. When shutdown interrupts the write,
+assert that stdout closes with exactly the prefix and no further bytes. A
+terminal failure can exit nonzero without a complete diagnostic.
+
 ## Verify the shared data
 
 From the repository root, with Python 3 and `jsonschema` available:
@@ -61,6 +68,7 @@ python protocol/v1/verify_fixtures.py
 ```
 
 The check validates the schema, frame outcomes, message-shape expectations and
-transcript integrity, including error precedence, terminal responses and the
-complete applied peer set. It does not run a helper or a Jellyfin instance. The Python
-package is needed only for this fixture check.
+transcript integrity, including error precedence, terminal responses, reserved
+peer addresses, the complete applied peer set and startup identity. It does not
+run a helper or a Jellyfin instance. The Python package is needed only for this
+fixture check.

@@ -1,5 +1,80 @@
 [
   {
+    "id": "queue_overflow_without_diagnostic",
+    "description": "The queue overflows while startup is held, but stdout is unusable before a terminal frame can be sent.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"in_flight":2},
+      {"send":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"stdout_failed":""},
+      {"exit":1}
+    ]
+  },
+  {
+    "id": "queue_overflow_cleanup_timeout",
+    "description": "Cleanup exceeds its deadline after queue overflow. Report only shutdown_timeout.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"in_flight":2},
+      {"send":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"cleanup_timeout":true},
+      {"receive":{"type":"session_error","instance_id":"0123456789abcdef0123456789abcdef","code":"shutdown_timeout"}},
+      {"exit":1}
+    ]
+  },
+  {
+    "id": "partial_response_interrupted_by_eof",
+    "description": "EOF interrupts a status response after bytes have reached stdout. Close stdout without finishing the frame or sending a diagnostic.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers","future_feature"]}}},
+      {"send":{"id":2,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"eof":true},
+      {"stdout_failed":"{\"id\":2,\"op\":\"status\""},
+      {"exit":1}
+    ]
+  },
+  {
+    "id": "start_rejects_service_address",
+    "description": "Starting with a peer on a mapped guest address fails semantic validation and leaves the helper idle.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.1"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_config"}}},
+      {"send":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"state":"idle","listen_port":null,"server_public_key":null,"uptime_ms":0,"peers":[],"metrics":null}}},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "live_peer_cannot_use_service_address",
+    "description": "A peer addition cannot claim a mapped guest address, and running status keeps the startup identity and original peers.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers","future_feature"]}}},
+      {"send":{"id":2,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":2,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"state":"idle","listen_port":null,"server_public_key":null,"uptime_ms":0,"peers":[],"metrics":null}}},
+      {"send":{"id":3,"op":"validate","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":3,"op":"validate","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{}}},
+      {"send":{"id":4,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":4,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":5,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"peer":{"public_key":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=","address":"10.77.0.1"}}}},
+      {"receive":{"id":5,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":false,"error":{"code":"invalid_config"}}},
+      {"send":{"id":6,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":6,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"state":"running","listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=","uptime_ms":1234,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2","endpoint":"[2001:db8::2]:41000","last_handshake_unix_sec":1794528000,"rx_bytes":"9007199254740993","tx_bytes":"18446744073709551615"}],"metrics":{"active_tcp_flows":2,"buffer_bytes_in_use":4096,"tcp_flow_refusals":"0","pending_dial_refusals":"1","buffer_refusals":"0"}}}},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
     "id": "eof_during_start",
     "description": "Hold startup before readiness. EOF cancels it and cleans partial state without acknowledging readiness.",
     "steps": [

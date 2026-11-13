@@ -2,7 +2,7 @@
 
 Created: 2026-10-29
 
-Status for 2026-11-12. The W1 fixes are ready for a second review on
+Status for 2026-11-12. The latest W1 fixes are ready for another review on
 `codex/jellyfin-integration`.
 W2 begins after W1 review. Check off work when its acceptance criteria are
 satisfied and evidence is recorded.
@@ -102,6 +102,24 @@ checks exercise the contract and fixture checker. Cancellation and resource
 cleanup in a running Go helper remain for later work.
 
 The protocol baseline delivery checkpoint stays open until W1 is accepted in review.
+
+Second W1 review follow-up
+
+- [x] Specify interrupted stdout writes, diagnostic delivery failure and
+  shutdown timeout precedence. Cover overflow with no delivered diagnostic,
+  overflow followed by a cleanup timeout, and EOF during a partial response.
+- [x] Track assigned and reserved addresses across live peer changes. Check
+  virtual service address conflicts at validation, startup and live addition.
+- [x] Check the bound port and server public key in every running status
+  response against the successful startup response.
+
+The revised verification passed the Draft 2020-12 schema, 19 frame cases,
+19 message shapes and 23 session transcripts. In-memory probes accepted
+overflow without a diagnostic and rejected a lower-priority diagnostic after
+a cleanup timeout, output after an interrupted frame, reuse of a revoked
+address, both configuration and live-add service address conflicts, and
+changes to the bound port or server key. Runtime behavior remains to be
+verified against the future helper.
 
 ### W2 — Extract a reusable application lifecycle
 
