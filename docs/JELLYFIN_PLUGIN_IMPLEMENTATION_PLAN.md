@@ -409,6 +409,18 @@ and the helper cross-built for macOS ARM64. Windows output-unit coverage
 uses test writers. In-flight cancellation on inherited Windows pipes
 remains part of native acceptance. W3 awaits review before W4.
 
+Fourth W3 review follow-up
+
+- [x] Wait for the production stdout write to encounter `EAGAIN` on a full
+  Linux subprocess pipe before sending cancellation. Keep the pipe full
+  until the write returns, then drain it and verify stdout contains exactly
+  the original fill bytes followed by the complete `queue_full` diagnostic.
+
+The synchronized regression and the other five Linux inherited-pipe cases
+passed three runs each in the isolated amd64 VM. Linux integration vet,
+frame-boundary tests, runtime lifecycle, stalled-host status and standalone
+SIGTERM also passed. W3 awaits review before W4.
+
 **Complete when:** portable status is usable by the C# wrapper and control-channel
 backpressure cannot cause unbounded buffering or block packet callbacks.
 

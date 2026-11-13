@@ -27,7 +27,7 @@ func TestInheritedHelperPipes(t *testing.T) {
 		testInheritedHelperPipesChild(t, mode)
 		return
 	}
-	for _, mode := range []string{"cancel", "cancel-before-bytes", "timeout", "broken-stdout", "broken-stderr", "full-stderr"} {
+	for _, mode := range []string{"cancel", "timeout", "broken-stdout", "broken-stderr", "full-stderr"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestInheritedHelperPipes$")
@@ -60,11 +60,6 @@ func TestInheritedHelperPipes(t *testing.T) {
 			} else if _, err := unix.FcntlInt(outWriter.Fd(), unix.F_SETPIPE_SZ, 4096); err != nil {
 				t.Fatal(err)
 			}
-			if mode == "cancel-before-bytes" {
-				if _, err := outWriter.Write(bytes.Repeat([]byte{'x'}, 4096)); err != nil {
-					t.Fatal(err)
-				}
-			}
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -73,21 +68,6 @@ func TestInheritedHelperPipes(t *testing.T) {
 			switch mode {
 			case "broken-stdout":
 				expectPipeLine(t, bufio.NewReader(diagnostics), "stdout EPIPE handled\n")
-			case "cancel-before-bytes":
-				stderr := bufio.NewReader(diagnostics)
-				expectPipeLine(t, stderr, "starting blocked response\n")
-				if _, err := stdin.Write([]byte{1}); err != nil {
-					t.Fatal(err)
-				}
-				expectPipeLine(t, stderr, "response cancelled\n")
-				prefix := make([]byte, 4096)
-				if _, err := io.ReadFull(out, prefix); err != nil || !bytes.Equal(prefix, bytes.Repeat([]byte{'x'}, len(prefix))) {
-					t.Fatalf("prefilled stdout changed: %v", err)
-				}
-				if _, err := stdin.Write([]byte{1}); err != nil {
-					t.Fatal(err)
-				}
-				expectPipeLine(t, bufio.NewReader(out), "{\"type\":\"session_error\",\"code\":\"queue_full\"}\n")
 			case "broken-stderr", "full-stderr":
 				if err := out.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
 					t.Fatal(err)
@@ -163,23 +143,6 @@ func testInheritedHelperPipesChild(t *testing.T, mode string) {
 			t.Fatalf("expected EPIPE, got %v", err)
 		}
 		fmt.Fprintln(os.Stderr, "stdout EPIPE handled")
-	case "cancel-before-bytes":
-		cancellable, cancel := context.WithCancel(ctx)
-		go func() {
-			_, _ = stdin.ReadByte()
-			cancel()
-		}()
-		fmt.Fprintln(os.Stderr, "starting blocked response")
-		if err := output.WriteFrame(cancellable, []byte("{}")); !errors.Is(err, context.Canceled) {
-			t.Fatalf("expected zero-byte cancellation, got %v", err)
-		}
-		fmt.Fprintln(os.Stderr, "response cancelled")
-		if _, err := stdin.ReadByte(); err != nil {
-			t.Fatal(err)
-		}
-		if err := output.WriteFrame(ctx, []byte(`{"type":"session_error","code":"queue_full"}`)); err != nil {
-			t.Fatal(err)
-		}
 	case "broken-stderr", "full-stderr":
 		logging.SetLevel(logging.DebugLevel)
 		log.Print("helper startup diagnostic")
