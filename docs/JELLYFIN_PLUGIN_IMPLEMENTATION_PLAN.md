@@ -644,6 +644,19 @@ Windows unit tests and integration vet, 50 runs of the TUN suite, ten each
 of restricted and unrestricted encrypted forwarding, and Linux and macOS
 ARM64 cross-builds passed. W5 awaits review before W6.
 
+Third W5 review follow-up
+
+- [x] Fill the Linux listener backlog to force asynchronous dial handoff.
+  Release the backlog slot, verify the completion worker attached the host
+  socket, and stall a write on it. Verify that revocation interrupts the
+  write before the simulated WireGuard receive-worker join can proceed.
+
+The Linux amd64 VM passed three runs each of fast and asynchronous
+stalled-write revocation, encrypted reconnect rejection, pending-dial
+cancellation, standalone SIGTERM and inherited helper pipes. Linux
+integration vet passed. Windows unit tests, integration vet and 100
+repetitions of the failure-reconciliation tests passed. W5 awaits review.
+
 **Complete when:** revocation removes both tunnel access and associated host work
 without restarting other peers or silently leaving uncertain access state.
 

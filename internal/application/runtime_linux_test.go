@@ -60,7 +60,7 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 	const marker = "WGSLIRP_RUNTIME_STALLED_WRITE_TEST"
 	mode := os.Getenv(marker)
 	if mode == "" {
-		for _, mode := range []string{"status", "revoke"} {
+		for _, mode := range []string{"status", "revoke", "revoke-async"} {
 			t.Run(mode, func(t *testing.T) {
 				runRuntimeSubprocess(t, "TestRuntimeStatusWhileHostWriteStalled", marker+"="+mode)
 			})
@@ -81,13 +81,34 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
+	listener := ln.(*net.TCPListener)
+	if mode == "revoke-async" {
+		raw, err := listener.SyscallConn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var listenErr error
+		if err := raw.Control(func(fd uintptr) { listenErr = syscall.Listen(int(fd), 0) }); err != nil {
+			t.Fatal(err)
+		}
+		if listenErr != nil {
+			t.Fatal(listenErr)
+		}
+		// Linux backlog zero allows one queued connection. Occupy it until
+		// the runtime hands its dial to the asynchronous completion worker.
+		queued, err := net.DialTimeout("tcp4", ln.Addr().String(), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer queued.Close()
+	}
 	cfg := testConfig()
 	cfg.Socket.Transport.SocketSendBuffer = 4096
 	cfg.Socket.Transport.FastDialMs = 2000
 	source, target := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
 	port := uint16(ln.Addr().(*net.TCPAddr).Port)
 	const peerKey = "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="
-	if mode == "revoke" {
+	if mode != "status" {
 		guest := netip.MustParseAddrPort("10.77.0.1:8096")
 		host := netip.AddrPortFrom(netip.AddrFrom4(target), port)
 		cfg.Socket.Destinations, err = socket.NewDestinationPolicy([]socket.TCPMapping{{Guest: guest, Host: host}})
@@ -96,6 +117,9 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 		}
 		cfg.Device.Peers = []wg.PeerConfig{{PublicKey: peerKey, AllowedIPs: []string{"10.0.0.2/32"}}}
 		target, port = guest.Addr().As4(), guest.Port()
+	}
+	if mode == "revoke-async" {
+		cfg.Socket.Transport.FastDialMs = 1
 	}
 	synACK := make(chan uint32, 1)
 	r, err := Start(context.Background(), cfg, Observers{
@@ -125,7 +149,24 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("missing SYN-ACK")
 	}
-	if err := ln.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second)); err != nil {
+	if mode == "revoke-async" {
+		deadline := time.Now().Add(3 * time.Second)
+		for r.socket.DetailedMetrics().TCPExt["dial_inflight"] != 1 {
+			if time.Now().After(deadline) {
+				t.Fatal("host dial did not reach asynchronous handoff")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if err := listener.SetDeadline(deadline); err != nil {
+			t.Fatal(err)
+		}
+		filler, err := listener.AcceptTCP()
+		if err != nil {
+			t.Fatal(err)
+		}
+		filler.Close()
+	}
+	if err := listener.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	unreadHost, err := ln.Accept()
@@ -133,6 +174,15 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unreadHost.Close()
+	if mode == "revoke-async" {
+		deadline := time.Now().Add(3 * time.Second)
+		for r.socket.DetailedMetrics().TCPExt["dial_ok"] != 1 {
+			if time.Now().After(deadline) {
+				t.Fatal("asynchronous worker did not attach the host socket")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 	payload := make([]byte, 1200)
 	for seq := uint32(2); seq < 256*uint32(len(payload)); seq += uint32(len(payload)) {
 		packet := makePacket(seq, serverSeq+1, 0x18, payload)
@@ -146,7 +196,7 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 			continue
 		case <-time.After(150 * time.Millisecond):
 		}
-		if mode == "revoke" {
+		if mode != "status" {
 			r.device = waitingPeerDevice{
 				DeviceHandle: r.device, PeerDevice: r.device.(wg.PeerDevice), receiveDone: write,
 			}
