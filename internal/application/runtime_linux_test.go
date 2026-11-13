@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +23,11 @@ type discardPackets struct{}
 func (discardPackets) WritePacket(core.Packet) error { return nil }
 
 func TestCloseCancelsWireGuardHostDial(t *testing.T) {
+	const marker = "WGSLIRP_RUNTIME_PENDING_DIAL_TEST"
+	if os.Getenv(marker) != "1" {
+		runRuntimeSubprocess(t, "TestCloseCancelsWireGuardHostDial", marker+"=1")
+		return
+	}
 	// Linux backlog zero admits one connection. Keep it queued so the next
 	// SYN to this listener stays pending without using an external address.
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)

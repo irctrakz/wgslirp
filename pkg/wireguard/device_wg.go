@@ -14,7 +14,18 @@ import (
 	"github.com/irctrakz/wgslirp/pkg/logging"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdev "golang.zx2c4.com/wireguard/device"
+	wtun "golang.zx2c4.com/wireguard/tun"
 )
+
+// managedTun leaves device transitions to StartDevice and Close. Forwarding
+// the TUN's initial EventUp would race configuration with an asynchronous bind.
+type managedTun struct{ *WGTun }
+
+func (managedTun) Events() <-chan wtun.Event {
+	events := make(chan wtun.Event)
+	close(events)
+	return events
+}
 
 type wgHandle struct {
 	dev          *wgdev.Device
@@ -165,7 +176,7 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 	logger := wgdev.NewLogger(wgLevel, "[wg]")
 	packetErrors := &packetErrorLog{emit: logger.Errorf}
 	logger.Errorf = packetErrors.Errorf
-	dev := wgdev.NewDevice(tun, bind, logger)
+	dev := wgdev.NewDevice(managedTun{tun}, bind, logger)
 	started := false
 	defer func() {
 		if !started {

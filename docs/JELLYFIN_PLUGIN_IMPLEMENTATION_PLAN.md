@@ -284,6 +284,25 @@ The Linux run used the standalone binary directly. The Docker release-image
 acceptance job and race-enabled tests were not run for this follow-up.
 W2 awaits review before W3.
 
+Second W2 review follow-up
+
+- [x] Run the Linux encrypted pending-dial regression in a fresh subprocess
+  per test invocation so repeats exercise the process-wide runtime guard.
+- [x] Validate exact protocol names at the typed application boundary.
+  Preserve the empty default and direct socket library behavior. Verify
+  malformed TCP names fail before capture or the runtime slot is claimed.
+
+The first repeated Linux run exposed an intermittent false-ready UDP bind
+failure and a SIGTERM race at startup. StartDevice now configures WireGuard
+before its single explicit Up call. The standalone command treats startup
+cancellation as clean when cleanup succeeds.
+
+The final isolated Linux amd64 VM run passed ten repetitions of the lifecycle
+suite, encrypted pending-dial regression and protocol validation. The
+standalone SIGTERM test passed five consecutive runs. Linux integration vet,
+Linux ARM64 cross-build, Windows unit tests, vet and encrypted forwarding
+checks passed. W2 awaits review before W3.
+
 ### W3 — Provide portable status and protocol-safe logging
 
 Starting points: [pkg/logging/logging.go](../pkg/logging/logging.go),

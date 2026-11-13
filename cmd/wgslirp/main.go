@@ -67,5 +67,10 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return application.Run(ctx, cfg.Config, observers)
+	err = application.Run(ctx, cfg.Config, observers)
+	if err == context.Canceled {
+		// A signal during startup is a clean shutdown if cleanup succeeded.
+		return nil
+	}
+	return err
 }

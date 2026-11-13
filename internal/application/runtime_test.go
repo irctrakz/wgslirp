@@ -26,15 +26,20 @@ func TestRuntimeLifecycle(t *testing.T) {
 	// Give each case fresh process-wide pooling, capture and runtime ownership.
 	for _, mode := range []string{"shutdown", "bind-failure", "cancel-start", "run-cancel"} {
 		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRuntimeLifecycle$")
-			cmd.Env = append(os.Environ(), marker+"="+mode,
+			runRuntimeSubprocess(t, "TestRuntimeLifecycle", marker+"="+mode,
 				"WG_PRIVATE_KEY=invalid", "WG_TUN_QUEUE_CAP=invalid", "POOLING=invalid")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("lifecycle subprocess: %v\n%s", err, out)
-			}
 		})
+	}
+}
+
+func runRuntimeSubprocess(t *testing.T, test string, env ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+test+"$")
+	cmd.Env = append(os.Environ(), env...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("lifecycle subprocess: %v\n%s", err, out)
 	}
 }
 
@@ -72,10 +77,12 @@ func testRuntimeLifecycle(t *testing.T, mode string) {
 		if _, err := Start(ctx, invalid, Observers{}); err == nil {
 			t.Fatal("invalid TUN settings accepted")
 		}
-		invalid = cfg
-		invalid.Socket.Protocol = "unsupported"
-		if _, err := Start(ctx, invalid, Observers{}); err == nil || !strings.Contains(err.Error(), "unsupported protocol") {
-			t.Fatalf("invalid socket protocol: %v", err)
+		for _, protocol := range []string{"unsupported", "ip4:tcp-typo", "ip6:tcp"} {
+			invalid = cfg
+			invalid.Socket.Protocol = protocol
+			if _, err := Start(ctx, invalid, Observers{}); err == nil || !strings.Contains(err.Error(), "unsupported protocol") {
+				t.Fatalf("invalid socket protocol %q: %v", protocol, err)
+			}
 		}
 		if _, err := os.Stat(cfg.Capture.Path); !os.IsNotExist(err) {
 			t.Fatalf("preflight touched capture file: %v", err)
@@ -154,5 +161,15 @@ func testRuntimeLifecycle(t *testing.T, mode string) {
 	}
 	if err := wg.ConfigurePCAP(cfg.Capture); err == nil || !strings.Contains(err.Error(), "closed or failed") {
 		t.Fatalf("capture remained open after cleanup: %v", err)
+	}
+}
+
+func TestRuntimeProtocolDefaults(t *testing.T) {
+	cfg := testConfig()
+	for _, protocol := range []string{"", "ip4:icmp", "ip4:tcp", "ip4:udp"} {
+		cfg.Socket.Protocol = protocol
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("protocol %q: %v", protocol, err)
+		}
 	}
 }
