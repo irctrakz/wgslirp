@@ -266,10 +266,11 @@ and the response write. A response deadline is a controller-side wait
 limit. It does not cancel or roll back a request. On a peer update timeout, keep
 the original ID reserved and send one `status` with a higher ID. Allow that
 status up to 15 seconds because it can queue behind the mutation. Read responses
-by ID, including the late mutation response if it arrives. Use the status
-revision and applied peer set to confirm the outcome before issuing a new
-mutation. If the status fails or the pipe is unusable, stop and reap the helper
-before replacing it from durable desired state. For other control timeouts,
+by ID, including the late mutation response if it arrives. Send no further
+requests until the status revision and applied peer set confirm the outcome.
+If reconciliation fails, times out, or the pipe becomes unusable, close stdin
+and reap the helper before replacing it from durable desired state. For other
+control timeouts,
 close stdin and reap the helper before replacing it. After closing stdin on
 failure, allow up to 15 seconds for the helper to exit, then terminate the owned
 process if it is still running.

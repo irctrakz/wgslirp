@@ -42,6 +42,8 @@ For a session case, interpret each step in order:
 | `stdout_failed` | Stdout becomes unusable. The string is the unterminated response prefix observed by the controller, or empty if no bytes reached it. |
 | `cleanup_timeout` | The harness advances cleanup past the shutdown deadline before any terminal diagnostic is written |
 | `exit` | Helper process exits with the specified status, where `1` denotes any nonzero exit |
+| `reap` | The controller waits for the old process to exit and releases its process resources |
+| `replace_helper` | The controller may launch a replacement after failed reconciliation and reaping |
 
 Controller tests can script these responses with a fake helper. Helper tests can
 fix process IDs, clocks, selected ports and runtime outcomes in the harness, or
@@ -60,6 +62,11 @@ For `stdout_failed` with a nonempty prefix, the harness holds the response
 write after that prefix reaches stdout. When shutdown interrupts the write,
 assert that stdout closes with exactly the prefix and no further bytes. A
 terminal failure can exit nonzero without a complete diagnostic.
+
+After a peer mutation deadline, the controller may send one reconciliation
+status request. The transcript must establish the outcome with a
+`decision` before further requests. If the status deadline also expires,
+the controller closes stdin and reaps the old helper before replacement.
 
 ## Verify the shared data
 

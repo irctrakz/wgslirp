@@ -138,6 +138,22 @@ startup and status, duplicate mappings accepted by validation or startup,
 and a peer matching the server key accepted by validation, startup or live
 addition. The protocol baseline still awaits review before W2.
 
+Fourth W1 review follow-up
+
+- [x] Require a reconciliation decision before further requests after a peer
+  mutation timeout. Cover a status timeout while the mutation is still pending
+  and require closing stdin and reaping before replacing the helper.
+- [x] Check the remaining configuration rules for invalid IPv4 ranges,
+  duplicate peer addresses and keys, and all-zero keys. Cover validation,
+  startup and live peer addition where applicable.
+
+Verification passed the Draft 2020-12 schema, 24 frame cases, 19 message shapes
+and 44 session transcripts. Eight in-memory probes rejected retry without a
+reconciliation decision, replacement before reaping, another status after
+failed reconciliation, and false success replies for the four configuration
+examples and an all-zero live peer key. The protocol baseline remains open
+for review.
+
 ### W2 — Extract a reusable application lifecycle
 
 Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).

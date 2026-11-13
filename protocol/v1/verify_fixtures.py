@@ -21,6 +21,7 @@ FIXTURE_PUBLIC_KEYS = {
     "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=":
         "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
 }
+ZERO_KEY = "A" * 43 + "="
 
 
 def require(condition, detail):
@@ -100,9 +101,8 @@ def check_counters(obj):
             check_counters(value)
 
 
-def check_reconciliation(decision, requests, replies, deadlines):
+def check_reconciliation(decision, requests, replies):
     mutation_id, status_id = decision["mutation_id"], decision["status_id"]
-    require(mutation_id in deadlines, "reconciliation needs a recorded deadline")
     mutation, status = requests[mutation_id], replies[status_id]
     require(status_id > mutation_id and status["op"] == "status" and status["ok"],
             "reconciliation needs a subsequent successful status")
@@ -156,20 +156,44 @@ def peer_set(records):
     return peers
 
 
+def invalid_address(address, *, allow_loopback=False):
+    # The schema has already validated the dotted-decimal IPv4 shape.
+    first_octet = int(address.split(".", 1)[0])
+    return first_octet == 0 or first_octet >= 224 or (first_octet == 127 and not allow_loopback)
+
+
+def invalid_peer(peer, service_addresses, server_key):
+    return (peer["public_key"] in {ZERO_KEY, server_key}
+            or invalid_address(peer["address"])
+            or peer["address"] in service_addresses)
+
+
 def invalid_config(config):
+    if config["private_key"] == ZERO_KEY:
+        return True
     mappings = {(mapping["guest_ip"], mapping["guest_port"]) for mapping in config["mappings"]}
     if len(mappings) != len(config["mappings"]):
         return True
+    if any(invalid_address(mapping["guest_ip"])
+           or invalid_address(mapping["host_ip"], allow_loopback=True)
+           for mapping in config["mappings"]):
+        return True
     service_addresses = {address for address, _ in mappings}
     server_key = FIXTURE_PUBLIC_KEYS.get(config["private_key"])
-    return any(peer["address"] in service_addresses or peer["public_key"] == server_key
-               for peer in config["peers"])
+    peers = config["peers"]
+    return (len({peer["public_key"] for peer in peers}) != len(peers)
+            or len({peer["address"] for peer in peers}) != len(peers)
+            or any(invalid_peer(peer, service_addresses, server_key) for peer in peers))
 
 
 def check_session(case, validator):
     pending = []
     requests, replies = {}, {}
-    deadlines = set()
+    unresolved_mutation = None
+    reconciliation_status = None
+    reconciliation_failed = False
+    exited = False
+    reaped = False
     instance = None
     revision = 0
     high_id = 0
@@ -187,8 +211,15 @@ def check_session(case, validator):
     for index, step in enumerate(case["steps"]):
         require(len(step) == 1, "each step needs one action")
         action, value = next(iter(step.items()))
+        require(not exited or action in {"reap", "replace_helper"}, "action after helper exit")
         if action == "send":
             require(not input_closed, "request follows a closed session")
+            require(not reconciliation_failed, "failed reconciliation requires shutdown")
+            if unresolved_mutation is not None:
+                require(value["op"] == "status" and reconciliation_status is None
+                        and value["id"] > unresolved_mutation,
+                        "reconcile the timed-out mutation before sending another request")
+                reconciliation_status = value["id"]
             pending.append(value)
             if len(pending) > 2:
                 require(in_flight == pending[0]["id"], "overflow needs a held executing request")
@@ -240,13 +271,16 @@ def check_session(case, validator):
                     expected = "invalid_config"
                 if expected is None and request["op"] == "peer_add":
                     peer = request["params"]["peer"]
-                    if peer["address"] in service_addresses or peer["public_key"] == startup_identity[1]:
+                    if invalid_peer(peer, service_addresses, startup_identity[1]):
                         expected = "invalid_config"
                     elif (peer["address"] in assigned_addresses
                           or peer["public_key"] in applied_peers):
                         expected = "peer_conflict"
                     elif len(applied_peers) >= 128 or len(assigned_addresses) >= 1024:
                         expected = "peer_limit"
+                if (expected is None and request["op"] == "peer_remove"
+                        and request["params"]["public_key"] == ZERO_KEY):
+                    expected = "invalid_config"
                 if expected:
                     require(code == expected, f"expected {expected}, got {code}")
                 else:
@@ -294,15 +328,33 @@ def check_session(case, validator):
                 terminal_response_sent = True
                 pending.clear()
             replies[value["id"]] = value
+            if value["id"] == reconciliation_status and not value["ok"]:
+                reconciliation_failed = True
         elif action == "in_flight":
             require(not input_closed and len(pending) == 1 and pending[0]["id"] == value
                     and in_flight is None, "in_flight must hold the executing request")
             in_flight = value
         elif action == "deadline":
-            require(pending and pending[0]["id"] == value, "deadline must name the outstanding request")
-            deadlines.add(value)
+            require(any(request["id"] == value for request in pending),
+                    "deadline must name an outstanding request")
+            if value == reconciliation_status:
+                require(not reconciliation_failed, "reconciliation already failed")
+                reconciliation_failed = True
+            else:
+                require(unresolved_mutation is None and requests[value]["op"] in PEER_OPERATIONS
+                        and pending[0]["id"] == value,
+                        "mutation deadline must name the executing peer operation")
+                unresolved_mutation = value
         elif action == "decision":
-            check_reconciliation(value, requests, replies, deadlines)
+            require(not input_closed and not reconciliation_failed
+                    and unresolved_mutation is not None and reconciliation_status is not None
+                    and value["mutation_id"] == unresolved_mutation
+                    and value["status_id"] == reconciliation_status,
+                    "decision must resolve the pending mutation using its reconciliation status")
+            require(unresolved_mutation in replies and reconciliation_status in replies,
+                    "reconciliation decision requires both replies")
+            check_reconciliation(value, requests, replies)
+            unresolved_mutation = reconciliation_status = None
         elif action == "eof":
             require(value is True and not input_closed, "unexpected EOF step")
             input_closed = True
@@ -319,12 +371,19 @@ def check_session(case, validator):
             terminal_code = "shutdown_timeout"
             terminal_failure = True
         elif action == "exit":
-            require(index == len(case["steps"]) - 1, "exit must be last")
             require(input_closed and not pending, "exit without terminal action or with pending work")
             require((value != 0) == terminal_failure, "exit does not match terminal outcome")
+            exited = True
+        elif action == "reap":
+            require(value is True and exited and not reaped, "reaping requires one observed exit")
+            reaped = True
+        elif action == "replace_helper":
+            require(value is True and reconciliation_failed and input_closed and reaped
+                    and index == len(case["steps"]) - 1,
+                    "replacement after failed reconciliation requires closing and reaping the helper")
         else:
             raise AssertionError(f"unknown session step {action}")
-    require("exit" in case["steps"][-1], "missing exit step")
+    require(exited, "missing exit step")
 
 
 def main():
