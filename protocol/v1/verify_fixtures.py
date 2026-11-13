@@ -218,7 +218,7 @@ def check_session(case, validator):
     for index, step in enumerate(case["steps"]):
         require(len(step) == 1, "each step needs one action")
         action, value = next(iter(step.items()))
-        require(not exited or action in {"reap", "replace_helper"}, "action after helper exit")
+        require(not exited or action in {"eof", "reap", "replace_helper"}, "action after helper exit")
         if action == "send":
             require(not requests_closed, "request follows a closed session")
             require(not reconciliation_failed, "failed reconciliation requires shutdown")
@@ -417,6 +417,7 @@ def check_session(case, validator):
             require(value is True and recovery_failed and requests_closed and reaped
                     and index == len(case["steps"]) - 1,
                     "replacement after failed recovery requires closing and reaping the helper")
+            require(stdin_closed_by_controller, "replacement requires closing controller stdin")
         else:
             raise AssertionError(f"unknown session step {action}")
     require(exited, "missing exit step")

@@ -45,8 +45,8 @@ For a session case, interpret each step in order:
 | `unexpected_exit` | The process exits with the observed status without a terminal reply or controller termination, abandoning pending requests |
 | `shutdown_grace_expired` | The controller has closed stdin and the process is still running after the shutdown grace period |
 | `force_terminate` | The controller terminates its still-running helper after closing stdin and waiting the shutdown grace period |
-| `reap` | The controller waits for the old process to exit and releases its process resources |
-| `replace_helper` | The controller may launch a replacement after failed reconciliation or a control timeout, once the old helper is reaped |
+| `reap` | The controller waits for the old process to exit and releases its process resources. Stdin closure is a separate event. |
+| `replace_helper` | The controller may launch a replacement after failed reconciliation or a control timeout once stdin is closed and the old helper is reaped |
 
 Controller tests can script these responses with a fake helper. Helper tests can
 fix process IDs, clocks, selected ports and runtime outcomes in the harness, or
@@ -72,8 +72,9 @@ status request. The transcript must establish the outcome with a
 during reconciliation, the controller closes stdin if it is still open and
 reaps the old helper before replacement. A terminal diagnostic or stdout
 failure can stop request processing before the controller closes stdin.
-Closing stdin afterward preserves the failure outcome and starts the
-controller's shutdown grace period.
+Closing stdin afterward preserves the failure outcome. If the helper is still
+running, closure starts the controller's shutdown grace period. If exit is
+already observed, the controller can still close its pipe during cleanup.
 
 A deadline for another control request, such as `start`, also requires
 closing stdin and reaping before replacement. A `force_terminate` event

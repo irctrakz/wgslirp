@@ -208,6 +208,18 @@ new requests after admission closed, skipping stdin closure or the grace
 period before forced termination, and replacement before reaping. W1 awaits
 review before W2.
 
+Ninth W1 review follow-up
+
+- [x] Require explicit controller stdin closure and reaping before replacement.
+  Cover closure after observed exit for terminal diagnostics, stdout failure
+  and abrupt helper exit.
+
+Verification passed the Draft 2020-12 schema, 24 frame cases, 22 message shapes
+and 54 session transcripts. Nine negative probes rejected missing closure,
+missing reaping and duplicate closure across the three failure paths. Three
+positive probes accepted closure after reaping and before replacement. W1
+awaits review before W2.
+
 ### W2 — Extract a reusable application lifecycle
 
 Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).

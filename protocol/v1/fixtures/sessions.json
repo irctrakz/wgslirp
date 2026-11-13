@@ -41,7 +41,7 @@
   },
   {
     "id": "reconciliation_unexpected_exit",
-    "description": "The helper exits abruptly with reconciliation status queued. Reap it before replacement.",
+    "description": "The helper exits abruptly with reconciliation status queued. Close stdin and reap it before replacement.",
     "steps": [
       {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
       {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
@@ -51,6 +51,7 @@
       {"deadline":3},
       {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
       {"unexpected_exit":1},
+      {"eof":true},
       {"reap":true},
       {"replace_helper":true}
     ]
@@ -92,7 +93,7 @@
   },
   {
     "id": "reconciliation_terminal_failure",
-    "description": "The helper reports uncertain runtime state with reconciliation status queued. Reap it before replacement.",
+    "description": "The helper reports uncertain runtime state with reconciliation status queued. Observe exit, close stdin and reap before replacement.",
     "steps": [
       {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
       {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
@@ -102,15 +103,15 @@
       {"deadline":3},
       {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
       {"receive":{"type":"session_error","instance_id":"0123456789abcdef0123456789abcdef","code":"runtime_state_uncertain"}},
-      {"eof":true},
       {"exit":1},
+      {"eof":true},
       {"reap":true},
       {"replace_helper":true}
     ]
   },
   {
     "id": "reconciliation_stdout_failure",
-    "description": "The helper loses stdout with reconciliation status queued. Reap it before replacement.",
+    "description": "The helper loses stdout with reconciliation status queued. Observe exit, close stdin and reap before replacement.",
     "steps": [
       {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
       {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
@@ -120,8 +121,8 @@
       {"deadline":3},
       {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
       {"stdout_failed":""},
-      {"eof":true},
       {"exit":1},
+      {"eof":true},
       {"reap":true},
       {"replace_helper":true}
     ]

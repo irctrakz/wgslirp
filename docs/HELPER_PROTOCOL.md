@@ -286,9 +286,10 @@ state. A terminal session error or unexpected process exit during
 reconciliation counts as failure, even without a correlated reply. A terminal
 session error or stdout failure can close request admission while the
 controller's stdin pipe is still open. Closing that pipe afterward preserves
-the failure outcome. For other
-control timeouts, close stdin and reap the helper before replacing it. After
-closing stdin on failure, allow up to 15 seconds for the helper to exit, then
+the failure outcome. The controller can close its end after observing process
+exit. Both pipe closure and reaping must be complete before replacement.
+For other control timeouts, close stdin and reap the helper before replacing it.
+After closing stdin on failure, allow up to 15 seconds for the helper to exit, then
 terminate the owned process if it is still running. Wait for confirmed exit
 and reap the process after termination before starting its replacement.
 
