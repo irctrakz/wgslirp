@@ -156,6 +156,9 @@ func matchesPeers(status Status, active map[string]netip.Addr, key string, addre
 }
 
 func (r *Runtime) failPeerUpdate() error {
+	if r.stateUncertain != nil {
+		r.stateUncertain()
+	}
 	_ = r.close()
 	return ErrRuntimeStateUncertain
 }

@@ -10,7 +10,7 @@ import (
 )
 
 const MaxFrameBytes = 65_536
-const writeTimeout = 5 * time.Second
+const WriteTimeout = 5 * time.Second
 
 var ErrOutputClosed = errors.New("helper protocol output closed")
 var errWriteTimeout = errors.New("helper protocol write timed out")
@@ -25,6 +25,10 @@ type Output struct {
 // NewOutput takes ownership of the protocol stream. Close must interrupt an
 // outstanding Write. Use NewStdoutOutput for inherited standard output.
 func NewOutput(writer io.WriteCloser) *Output { return &Output{writer: writer} }
+
+// Usable reports whether another frame may be attempted. Call only with
+// exclusive ownership, as for WriteFrame.
+func (o *Output) Usable() bool { return !o.failed }
 
 type contextWriter interface {
 	writeContext(context.Context, []byte) (int, error)
@@ -41,7 +45,7 @@ func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 	if len(payload) == 0 || len(payload) > MaxFrameBytes || bytes.ContainsAny(payload, "\r\n") {
 		return errors.New("invalid helper output frame")
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, writeTimeout, errWriteTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, WriteTimeout, errWriteTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return err

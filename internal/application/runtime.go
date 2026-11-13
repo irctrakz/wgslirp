@@ -57,31 +57,36 @@ type Observers struct {
 	WrapProcessor func(core.PacketProcessor) core.PacketProcessor
 	SocketReady   func(context.Context, *socket.SocketInterface)
 	DeviceReady   func(context.Context, *socket.SocketInterface, *wg.WGTun, wg.DeviceHandle)
+	// Failure callbacks run before teardown and must return without waiting
+	// for runtime operations. They let the process bound cleanup.
+	StartFailed    func()
+	StateUncertain func()
 }
 
 var runtimeClaimed atomic.Bool
 
 // Runtime owns the networking resources acquired by Start.
 type Runtime struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	readyAt       time.Time
-	workers       sync.WaitGroup
-	closeOnce     sync.Once
-	closeErr      error
-	captureOpened bool
-	socket        *socket.SocketInterface
-	tun           *wg.WGTun
-	device        wg.DeviceHandle
-	peerMu        sync.Mutex
-	peers         *restrictedPeers
+	ctx            context.Context
+	cancel         context.CancelFunc
+	readyAt        time.Time
+	workers        sync.WaitGroup
+	closeOnce      sync.Once
+	closeErr       error
+	captureOpened  bool
+	socket         *socket.SocketInterface
+	tun            *wg.WGTun
+	device         wg.DeviceHandle
+	peerMu         sync.Mutex
+	peers          *restrictedPeers
+	stateUncertain func()
 }
 
 // Start constructs a runtime and returns it after the WireGuard device is up.
 // It checks cancellation between startup steps and cleans up any partial start.
-// After a successful start the caller owns Close. The context also cancels
-// observers. Once resource acquisition begins, restart requires a new process
-// because pooling and capture settings are process-wide.
+// After a successful start the caller owns Close. The context cancels
+// observers and closes restricted socket admission. Once acquisition begins,
+// restart requires a new process because pooling and capture are process-wide.
 func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -94,9 +99,16 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	r := &Runtime{ctx: ctx, cancel: cancel}
+	r := &Runtime{ctx: ctx, cancel: cancel, stateUncertain: observers.StateUncertain}
+	var failureOnce sync.Once
+	startFailed := func() {
+		if observers.StartFailed != nil {
+			failureOnce.Do(observers.StartFailed)
+		}
+	}
 	defer func() {
 		if err != nil {
+			startFailed()
 			if cleanupErr := r.Close(); cleanupErr != nil {
 				err = errors.Join(err, cleanupErr)
 			}
@@ -136,6 +148,11 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 	if err := r.socket.Start(); err != nil {
 		return nil, fmt.Errorf("socket start: %w", err)
 	}
+	if r.peers != nil {
+		// Close admission without waiting for the device or an in-flight
+		// peer update. The owner still joins cleanup in Close.
+		context.AfterFunc(ctx, func() { r.socket.RequestStop() })
+	}
 	if observers.SocketReady != nil {
 		r.workers.Add(1)
 		go func() {
@@ -149,7 +166,7 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 	if cfg.WireGuardLogOutput == nil {
 		r.device, err = wg.StartDevice(cfg.Device, r.tun)
 	} else {
-		r.device, err = wg.StartDeviceWithLogOutput(cfg.Device, r.tun, cfg.WireGuardLogOutput)
+		r.device, err = wg.StartDeviceWithFailureHook(cfg.Device, r.tun, cfg.WireGuardLogOutput, startFailed)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("wireguard start: %w", err)

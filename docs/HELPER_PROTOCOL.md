@@ -1,6 +1,11 @@
 # wgslirp helper protocol version 1
 
-Status: draft for W1 review. The protocol describes the future helper executable.
+Status: approved v1 protocol baseline. The Go implementation is
+`cmd/wgslirp-helper`.
+
+Launch `wgslirp-helper` with redirected standard streams to open a session.
+`wgslirp-helper --version` prints the binary version followed by a newline and
+exits before opening a session or acquiring network resources.
 
 The controller owns persistent configuration. One helper process owns one runtime
 and its active state. The initial forwarding profile maps configured IPv4 TCP

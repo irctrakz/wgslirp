@@ -165,6 +165,12 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 // StartDeviceWithLogOutput routes WireGuard dependency diagnostics to output.
 // The caller supplies a writer safe for concurrent use.
 func StartDeviceWithLogOutput(cfg DeviceConfig, tun *WGTun, output io.Writer) (DeviceHandle, error) {
+	return StartDeviceWithFailureHook(cfg, tun, output, nil)
+}
+
+// StartDeviceWithFailureHook notifies the owner before closing a partially
+// started device. The hook must not wait for device operations.
+func StartDeviceWithFailureHook(cfg DeviceConfig, tun *WGTun, output io.Writer, onFailure func()) (_ DeviceHandle, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -202,9 +208,12 @@ func StartDeviceWithLogOutput(cfg DeviceConfig, tun *WGTun, output io.Writer) (D
 	packetErrors := &packetErrorLog{emit: logger.Errorf}
 	logger.Errorf = packetErrors.Errorf
 	dev := wgdev.NewDevice(managedTun{tun}, bind, logger)
-	started := false
 	defer func() {
-		if !started {
+		if err != nil {
+			if onFailure != nil {
+				onFailure()
+			}
+			dev.Close()
 			packetErrors.Flush()
 		}
 	}()
@@ -237,7 +246,6 @@ func StartDeviceWithLogOutput(cfg DeviceConfig, tun *WGTun, output io.Writer) (D
 	// Decode base64 private key and send hex to UAPI to avoid parser complaints
 	rawPriv, err := base64.StdEncoding.DecodeString(strings.TrimSpace(cfg.PrivateKey))
 	if err != nil || len(rawPriv) != 32 {
-		dev.Close()
 		return nil, fmt.Errorf("invalid WG_PRIVATE_KEY: must be base64 of 32 bytes")
 	}
 	keyHex := hex.EncodeToString(rawPriv)
@@ -248,7 +256,6 @@ func StartDeviceWithLogOutput(cfg DeviceConfig, tun *WGTun, output io.Writer) (D
 		logging.Debugf("Applying WireGuard configuration: listen_port=%d peers=%d", cfg.ListenPort, len(cfg.Peers))
 	}
 	if err := dev.IpcSet(confHex); err != nil {
-		dev.Close()
 		return nil, fmt.Errorf("IpcSet: %w", err)
 	}
 	// Provide peer AllowedIPs to the tun for overlay routing decisions if enabled
@@ -290,7 +297,6 @@ func StartDeviceWithLogOutput(cfg DeviceConfig, tun *WGTun, output io.Writer) (D
 		}
 	}
 	if err := dev.Up(); err != nil {
-		dev.Close()
 		return nil, fmt.Errorf("device up: %w", err)
 	}
 	log.Printf("wireguard device up on UDP :%d", cfg.ListenPort)
@@ -317,8 +323,6 @@ func StartDeviceWithLogOutput(cfg DeviceConfig, tun *WGTun, output io.Writer) (D
 		handle.monitor.Add(1)
 		go monitorWireGuardHandshakes(handle)
 	}
-	started = true
-
 	return handle, nil
 }
 

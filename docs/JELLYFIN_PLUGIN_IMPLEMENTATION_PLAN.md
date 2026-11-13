@@ -666,19 +666,48 @@ without restarting other peers or silently leaving uncertain access state.
 Dependencies: W1–W5. An early subset can support the vertical slice before live
 peer management is complete; do not advertise unsupported capabilities.
 
-- [ ] Connect the runtime, protocol, status, policy and peer operations into the helper.
-- [ ] Negotiate compatibility before accepting private configuration.
-- [ ] Start once, process requests and exit after shutdown.
-- [ ] Define behavior for stdin EOF, broken stdout, startup failure and shutdown timeout.
-- [ ] Initiate shutdown on parent disappearance without requiring a Unix signal.
-- [ ] Add a bounded final termination path for permanently stuck shutdown.
-- [ ] Expose executable version information without configuration.
-- [ ] Report capabilities so callers do not infer features from version strings.
-- [ ] Verify the real executable through pipes, including abrupt parent termination,
+- [x] Connect the runtime, protocol, status, policy and peer operations into the helper.
+- [x] Negotiate compatibility before accepting private configuration.
+- [x] Start once, process requests and exit after shutdown.
+- [x] Define behavior for stdin EOF, broken stdout, startup failure and shutdown timeout.
+- [x] Initiate shutdown on parent disappearance without requiring a Unix signal.
+- [x] Add a bounded final termination path for permanently stuck shutdown.
+- [x] Expose executable version information without configuration.
+- [x] Report capabilities so callers do not infer features from version strings.
+- [x] Verify the real executable through pipes, including abrupt parent termination,
   startup cancellation, unread output, malformed input and repeated stop requests.
 
 **Complete when:** the helper is independently operable through its published
 contract and has verified process-lifecycle behavior.
+
+**W6 implementation and checks**
+
+- The executable negotiates protocol v1 and advertises `restricted_tcp` and
+  `live_peers`. It validates restricted configuration locally, publishes the
+  bound listener and applied peer state, and serializes peer revisions with
+  session shutdown. `--version` works without configuration.
+- The reader detects EOF and framing or queue errors independently of the
+  runtime worker. Shutdown closes restricted forwarding admission, cancels
+  the active operation and discards queued work. Cleanup has a ten-second
+  deadline. A terminal frame is attempted only with usable stdout.
+- Go consumed all 24 shared frame fixtures directly. The Python verifier
+  passed all 24 frame cases, 22 schema cases and 54 shared session transcripts.
+  Executable tests cover selected session scenarios through real pipes.
+- The unprivileged Linux amd64 VM passed negotiation, restricted startup,
+  queued status reconciliation, peer add/remove, duplicate stop, occupied
+  listener, malformed input, broken stdout, unread stdout and abrupt loss of
+  the sole stdin writer. A subprocess with injected startup and teardown
+  stalls verified cancellation, queue overflow, suppression of interrupted
+  replies, and shutdown-timeout precedence. Linux inherited-pipe regressions,
+  standalone SIGTERM, peer isolation and stalled host I/O checks also passed.
+- Windows passed the integration suite and repeated helper subprocess tests
+  with the built executable. Integration-tagged vet passed on Windows and for
+  the Linux target. Linux, macOS and Windows ARM64 cross-builds passed.
+  Native stalled-pipe and abrupt pipe-owner tests ran on Linux. Windows uses
+  close-on-cancel for inherited stdout, so preserving the stream at a cancelled
+  write boundary remains a cross-platform follow-up.
+
+W6 awaits review before W7.
 
 ### W7 — Publish versioned binaries and acceptance evidence
 
