@@ -84,19 +84,14 @@ func TestStatusFailsWhenAppliedPeerStateIsUncertain(t *testing.T) {
 }
 
 func TestPortableMetricsAvailability(t *testing.T) {
-	dm := socket.SocketDetailedMetrics{
-		TCP:    socket.BridgeMetrics{ActiveFlows: 3},
-		TCPExt: map[string]uint64{"socket_buffer_bytes": 8192},
-		Admission: map[string]uint64{
-			"tcp_flow_limit": 0, "pending_dial_limit": 2, "aggregate_buffer_limit": 3,
-		},
+	sample := socket.TCPResourceMetrics{
+		ActiveFlows: 3, BufferBytesInUse: 8192, PendingDialRefusals: 2, BufferRefusals: 3,
 	}
-	got := portableMetrics(dm)
+	got := portableMetrics(sample, true)
 	if got == nil || *got != (Metrics{3, 8192, "0", "2", "3"}) {
 		t.Fatalf("metrics: %+v", got)
 	}
-	delete(dm.Admission, "pending_dial_limit")
-	if portableMetrics(dm) != nil {
+	if portableMetrics(sample, false) != nil {
 		t.Fatal("missing metrics represented as zero")
 	}
 }

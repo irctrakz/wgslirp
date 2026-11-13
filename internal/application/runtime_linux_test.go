@@ -5,10 +5,10 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"net"
 	"os"
 	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -17,6 +17,123 @@ import (
 	"github.com/irctrakz/wgslirp/pkg/core"
 	wg "github.com/irctrakz/wgslirp/pkg/wireguard"
 )
+
+type captureSYNACK struct {
+	core.PacketProcessor
+	sequence chan uint32
+}
+
+func (p captureSYNACK) ProcessPacket(packet core.Packet) error {
+	data := core.BorrowPacketData(packet)
+	if len(data) >= 40 && data[33]&0x12 == 0x12 {
+		select {
+		case p.sequence <- binary.BigEndian.Uint32(data[24:28]):
+		default:
+		}
+	}
+	return p.PacketProcessor.ProcessPacket(packet)
+}
+
+func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
+	const marker = "WGSLIRP_RUNTIME_STALLED_WRITE_TEST"
+	if os.Getenv(marker) != "1" {
+		runRuntimeSubprocess(t, "TestRuntimeStatusWhileHostWriteStalled", marker+"=1")
+		return
+	}
+	lc := net.ListenConfig{Control: func(_, _ string, raw syscall.RawConn) error {
+		var sockErr error
+		if err := raw.Control(func(fd uintptr) {
+			sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 4096)
+		}); err != nil {
+			return err
+		}
+		return sockErr
+	}}
+	ln, err := lc.Listen(context.Background(), "tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	cfg := testConfig()
+	cfg.Socket.Transport.SocketSendBuffer = 4096
+	cfg.Socket.Transport.FastDialMs = 2000
+	synACK := make(chan uint32, 1)
+	r, err := Start(context.Background(), cfg, Observers{
+		WrapProcessor: func(primary core.PacketProcessor) core.PacketProcessor {
+			return captureSYNACK{PacketProcessor: primary, sequence: synACK}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	source, target := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	makePacket := func(seq, ack uint32, flags byte, payload []byte) core.Packet {
+		t.Helper()
+		data := make([]byte, 40+len(payload))
+		if !packetwire.IPv4Header(data, source, target, 6, 0, 64, 0, 0) ||
+			!packetwire.TCP(data[20:], source, target, 42000, port, seq, ack, flags, 65535, payload, nil) {
+			t.Fatal("could not encode guest packet")
+		}
+		return core.NewBorrowedPacket(data)
+	}
+	if err := r.socket.WritePacket(makePacket(1, 0, 2, nil)); err != nil {
+		t.Fatal(err)
+	}
+	var serverSeq uint32
+	select {
+	case serverSeq = <-synACK:
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing SYN-ACK")
+	}
+	if err := ln.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	unreadHost, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unreadHost.Close()
+	payload := make([]byte, 1200)
+	for seq := uint32(2); seq < 256*uint32(len(payload)); seq += uint32(len(payload)) {
+		packet := makePacket(seq, serverSeq+1, 0x18, payload)
+		write := make(chan error, 1)
+		go func() { write <- r.socket.WritePacket(packet) }()
+		select {
+		case err := <-write:
+			if err != nil {
+				t.Fatal(err)
+			}
+			continue
+		case <-time.After(150 * time.Millisecond):
+		}
+		type result struct {
+			status Status
+			err    error
+		}
+		poll := make(chan result, 1)
+		go func() {
+			status, err := r.Status()
+			poll <- result{status, err}
+		}()
+		select {
+		case got := <-poll:
+			if got.err != nil || got.status.Metrics == nil || got.status.Metrics.ActiveTCPFlows != 1 {
+				t.Fatalf("status during stalled write: %+v (%v)", got.status, got.err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("runtime status blocked behind the host write")
+		}
+		select {
+		case err := <-write:
+			t.Fatalf("host write was no longer stalled: %v", err)
+		default:
+		}
+		return
+	}
+	t.Fatal("unread host never stalled a write")
+}
 
 type discardPackets struct{}
 
@@ -71,20 +188,14 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	state, err := r.device.IpcGet()
+	status, err := r.Status()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var serverPort string
-	for _, line := range strings.Split(state, "\n") {
-		if value, ok := strings.CutPrefix(line, "listen_port="); ok {
-			serverPort = value
-			break
-		}
-	}
-	if serverPort == "" || serverPort == "0" {
+	if status.ListenPort == nil || *status.ListenPort == 0 {
 		t.Fatal("missing server UDP port")
 	}
+	serverPort := strconv.Itoa(int(*status.ListenPort))
 	clientTun, err := wg.NewWGTunWithConfig("shutdown-client", cfg.Device.MTU, discardPackets{}, wg.DefaultTunConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +225,16 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 			t.Fatal("WireGuard SYN did not reach a pending host dial")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	status, err = r.Status()
+	if err != nil || len(status.Peers) != 1 {
+		t.Fatalf("live peer status: %+v (%v)", status, err)
+	}
+	peer := status.Peers[0]
+	if peer.PublicKey != clientPublic || peer.Address != "10.0.0.2" ||
+		peer.Endpoint == nil || peer.LastHandshakeUnixSec == nil ||
+		peer.RXBytes == nil || *peer.RXBytes == "0" || peer.TXBytes == nil || *peer.TXBytes == "0" {
+		t.Fatalf("missing telemetry after encrypted guest traffic: %+v", peer)
 	}
 	done := make(chan error, 1)
 	go func() { done <- r.Close() }()

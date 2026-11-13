@@ -341,6 +341,33 @@ passed. The compatibility verifier passed 24 frame cases, 22 message shapes
 and 54 session transcripts. The Docker acceptance and race-enabled suites
 were outside this verification run.
 
+W3 review follow-up
+
+- [x] Make inherited Unix stdout interruptible. The helper takes ownership of
+  a pollable, nonblocking stdout descriptor. Cancelling or timing out a write
+  closes the stream and waits for that write to stop before returning.
+- [x] Ignore SIGPIPE in the Unix helper before starting diagnostics. Broken
+  stdout returns a write error, and a closed stderr reader leaves the helper
+  running so it can finish its work and clean up.
+- [x] Read portable TCP metrics from the registry count, shared buffer budget
+  and admission counters without taking per-flow locks. Verify both the
+  collector and `Runtime.Status` while a real host write is stalled.
+
+In the isolated Linux amd64 VM, the inherited-pipe tests passed three runs
+each for partial-write cancellation, the five-second timeout, closed stdout
+and closed stderr. The parent drained the cancelled and timed-out pipes while
+the child remained alive and observed EOF with no terminating LF. The
+runtime status regression passed three runs and the socket metrics regression
+passed ten. The encrypted pending-dial test also verified a live peer's
+endpoint, handshake timestamp and nonzero transfer counters. Direct
+standalone SIGTERM passed three runs.
+
+Windows unit tests, vet, encrypted TCP/UDP forwarding and 100 repetitions
+of the output unit tests passed. Linux integration vet, Linux and macOS
+ARM64 cross-builds of both binaries, and the compatibility verifier passed.
+Native inherited-pipe pressure was verified on Linux. W6 owns the full
+controller and runtime teardown test after output failure. W3 awaits review.
+
 **Complete when:** portable status is usable by the C# wrapper and control-channel
 backpressure cannot cause unbounded buffering or block packet callbacks.
 

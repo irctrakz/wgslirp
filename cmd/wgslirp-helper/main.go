@@ -31,6 +31,7 @@ func helperConfig(cfg application.Config) application.Config {
 }
 
 func configureDiagnostics() {
+	ignoreBrokenPipeSignal()
 	log.SetOutput(os.Stderr)
 	logging.SetOutput(os.Stderr)
 }

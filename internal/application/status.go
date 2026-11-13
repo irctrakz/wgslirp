@@ -66,22 +66,20 @@ func (r *Runtime) Status() (Status, error) {
 		return Status{}, err
 	}
 	status.UptimeMS = time.Since(r.readyAt).Milliseconds()
-	status.Metrics = portableMetrics(r.socket.DetailedMetrics())
+	status.Metrics = portableMetrics(r.socket.TCPResourceMetrics())
 	return status, nil
 }
 
-func portableMetrics(dm socket.SocketDetailedMetrics) *Metrics {
-	used, usedOK := dm.TCPExt["socket_buffer_bytes"]
-	tcp, tcpOK := dm.Admission["tcp_flow_limit"]
-	dials, dialsOK := dm.Admission["pending_dial_limit"]
-	buffers, buffersOK := dm.Admission["aggregate_buffer_limit"]
-	if !usedOK || !tcpOK || !dialsOK || !buffersOK {
+func portableMetrics(sample socket.TCPResourceMetrics, available bool) *Metrics {
+	if !available {
 		return nil
 	}
 	return &Metrics{
-		ActiveTCPFlows: dm.TCP.ActiveFlows, BufferBytesInUse: used,
-		TCPFlowRefusals: strconv.FormatUint(tcp, 10), PendingDialRefusals: strconv.FormatUint(dials, 10),
-		BufferRefusals: strconv.FormatUint(buffers, 10),
+		ActiveTCPFlows:      sample.ActiveFlows,
+		BufferBytesInUse:    sample.BufferBytesInUse,
+		TCPFlowRefusals:     strconv.FormatUint(sample.FlowRefusals, 10),
+		PendingDialRefusals: strconv.FormatUint(sample.PendingDialRefusals, 10),
+		BufferRefusals:      strconv.FormatUint(sample.BufferRefusals, 10),
 	}
 }
 

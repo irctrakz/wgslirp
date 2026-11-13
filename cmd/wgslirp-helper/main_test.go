@@ -88,7 +88,11 @@ func testHelperOutput(t *testing.T, mode string) {
 			t.Fatal(err)
 		}
 	}
-	if err := helperwire.NewOutput(os.Stdout).WriteFrame(context.Background(), []byte(`{"id":1}`)); err != nil {
+	output, err := helperwire.NewStdoutOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := output.WriteFrame(context.Background(), []byte(`{"id":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	// Avoid the Go test harness's PASS line in the captured protocol stream.

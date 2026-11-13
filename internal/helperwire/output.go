@@ -21,15 +21,18 @@ type Output struct {
 	failed bool
 }
 
-// NewOutput takes ownership of the protocol stream. The writer must support
-// closing concurrently with a write, as an os.File or io.PipeWriter does.
+// NewOutput takes ownership of the protocol stream. Close must interrupt an
+// outstanding Write. Use NewStdoutOutput for inherited standard output.
 func NewOutput(writer io.WriteCloser) *Output { return &Output{writer: writer} }
+
+type contextWriter interface {
+	writeContext(context.Context, []byte) (int, error)
+}
 
 // WriteFrame writes a single pre-encoded JSON object followed by LF. A failed,
 // partial or timed-out write permanently retires the output. The controller
-// must shut down the runtime and exit on such a failure. A cancellation
-// requests closure concurrently so a platform-specific pipe close cannot
-// block the controller. Only the interrupted frame can remain outstanding.
+// must shut down the runtime and exit on such a failure. On cancellation the
+// writer is closed and the write has stopped before this method returns.
 func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 	if o.failed {
 		return ErrOutputClosed
@@ -48,7 +51,13 @@ func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 	frame[len(payload)] = '\n'
 	done := make(chan error, 1)
 	go func() {
-		n, err := o.writer.Write(frame)
+		var n int
+		var err error
+		if writer, ok := o.writer.(contextWriter); ok {
+			n, err = writer.writeContext(ctx, frame)
+		} else if err = ctx.Err(); err == nil {
+			n, err = o.writer.Write(frame)
+		}
 		if err == nil && n != len(frame) {
 			err = io.ErrShortWrite
 		}
@@ -62,11 +71,12 @@ func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 		return err
 	case <-ctx.Done():
 		o.retire()
+		<-done
 		return ctx.Err()
 	}
 }
 
 func (o *Output) retire() {
 	o.failed = true
-	go func() { _ = o.writer.Close() }()
+	_ = o.writer.Close()
 }
