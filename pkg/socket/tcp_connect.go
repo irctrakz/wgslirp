@@ -237,6 +237,11 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string, owner *peer
 					owner.mu.Lock()
 					active = active && owner.ctx.Err() == nil
 				}
+				// A successful dial can wait here behind flow work after
+				// shutdown has already cancelled the bridge. Serialize
+				// attachment with the same gate as worker admission.
+				b.lifecycleMu.Lock()
+				active = active && b.ctx.Err() == nil
 				if active && err == nil {
 					f.conn = conn
 					f.connecting = false
@@ -244,6 +249,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string, owner *peer
 						owner.conns[conn] = struct{}{}
 					}
 				}
+				b.lifecycleMu.Unlock()
 				if owner != nil {
 					owner.mu.Unlock()
 				}

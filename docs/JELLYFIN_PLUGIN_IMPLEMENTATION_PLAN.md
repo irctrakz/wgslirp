@@ -734,6 +734,27 @@ contract and has verified process-lifecycle behavior.
   about 1.37 seconds. Linux inherited-pipe cancellation, standalone SIGTERM,
   peer isolation, stalled host I/O and restricted fragment regressions passed.
 
+**W6 follow-up review fixes**
+
+- Async TCP completion checks bridge shutdown under the worker-admission lock
+  before attaching a connected host socket. The regression holds the flow lock
+  until the completion worker receives the dial result, starts shutdown, and
+  verifies host EOF with zero buffered bytes, no attachment and no retained
+  reservations. The previous code delivered the buffered bytes in all three
+  reproduction runs.
+- The Windows subprocess regression fills inherited stdout and waits for the
+  native writer to enter its retry path. A test hook holds the first retry
+  timer so only session cancellation can release it. Closing stdin yields
+  exit zero with only the prefill on stdout. Malformed stdin yields exit one
+  and exactly one `invalid_frame` diagnostic after the prefill. Both cases
+  fail if the retry wait's cancellation branch is removed.
+- Both new regressions and the existing native Windows boundary tests passed
+  20 repeated runs. The dial regression passed ten runs in the unprivileged
+  Linux amd64 VM, alongside helper pipe and shutdown checks, stalled host I/O,
+  peer isolation and standalone SIGTERM. Windows integration tests and vet,
+  Linux integration vet, the shared fixture verifier, and Linux, macOS and
+  Windows ARM64 cross-builds also passed.
+
 W6 awaits review before W7.
 
 ### W7 — Publish versioned binaries and acceptance evidence

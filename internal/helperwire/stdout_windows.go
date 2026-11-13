@@ -14,8 +14,19 @@ import (
 // Windows pipes are synchronous handles. Use nonblocking pipe mode and count
 // successful bytes directly so cancellation does not destroy a clean boundary.
 func NewStdoutOutput() (*Output, error) {
+	return newWindowsStdout(nil)
+}
+
+// ObserveWindowsStdoutRetry opens inherited stdout with a hook for the native
+// subprocess tests. The hook may substitute the timer channel so the test can
+// hold the retry wait until session cancellation.
+func ObserveWindowsStdoutRetry(onRetry func(<-chan time.Time) <-chan time.Time) (*Output, error) {
+	return newWindowsStdout(onRetry)
+}
+
+func newWindowsStdout(onRetry func(<-chan time.Time) <-chan time.Time) (*Output, error) {
 	handle := windows.Handle(os.Stdout.Fd())
-	w := &windowsStdout{File: os.Stdout, handle: handle}
+	w := &windowsStdout{File: os.Stdout, handle: handle, onRetry: onRetry}
 	if err := w.enableNonblocking(); err != nil && !errors.Is(err, windows.ERROR_PIPE_BUSY) {
 		return nil, err
 	}
@@ -26,6 +37,7 @@ type windowsStdout struct {
 	*os.File
 	handle      windows.Handle
 	nonblocking bool
+	onRetry     func(<-chan time.Time) <-chan time.Time
 }
 
 func (w *windowsStdout) enableNonblocking() error {
@@ -88,10 +100,14 @@ func (w *windowsStdout) writeContext(ctx context.Context, frame []byte, gate Wri
 		} else {
 			retry.Reset(retryDelay)
 		}
+		retryReady := retry.C
+		if w.onRetry != nil {
+			retryReady = w.onRetry(retryReady)
+		}
 		select {
 		case <-ctx.Done():
 			return written, ctx.Err()
-		case <-retry.C:
+		case <-retryReady:
 		}
 	}
 	return written, nil

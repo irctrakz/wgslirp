@@ -254,6 +254,71 @@ func TestDialHandoffHonorsLongConfiguredFastWait(t *testing.T) {
 	assertBudget(t, b.dialSlots, 0)
 }
 
+func TestShutdownRejectsCompletedDialBeforeAttachment(t *testing.T) {
+	parent := NewSocketInterface(DefaultConfig())
+	parent.processor = &captureProcessor{}
+	b := newTCPBridge(parent)
+	t.Cleanup(b.stop)
+	client, host := tcpBudgetPair(t)
+	finishDial := make(chan struct{})
+	b.dial = func(ctx context.Context, _ string, _ time.Duration) (*net.TCPConn, error) {
+		select {
+		case <-finishDial:
+			return client, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	b.tuning.FastDialMs = 1
+	src, dst := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 42, 0, fSYN, nil)); err != nil {
+		t.Fatal(err)
+	}
+	flows := b.flowSnapshot()
+	if len(flows) != 1 {
+		t.Fatal("missing connecting flow")
+	}
+	f := flows[0]
+	f.stateMu.Lock()
+	ack := f.serverNxt
+	f.stateMu.Unlock()
+	payload := []byte("buffered before shutdown")
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 43, ack, fACK, payload)); err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		f.stateMu.Lock()
+		defer f.stateMu.Unlock()
+		if !f.connecting || f.pendingBytes == 0 {
+			t.Fatal("expected an unattached flow with buffered data")
+		}
+		close(finishDial)
+		// The async worker releases the dial slot only after receiving
+		// the connection. The flow lock holds it just before attachment.
+		deadline := time.Now().Add(2 * time.Second)
+		for used, _, _, _ := b.dialSlots.snapshot(); used != 0; used, _, _, _ = b.dialSlots.snapshot() {
+			if time.Now().After(deadline) {
+				t.Fatal("completion worker did not receive the dial result")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		b.requestStop()
+	}()
+	if err := host.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var buf [32]byte
+	if n, err := host.Read(buf[:]); n != 0 || err != io.EOF {
+		t.Fatalf("host received %q after shutdown: %v", buf[:n], err)
+	}
+	if atomic.LoadUint64(&b.dialOk) != 0 {
+		t.Fatal("dial attached after shutdown")
+	}
+	b.stop()
+	assertBudget(t, b.dialSlots, 0)
+	assertBudget(t, b.buffers, 0)
+}
+
 func TestTCPEstablishmentEmitsOneSYNACK(t *testing.T) {
 	for _, async := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fast", true: "async"}[async], func(t *testing.T) {
