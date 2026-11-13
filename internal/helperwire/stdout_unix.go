@@ -4,6 +4,7 @@ package helperwire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -46,6 +47,19 @@ type stdoutWriter struct {
 }
 
 func (w *stdoutWriter) writeContext(ctx context.Context, frame []byte) (written int, err error) {
+	// Wake the poller without closing the descriptor. The write result tells
+	// Output whether the stream is still at a frame boundary.
+	interrupted := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = w.SetWriteDeadline(time.Now())
+		close(interrupted)
+	})
+	defer func() {
+		if !stop() {
+			<-interrupted
+			_ = w.SetWriteDeadline(time.Time{})
+		}
+	}()
 	pollErr := w.raw.Write(func(fd uintptr) bool {
 		for written < len(frame) {
 			if err = ctx.Err(); err != nil {
@@ -70,6 +84,9 @@ func (w *stdoutWriter) writeContext(ctx context.Context, frame []byte) (written 
 	})
 	if err == nil {
 		err = pollErr
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) && ctx.Err() != nil {
+		err = ctx.Err()
 	}
 	return written, err
 }

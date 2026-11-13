@@ -13,6 +13,7 @@ const MaxFrameBytes = 65_536
 const writeTimeout = 5 * time.Second
 
 var ErrOutputClosed = errors.New("helper protocol output closed")
+var errWriteTimeout = errors.New("helper protocol write timed out")
 
 // Output is owned by the serial control loop. WriteFrame must never be called
 // by a packet worker. There is no output queue.
@@ -30,10 +31,9 @@ type contextWriter interface {
 }
 
 // WriteFrame writes a single pre-encoded JSON object followed by LF. A failed,
-// partial or timed-out write permanently retires the output. The controller
-// must shut down the runtime and exit on such a failure. If cancellation
-// interrupts a write, close the stream and wait for the write to stop. A
-// complete frame remains successful even when cancellation races its result.
+// partial or stalled write permanently retires the output. When the writer
+// supports context cancellation, cancellation before any bytes preserves the
+// stream for a terminal diagnostic. A complete frame remains successful.
 func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 	if o.failed {
 		return ErrOutputClosed
@@ -41,22 +41,34 @@ func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 	if len(payload) == 0 || len(payload) > MaxFrameBytes || bytes.ContainsAny(payload, "\r\n") {
 		return errors.New("invalid helper output frame")
 	}
-	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, writeTimeout, errWriteTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
-		o.retire()
 		return err
 	}
 	frame := make([]byte, len(payload)+1)
 	copy(frame, payload)
 	frame[len(payload)] = '\n'
+	if writer, ok := o.writer.(contextWriter); ok {
+		n, err := writer.writeContext(ctx, frame)
+		if n == len(frame) {
+			return nil
+		}
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		if n == 0 && ctx.Err() != nil && errors.Is(err, ctx.Err()) && context.Cause(ctx) != errWriteTimeout {
+			return err
+		}
+		o.retire()
+		return err
+	}
+
 	done := make(chan error, 1)
 	go func() {
 		var n int
 		var err error
-		if writer, ok := o.writer.(contextWriter); ok {
-			n, err = writer.writeContext(ctx, frame)
-		} else if err = ctx.Err(); err == nil {
+		if err = ctx.Err(); err == nil {
 			n, err = o.writer.Write(frame)
 		}
 		if err == nil && n != len(frame) {

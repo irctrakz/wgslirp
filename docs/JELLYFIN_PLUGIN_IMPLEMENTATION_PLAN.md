@@ -390,6 +390,25 @@ Windows tests and vet, encrypted TCP/UDP forwarding, Linux integration vet,
 Linux and macOS ARM64 cross-builds of both binaries, and all 100 protocol
 compatibility cases passed. W3 awaits review before W4.
 
+Third W3 review follow-up
+
+- [x] Interrupt an inherited Unix stdout write with a temporary write
+  deadline. Preserve stdout when cancellation occurs before any bytes or
+  after the terminating LF, so a terminal diagnostic can still be sent.
+  Retire stdout on a partial frame, an I/O failure or a five-second stall.
+- [x] Verify a subsequent diagnostic after pre-cancellation, zero-byte
+  cancellation during a write and cancellation after LF. The Linux child
+  also cancels a write with stdout prefilled and sends its diagnostic after
+  the parent drains the pipe.
+
+All six Linux inherited-pipe cases and all three frame-boundary cases
+passed three runs each in the isolated amd64 VM. Linux integration vet,
+runtime lifecycle, stalled-host status and standalone SIGTERM checks
+passed. Windows tests and vet passed, including 100 output-suite repeats,
+and the helper cross-built for macOS ARM64. Windows output-unit coverage
+uses test writers. In-flight cancellation on inherited Windows pipes
+remains part of native acceptance. W3 awaits review before W4.
+
 **Complete when:** portable status is usable by the C# wrapper and control-channel
 backpressure cannot cause unbounded buffering or block packet callbacks.
 

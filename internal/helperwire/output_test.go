@@ -14,34 +14,56 @@ type bufferOutput struct{ bytes.Buffer }
 
 func (*bufferOutput) Close() error { return nil }
 
-type cancelAfterFrame struct {
+type cancelAtBoundary struct {
 	bufferOutput
-	cancel context.CancelFunc
-	closed chan struct{}
+	cancel   context.CancelFunc
+	complete bool
 }
 
-func (w *cancelAfterFrame) Write(frame []byte) (int, error) {
-	n, err := w.Buffer.Write(frame)
-	w.cancel()
-	// Hold the completion result until the caller takes its cancellation
-	// path. The full frame is already in the sink.
-	<-w.closed
-	return n, err
-}
-
-func (w *cancelAfterFrame) Close() error {
-	close(w.closed)
-	return nil
-}
-
-func TestOutputPreservesFrameCompletedAtCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sink := &cancelAfterFrame{cancel: cancel, closed: make(chan struct{})}
-	out := NewOutput(sink)
-	if err := out.WriteFrame(ctx, []byte("{}")); err != nil || sink.String() != "{}\n" {
-		t.Fatalf("completed frame: %q (%v)", sink.String(), err)
+func (w *cancelAtBoundary) writeContext(ctx context.Context, frame []byte) (int, error) {
+	if w.cancel == nil {
+		return w.Write(frame)
 	}
+	var n int
+	if w.complete {
+		n, _ = w.Write(frame)
+	}
+	w.cancel()
+	w.cancel = nil
+	return n, ctx.Err()
+}
+
+func TestOutputDiagnosticAfterCancellationAtFrameBoundary(t *testing.T) {
+	const diagnostic = `{"type":"session_error","code":"queue_full"}`
+	for _, mode := range []string{"pre-cancelled", "zero-bytes", "after-lf"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sink := &cancelAtBoundary{cancel: cancel, complete: mode == "after-lf"}
+			var want string
+			var wantErr error
+			if mode == "pre-cancelled" {
+				cancel()
+				sink.cancel = nil
+			}
+			if mode == "after-lf" {
+				want = "{}\n"
+			} else {
+				wantErr = context.Canceled
+			}
+			out := NewOutput(sink)
+			if err := out.WriteFrame(ctx, []byte("{}")); !errors.Is(err, wantErr) || sink.String() != want {
+				t.Fatalf("cancelled response: %q (%v)", sink.String(), err)
+			}
+			if err := out.WriteFrame(context.Background(), []byte(diagnostic)); err != nil {
+				t.Fatalf("terminal diagnostic: %v", err)
+			}
+			if got := sink.String(); got != want+diagnostic+"\n" {
+				t.Fatalf("stdout = %q", got)
+			}
+		})
+	}
+
 }
 
 type observedPipeWriter struct {
