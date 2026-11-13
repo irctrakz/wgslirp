@@ -65,8 +65,9 @@ terminal failure can exit nonzero without a complete diagnostic.
 
 After a peer mutation deadline, the controller may send one reconciliation
 status request. The transcript must establish the outcome with a
-`decision` before further requests. If the status deadline also expires,
-the controller closes stdin and reaps the old helper before replacement.
+`decision` before further requests. If status times out or the helper fails
+during reconciliation, the controller closes stdin if it is still open and
+reaps the old helper before replacement.
 
 ## Verify the shared data
 

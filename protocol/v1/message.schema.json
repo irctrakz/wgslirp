@@ -214,8 +214,16 @@
       "else": {
         "required": ["error"],
         "properties": { "result": false },
-        "if": { "properties": { "error": { "properties": { "code": { "const": "start_failed" } } } } },
-        "then": { "properties": { "op": { "const": "start" }, "revision": { "const": 0 } } }
+        "allOf": [
+          {
+            "if": { "properties": { "error": { "properties": { "code": { "const": "start_failed" } } } } },
+            "then": { "properties": { "op": { "const": "start" }, "revision": { "const": 0 } } }
+          },
+          {
+            "if": { "properties": { "error": { "properties": { "code": { "const": "peer_update_failed" } } } } },
+            "then": { "properties": { "op": { "enum": ["peer_add", "peer_remove"] } } }
+          }
+        ]
       }
     },
     "sessionError": {

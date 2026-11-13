@@ -167,6 +167,19 @@ and 47 session transcripts. Six in-memory probes rejected impossible removal
 errors, success for removal of an absent peer, an incorrect status revision
 and an incorrect desired-state decision. W1 awaits review before W2.
 
+Sixth W1 review follow-up
+
+- [x] Cover terminal session errors and stdout failure while reconciliation
+  status is queued. Require the old helper to be reaped before replacement.
+- [x] Limit `peer_update_failed` to peer addition and removal in the schema.
+  Cover both accepted operations and rejection on `status`.
+
+Verification passed the Draft 2020-12 schema, 24 frame cases, 22 message shapes
+and 49 session transcripts. Four negative probes rejected replacement before
+reaping after either terminal failure, reconciliation replacement without a
+pending reconciliation, and `peer_update_failed` on an idle `status` request.
+The protocol baseline remains open for review.
+
 ### W2 — Extract a reusable application lifecycle
 
 Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).

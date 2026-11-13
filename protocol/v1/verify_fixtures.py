@@ -389,7 +389,8 @@ def check_session(case, validator):
             require(value is True and exited and not reaped, "reaping requires one observed exit")
             reaped = True
         elif action == "replace_helper":
-            require(value is True and reconciliation_failed and input_closed and reaped
+            recovery_failed = reconciliation_failed or (unresolved_mutation is not None and terminal_failure)
+            require(value is True and recovery_failed and input_closed and reaped
                     and index == len(case["steps"]) - 1,
                     "replacement after failed reconciliation requires closing and reaping the helper")
         else:

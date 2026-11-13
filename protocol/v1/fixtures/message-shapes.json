@@ -1,4 +1,7 @@
 [
+  {"id":"bad_peer_update_failed_on_status","valid":false,"message":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":false,"error":{"code":"peer_update_failed"}}},
+  {"id":"good_peer_update_failed_on_peer_add","valid":true,"message":{"id":3,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":false,"error":{"code":"peer_update_failed"}}},
+  {"id":"good_peer_update_failed_on_peer_remove","valid":true,"message":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":false,"error":{"code":"peer_update_failed"}}},
   {"id":"bad_start_failure_missing_reason","valid":false,"message":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed"}}},
   {"id":"bad_start_failure_arbitrary_reason","valid":false,"message":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed","reason":"arbitrary platform error"}}},
   {"id":"bad_start_reason_on_other_error","valid":false,"message":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_config","reason":"other"}}},

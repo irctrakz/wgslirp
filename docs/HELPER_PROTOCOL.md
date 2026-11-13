@@ -281,9 +281,11 @@ no further requests until both checks are complete. Use the reconciled
 revision and peer state to decide whether another mutation is needed.
 
 If reconciliation fails, times out, or the pipe becomes unusable, close stdin
-and reap the helper before replacing it from durable desired state. For other
-control timeouts,
-close stdin and reap the helper before replacing it. After closing stdin on
+if still open and reap the helper before replacing it from durable desired
+state. A terminal session error during reconciliation also counts as failure.
+Reap the terminating helper before replacement, even when neither pending
+request receives a correlated reply. For other control timeouts, close stdin
+and reap the helper before replacing it. After closing stdin on
 failure, allow up to 15 seconds for the helper to exit, then terminate the owned
 process if it is still running.
 
@@ -302,7 +304,7 @@ process if it is still running.
 | `peer_conflict` | The key or address is assigned or the address was revoked in this session. |
 | `peer_limit` | The active peer or process assignment limit was reached. |
 | `peer_not_found` | The requested public key is absent. |
-| `peer_update_failed` | Applying the update failed with the prior state verified intact. |
+| `peer_update_failed` | A `peer_add` or `peer_remove` failed to apply with the prior state verified intact. |
 
 `session_error` frames are terminal and carry one of `invalid_frame`,
 `frame_too_large`, `queue_full`, `runtime_state_uncertain` or `shutdown_timeout`.
