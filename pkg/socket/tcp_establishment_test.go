@@ -319,6 +319,73 @@ func TestShutdownRejectsCompletedDialBeforeAttachment(t *testing.T) {
 	assertBudget(t, b.buffers, 0)
 }
 
+func TestShutdownAfterAsyncDialAttachmentDiscardsPendingData(t *testing.T) {
+	parent := NewSocketInterface(DefaultConfig())
+	parent.processor = &captureProcessor{}
+	b := newTCPBridge(parent)
+	client, host := tcpBudgetPair(t)
+	finishDial := make(chan struct{})
+	attached := make(chan bool, 1)
+	resume := make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	t.Cleanup(func() { release(); b.stop() })
+	b.tuning.FastDialMs = 1
+	b.dial = func(ctx context.Context, _ string, _ time.Duration) (*net.TCPConn, error) {
+		select {
+		case <-finishDial:
+			return client, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	b.onDialAttached = func(f *tcpFlow) {
+		attached <- f.conn == client && !f.connecting && f.pendingBytes > 0
+		<-resume
+	}
+
+	src, dst := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 42, 0, fSYN, nil)); err != nil {
+		t.Fatal(err)
+	}
+	flows := b.flowSnapshot()
+	if len(flows) != 1 {
+		t.Fatal("missing connecting flow")
+	}
+	f := flows[0]
+	f.stateMu.Lock()
+	ack := f.serverNxt
+	f.stateMu.Unlock()
+	payload := []byte("buffered before attachment")
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 43, ack, fACK, payload)); err != nil {
+		t.Fatal(err)
+	}
+	close(finishDial)
+	select {
+	case ready := <-attached:
+		if !ready {
+			t.Fatal("expected attached host socket and buffered data")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("asynchronous dial did not attach")
+	}
+	b.requestStop()
+	release()
+
+	if err := host.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(host)
+	if err != nil || len(data) != 0 {
+		t.Fatalf("host received %q before EOF: %v", data, err)
+	}
+	b.stop()
+	if len(b.flowSnapshot()) != 0 || atomic.LoadInt64(&b.dialInflight) != 0 {
+		t.Fatal("retained flow or dial accounting")
+	}
+	assertBudget(t, b.dialSlots, 0)
+	assertBudget(t, b.buffers, 0)
+}
+
 func TestTCPEstablishmentEmitsOneSYNACK(t *testing.T) {
 	for _, async := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fast", true: "async"}[async], func(t *testing.T) {

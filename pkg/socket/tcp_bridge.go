@@ -57,6 +57,9 @@ type tcpBridge struct {
 	stopCh          chan struct{}
 	lifetime        time.Duration
 
+	// Optional test hook called under stateMu after asynchronous attachment.
+	onDialAttached func(*tcpFlow)
+
 	metrics  core.SocketMetrics
 	maxFlows int
 	ackDelay time.Duration

@@ -755,6 +755,24 @@ contract and has verified process-lifecycle behavior.
   Linux integration vet, the shared fixture verifier, and Linux, macOS and
   Windows ARM64 cross-builds also passed.
 
+**W6 shutdown after async attachment**
+
+- If shutdown closes TCP worker admission after a host socket attaches, the
+  completion worker retires the flow and releases its buffered data when
+  reader admission is refused. Pending and reassembly drains also check bridge
+  cancellation before starting each host write.
+- The regression pauses async completion after confirming the host socket is
+  attached and data is buffered. It closes bridge admission before allowing
+  completion to proceed and verifies host EOF with zero payload, no retained
+  flow, and no retained reservations. The prior code sent the payload in all
+  three runs of the same test with a temporary overlay.
+- The regression passed 30 Windows runs alongside the pre-attachment,
+  normal async flush, and native Windows pipe regressions. It passed ten runs
+  in the unprivileged Linux amd64 VM, alongside the helper pipe, runtime and
+  standalone SIGTERM checks. Windows integration tests, Windows and Linux
+  integration vet, the shared fixture verifier, and Linux, macOS and Windows
+  ARM64 cross-builds also passed.
+
 W6 awaits review before W7.
 
 ### W7 — Publish versioned binaries and acceptance evidence

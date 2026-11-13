@@ -276,8 +276,15 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string, owner *peer
 					return
 				}
 
-				// Start reader now that conn exists
-				b.launchForPeer(owner, func() { b.reader(f) })
+				if b.onDialAttached != nil {
+					b.onDialAttached(f)
+				}
+				// Shutdown or revocation can win after attachment. Retire
+				// the socket and its buffers if the reader is refused.
+				if !b.launchForPeer(owner, func() { b.reader(f) }) {
+					b.removeFlowLocked(f)
+					return
+				}
 				// Flush any pre-connect pending data and contiguous reassembly
 				b.flushPending(f)
 			}) {
@@ -384,8 +391,9 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 	f.pendMu.Unlock()
 	var writeErr error
 	for _, p := range batches {
-		if f.conn == nil {
-			break
+		if b.ctx.Err() != nil {
+			b.removeFlowLocked(f)
+			return
 		}
 		n, err := writeTCP(f.conn, p)
 		if err != nil {
@@ -400,6 +408,10 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 	}
 	if writeErr == nil {
 		writeErr = b.flushReassembly(f)
+	}
+	if b.ctx.Err() != nil {
+		b.removeFlowLocked(f)
+		return
 	}
 	if writeErr != nil {
 		atomic.AddUint64(&b.parent.metrics.Errors, 1)
