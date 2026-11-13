@@ -368,6 +368,28 @@ ARM64 cross-builds of both binaries, and the compatibility verifier passed.
 Native inherited-pipe pressure was verified on Linux. W6 owns the full
 controller and runtime teardown test after output failure. W3 awaits review.
 
+Second W3 review follow-up
+
+- [x] Preserve success when the entire response, including LF, was written
+  before cancellation can interrupt it. Join the writer and check its result
+  before reporting a cancellation as an interrupted frame.
+- [x] Route all three helper loggers through one best-effort stderr worker.
+  Limit the queue to 32 records of at most 4 KiB each and allow up to 100 ms
+  to drain on exit. Drop diagnostics under pressure so a full stderr pipe
+  cannot block runtime startup, packet workers or cleanup.
+
+The frame-boundary regression passed 100 Windows output-suite repetitions
+and three Linux runs. With a full, unread Linux stderr pipe, the subprocess
+started the runtime, wrote a response, closed the runtime and confirmed
+cleanup on stdout in all three runs. The Linux subprocess suite also passed
+three runs each for broken stdout and stderr, partial-frame cancellation,
+the five-second stdout timeout, stalled host-write status and standalone
+SIGTERM. The lower-level socket metrics regression passed ten runs.
+
+Windows tests and vet, encrypted TCP/UDP forwarding, Linux integration vet,
+Linux and macOS ARM64 cross-builds of both binaries, and all 100 protocol
+compatibility cases passed. W3 awaits review before W4.
+
 **Complete when:** portable status is usable by the C# wrapper and control-channel
 backpressure cannot cause unbounded buffering or block packet callbacks.
 

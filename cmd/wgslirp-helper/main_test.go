@@ -50,8 +50,7 @@ func TestHelperProtocolOutput(t *testing.T) {
 	}
 }
 
-func testHelperOutput(t *testing.T, mode string) {
-	logging.SetLevel(logging.DebugLevel)
+func helperTestConfig() application.Config {
 	cfg := application.Config{
 		Device: wg.DeviceConfig{
 			PrivateKey: "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=",
@@ -64,6 +63,12 @@ func testHelperOutput(t *testing.T, mode string) {
 		Pool:    socket.PoolConfig{Enabled: true},
 	}
 	cfg.Socket.Protocol = "ip4:tcp"
+	return cfg
+}
+
+func testHelperOutput(t *testing.T, mode string) {
+	logging.SetLevel(logging.DebugLevel)
+	cfg := helperTestConfig()
 	if mode == "bind-failure" {
 		reservation, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
 		if err != nil {
@@ -74,8 +79,8 @@ func testHelperOutput(t *testing.T, mode string) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	configureDiagnostics()
-	runtime, err := application.Start(ctx, helperConfig(cfg), application.Observers{})
+	diagnostics := configureDiagnostics()
+	runtime, err := application.Start(ctx, helperConfig(cfg, diagnostics), application.Observers{})
 	if mode == "bind-failure" {
 		if err == nil || !strings.Contains(err.Error(), "wireguard start:") {
 			t.Fatalf("expected bind failure: %v", err)
@@ -96,5 +101,6 @@ func testHelperOutput(t *testing.T, mode string) {
 		t.Fatal(err)
 	}
 	// Avoid the Go test harness's PASS line in the captured protocol stream.
+	diagnostics.finish()
 	os.Exit(0)
 }

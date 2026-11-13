@@ -31,8 +31,9 @@ type contextWriter interface {
 
 // WriteFrame writes a single pre-encoded JSON object followed by LF. A failed,
 // partial or timed-out write permanently retires the output. The controller
-// must shut down the runtime and exit on such a failure. On cancellation the
-// writer is closed and the write has stopped before this method returns.
+// must shut down the runtime and exit on such a failure. If cancellation
+// interrupts a write, close the stream and wait for the write to stop. A
+// complete frame remains successful even when cancellation races its result.
 func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 	if o.failed {
 		return ErrOutputClosed
@@ -70,8 +71,19 @@ func (o *Output) WriteFrame(ctx context.Context, payload []byte) error {
 		}
 		return err
 	case <-ctx.Done():
+		select {
+		case err := <-done:
+			if err == nil {
+				return nil
+			}
+			o.retire()
+			return err
+		default:
+		}
 		o.retire()
-		<-done
+		if err := <-done; err == nil {
+			return nil
+		}
 		return ctx.Err()
 	}
 }

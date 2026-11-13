@@ -14,6 +14,36 @@ type bufferOutput struct{ bytes.Buffer }
 
 func (*bufferOutput) Close() error { return nil }
 
+type cancelAfterFrame struct {
+	bufferOutput
+	cancel context.CancelFunc
+	closed chan struct{}
+}
+
+func (w *cancelAfterFrame) Write(frame []byte) (int, error) {
+	n, err := w.Buffer.Write(frame)
+	w.cancel()
+	// Hold the completion result until the caller takes its cancellation
+	// path. The full frame is already in the sink.
+	<-w.closed
+	return n, err
+}
+
+func (w *cancelAfterFrame) Close() error {
+	close(w.closed)
+	return nil
+}
+
+func TestOutputPreservesFrameCompletedAtCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &cancelAfterFrame{cancel: cancel, closed: make(chan struct{})}
+	out := NewOutput(sink)
+	if err := out.WriteFrame(ctx, []byte("{}")); err != nil || sink.String() != "{}\n" {
+		t.Fatalf("completed frame: %q (%v)", sink.String(), err)
+	}
+}
+
 type observedPipeWriter struct {
 	*io.PipeWriter
 	closed chan struct{}

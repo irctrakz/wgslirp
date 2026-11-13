@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irctrakz/wgslirp/internal/application"
 	"github.com/irctrakz/wgslirp/internal/helperwire"
+	"github.com/irctrakz/wgslirp/pkg/logging"
 	"golang.org/x/sys/unix"
 )
 
@@ -25,7 +27,7 @@ func TestInheritedHelperPipes(t *testing.T) {
 		testInheritedHelperPipesChild(t, mode)
 		return
 	}
-	for _, mode := range []string{"cancel", "timeout", "broken-stdout", "broken-stderr"} {
+	for _, mode := range []string{"cancel", "timeout", "broken-stdout", "broken-stderr", "full-stderr"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestInheritedHelperPipes$")
@@ -47,6 +49,14 @@ func TestInheritedHelperPipes(t *testing.T) {
 				_ = out.Close()
 			} else if mode == "broken-stderr" {
 				_ = diagnostics.Close()
+			} else if mode == "full-stderr" {
+				size, err := unix.FcntlInt(diagWriter.Fd(), unix.F_SETPIPE_SZ, 4096)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := diagWriter.Write(bytes.Repeat([]byte{'x'}, size)); err != nil {
+					t.Fatal(err)
+				}
 			} else if _, err := unix.FcntlInt(outWriter.Fd(), unix.F_SETPIPE_SZ, 4096); err != nil {
 				t.Fatal(err)
 			}
@@ -58,8 +68,13 @@ func TestInheritedHelperPipes(t *testing.T) {
 			switch mode {
 			case "broken-stdout":
 				expectPipeLine(t, bufio.NewReader(diagnostics), "stdout EPIPE handled\n")
-			case "broken-stderr":
-				expectPipeLine(t, bufio.NewReader(out), "{}\n")
+			case "broken-stderr", "full-stderr":
+				if err := out.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				reader := bufio.NewReader(out)
+				expectPipeLine(t, reader, "{}\n")
+				expectPipeLine(t, reader, "{\"closed\":true}\n")
 			default:
 				start := time.Now()
 				prefix := make([]byte, 1)
@@ -115,7 +130,7 @@ func expectPipeLine(t *testing.T, r *bufio.Reader, want string) {
 }
 
 func testInheritedHelperPipesChild(t *testing.T, mode string) {
-	configureDiagnostics()
+	diagnostics := configureDiagnostics()
 	stdin := bufio.NewReader(os.Stdin)
 	output, err := helperwire.NewStdoutOutput()
 	if err != nil {
@@ -128,11 +143,21 @@ func testInheritedHelperPipesChild(t *testing.T, mode string) {
 			t.Fatalf("expected EPIPE, got %v", err)
 		}
 		fmt.Fprintln(os.Stderr, "stdout EPIPE handled")
-	case "broken-stderr":
-		if err := log.Output(1, "closed diagnostic pipe"); !errors.Is(err, syscall.EPIPE) {
-			t.Fatalf("expected diagnostic EPIPE, got %v", err)
+	case "broken-stderr", "full-stderr":
+		logging.SetLevel(logging.DebugLevel)
+		log.Print("helper startup diagnostic")
+		runtime, err := application.Start(ctx, helperConfig(helperTestConfig(), diagnostics), application.Observers{})
+		if err != nil {
+			t.Fatal(err)
 		}
 		if err := output.WriteFrame(ctx, []byte("{}")); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Close(); err != nil {
+			t.Fatal(err)
+		}
+		diagnostics.finish()
+		if err := output.WriteFrame(ctx, []byte(`{"closed":true}`)); err != nil {
 			t.Fatal(err)
 		}
 	default:
@@ -156,6 +181,9 @@ func testInheritedHelperPipesChild(t *testing.T, mode string) {
 	}
 	if _, err := stdin.ReadByte(); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected parent to close stdin: %v", err)
+	}
+	if mode != "broken-stderr" && mode != "full-stderr" {
+		diagnostics.finish()
 	}
 	os.Exit(0)
 }
