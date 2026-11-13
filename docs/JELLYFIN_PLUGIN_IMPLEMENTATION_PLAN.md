@@ -2,10 +2,8 @@
 
 Created: 2026-10-29
 
-Status for 2026-11-12. The latest W1 fixes are ready for another review on
-`codex/jellyfin-integration`.
-W2 begins after W1 review. Check off work when its acceptance criteria are
-satisfied and evidence is recorded.
+W1 was approved at `459f6f1`. W2 is ready for review on
+`codex/jellyfin-integration`. W3 starts after W2 review.
 
 ## Architecture and scope
 
@@ -224,24 +222,40 @@ awaits review before W2.
 
 Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).
 
-- [ ] Move networking assembly and cleanup into an application-owned runtime,
-  provisionally `internal/application`.
-- [ ] Keep environment parsing and terminal signal handling in the existing CLI.
-- [ ] Add a thin `cmd/wgslirp-helper` entry point for protocol-controlled operation.
-- [ ] Make both entry points use the same runtime construction and shutdown logic.
-- [ ] Use explicit, validated configuration for the helper; do not accidentally
-  inherit networking settings from its environment.
-- [ ] Keep one runtime per helper process. Replace the process for restart-required
+- [x] Move networking assembly and cleanup into `internal/application`.
+- [x] Keep environment parsing and terminal signal handling in the existing CLI.
+- [x] Add a thin `cmd/wgslirp-helper` scaffold that accepts typed configuration
+  at its runtime boundary. W6 connects the wire protocol.
+- [x] Make both entry points use the same runtime construction and shutdown logic.
+- [x] Use explicit, validated runtime configuration independent of the helper
+  environment.
+- [x] Keep one runtime per helper process. Replace the process for restart-required
   changes rather than adding a multi-instance runtime framework.
-- [ ] Respect existing single-use lifecycle and process-wide pooling/capture
+- [x] Respect existing single-use lifecycle and process-wide pooling/capture
   contracts documented in [runtime lifecycle](CONTRACTS.md#lifecycle-and-concurrency)
   and [configuration and compatibility](CONTRACTS.md#configuration-and-compatibility).
-- [ ] Preserve the standalone CLI's existing configuration contract and defaults.
-- [ ] Verify existing standalone behavior, startup-failure cleanup, cancellation
+- [x] Preserve the standalone CLI's existing configuration contract and defaults.
+- [x] Verify existing standalone behavior, startup-failure cleanup, cancellation
   and repeated shutdown.
 
 **Complete when:** both entry points share runtime ownership without duplicating
 the networking lifecycle or changing the standalone CLI's supported behavior.
+
+The runtime validates typed settings before claiming process-wide resources.
+It cancels and joins observers, then closes the WireGuard device, sockets, TUN
+and capture. Startup checks cancellation between acquisition steps. The
+standalone command retains its existing health and metrics observers.
+The helper scaffold exits with an error until W6 provides the protocol controller
+and restricted configuration.
+
+Windows amd64 verification used Go 1.23.12. Build, vet, the full unit suite
+and the encrypted standalone binary test passed. The binary test exercised
+forwarding with fragment reassembly enabled and disabled. Lifecycle subprocess
+tests checked typed configuration despite conflicting environment settings,
+failed bind cleanup, cancellation during startup and after readiness, and
+concurrent close. The lifecycle suite passed ten consecutive runs. Linux
+amd64 and ARM64 cross-builds and focused Linux amd64 vet passed. Native Linux
+runtime and race validation were unavailable on this Windows host.
 
 ### W3 — Provide portable status and protocol-safe logging
 
@@ -524,7 +538,8 @@ a cross-compiled binary alone does not complete platform support.
 | Linux release | W7, J6–J7 | Installable, validated Linux x64/ARM64 plugin |
 | Final platform release | Expanded W7 and J8 | Validated binary implementation across the agreed OS matrix |
 
-- [ ] Protocol baseline accepted, with shared fixtures available to both repositories.
+- [x] Protocol baseline accepted at `459f6f1`, with shared fixtures available
+  to both repositories.
 - [ ] Vertical slice accepted, including an early decision on Jellyfin connection classification.
 - [ ] Managed access accepted, including crash reconciliation and live revocation.
 - [ ] Linux release accepted on x64 and ARM64.
