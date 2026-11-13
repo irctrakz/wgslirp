@@ -8,9 +8,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
@@ -170,6 +172,147 @@ func encryptedTestLinkWithSources(t *testing.T, endpoint func(int) string, ingre
 func TestEncryptedWireGuardTCPUDP(t *testing.T) {
 	t.Run("ordinary", func(t *testing.T) { testEncryptedWireGuardTCPUDP(t, false) })
 	t.Run("fragments", func(t *testing.T) { testEncryptedWireGuardTCPUDP(t, true) })
+}
+
+type restrictedIngress struct {
+	*socket.SocketInterface
+	rejected chan error
+}
+
+func (w restrictedIngress) WritePacket(packet core.Packet) error {
+	err := w.SocketInterface.WritePacket(packet)
+	if err != nil {
+		select {
+		case w.rejected <- err:
+		default:
+		}
+	}
+	return err
+}
+
+func TestEncryptedRestrictedDestination(t *testing.T) {
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	host := listener.Addr().(*net.TCPAddr).AddrPort().Addr().Unmap()
+	hostPort := uint16(listener.Addr().(*net.TCPAddr).Port)
+	servicePort := uint16(8096)
+	if servicePort == hostPort {
+		servicePort++
+	}
+	service := netip.AddrPortFrom(netip.MustParseAddr("10.77.0.1"), servicePort)
+	policy, err := socket.NewDestinationPolicy([]socket.TCPMapping{
+		{Guest: service, Host: netip.AddrPortFrom(host, hostPort)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := make(chan error, 16)
+	s, tun, replies := encryptedTestLinkWithConfig(t, func(port int) string {
+		return fmt.Sprintf("127.0.0.1:%d", port)
+	}, func(s *socket.SocketInterface) core.PacketWriter {
+		return restrictedIngress{s, rejected}
+	}, func(cfg *socket.Config) { cfg.Destinations = policy })
+
+	send := func(proto byte, dst netip.Addr, port uint16, seq, ack uint32, flags byte, payload []byte, id uint16) {
+		t.Helper()
+		p := encryptedPacket(proto, port, seq, ack, flags, payload)
+		copy(p[16:20], dst.AsSlice())
+		clear(p[10:12])
+		binary.BigEndian.PutUint16(p[10:12], encryptedChecksum(p[:20]))
+		checksum := 36
+		if proto == 17 {
+			checksum = 26
+		}
+		clear(p[checksum : checksum+2])
+		pseudo := append([]byte(nil), p[12:20]...)
+		pseudo = append(pseudo, 0, proto, 0, byte(len(p)-20))
+		binary.BigEndian.PutUint16(p[checksum:], encryptedChecksum(append(pseudo, p[20:]...)))
+		packets := [][]byte{p}
+		if id != 0 {
+			packets = encryptedFragments(p, id, 8)
+		}
+		for _, p := range packets {
+			if err := tun.InjectToPeer(p); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	expectRejected := func() {
+		t.Helper()
+		select {
+		case err := <-rejected:
+			if !errors.Is(err, socket.ErrDestinationDenied) {
+				t.Fatalf("unexpected denial: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("packet did not reach destination policy")
+		}
+	}
+	send(6, host, hostPort, 100, 0, 2, nil, 0)
+	expectRejected()
+	send(6, service.Addr(), service.Port()+1, 100, 0, 2, nil, 1)
+	expectRejected()
+	send(17, service.Addr(), service.Port(), 0, 0, 0, []byte("deny"), 0)
+	expectRejected()
+
+	if err := listener.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	send(6, service.Addr(), service.Port(), 100, 0, 2, nil, 2)
+	conn, err := listener.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	receive := func() []byte {
+		t.Helper()
+		select {
+		case p := <-replies:
+			if len(p) < 40 || p[9] != 6 || !bytes.Equal(p[12:16], service.Addr().AsSlice()) ||
+				binary.BigEndian.Uint16(p[20:22]) != service.Port() {
+				t.Fatalf("reply did not preserve the guest service endpoint: %x", p)
+			}
+			return p
+		case <-time.After(3 * time.Second):
+			t.Fatal("no encrypted TCP reply")
+			return nil
+		}
+	}
+	syn := receive()
+	if syn[33]&0x12 != 0x12 {
+		t.Fatal("expected a mapped SYN-ACK")
+	}
+	ack := binary.BigEndian.Uint32(syn[24:28]) + 1
+	send(6, service.Addr(), service.Port()+1, 101, ack, 0x18, []byte("deny"), 3)
+	expectRejected()
+	payload := []byte("mapped")
+	send(6, service.Addr(), service.Port(), 101, ack, 0x18, payload, 4)
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(conn, got); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("mapped host received %q (%v)", got, err)
+	}
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		reply := receive()
+		h := 20 + int(reply[32]>>4)*4
+		if len(reply) > h {
+			if !bytes.Equal(reply[h:], payload) {
+				t.Fatalf("mapped reply payload: %q", reply[h:])
+			}
+			break
+		}
+	}
+	if fragments := s.DetailedMetrics().IPv4Fragments["completed"]; fragments < 4 {
+		t.Fatalf("completed reassemblies: %d", fragments)
+	}
 }
 
 func testEncryptedWireGuardTCPUDP(t *testing.T, fragments bool) {

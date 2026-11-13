@@ -20,6 +20,7 @@ var packetErrorReasons = [...]struct {
 	{socket.ErrFlowLimit, "flow_limit"},
 	{socket.ErrDialLimit, "pending_dial_limit"},
 	{socket.ErrBufferLimit, "aggregate_buffer_limit"},
+	{socket.ErrDestinationDenied, "destination_denied"},
 	{ErrQueueFull, "tun_queue_full"},
 }
 

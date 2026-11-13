@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -355,6 +356,15 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 	if err != nil {
 		return err
 	}
+	guest := netip.AddrPortFrom(netip.AddrFrom4(segment.dstIP), segment.dstPort)
+	host := guest
+	if policy := b.parent.config.Destinations; policy != nil {
+		var allowed bool
+		host, allowed = policy.tcp[guest]
+		if !allowed {
+			return ErrDestinationDenied
+		}
+	}
 	if segment.flags&fRST != 0 {
 		b.removeFlow(segment.key)
 		return nil
@@ -362,7 +372,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 	flow := b.lookupFlow(segment.key)
 
 	if flow == nil && segment.flags&fSYN != 0 && segment.flags&fACK == 0 {
-		return b.establishTCP(segment)
+		return b.establishTCP(segment, host.String())
 	}
 	return b.handleTCPFlow(flow, segment)
 }

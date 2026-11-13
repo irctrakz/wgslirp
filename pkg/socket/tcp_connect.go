@@ -17,7 +17,7 @@ import (
 // registry/flow locks, then publishes a state-locked candidate under the registry
 // lock. A losing candidate closes only its own socket and processes the winner
 // before its deferred dial reservation release, matching the ordinary SYN path.
-func (b *tcpBridge) establishTCP(segment tcpSegment) error {
+func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 	pkt := segment.pkt
 	ihl := segment.ihl
 	tcpOff := segment.tcpOff
@@ -58,7 +58,6 @@ func (b *tcpBridge) establishTCP(segment tcpSegment) error {
 	// send transfers socket ownership to exactly one receiver; cancellation
 	// closes any socket that never transfers. Shutdown joins this worker.
 	result := make(chan tcpDialResult)
-	address := (&net.TCPAddr{IP: net.IP(dstIP[:]), Port: int(dstPort)}).String()
 	fastT := time.Duration(b.tuning.FastDialMs) * time.Millisecond
 	if fastT <= 0 {
 		fastT = time.Millisecond

@@ -298,6 +298,11 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	}
 
 	data := core.BorrowPacketData(packet)
+	// The protocol byte is available on every fragment. Leave malformed
+	// headers to the normal parser and authorize the TCP port after assembly.
+	if s.config.Destinations != nil && len(data) >= 20 && data[0]>>4 == 4 && data[9] != 6 {
+		return ErrDestinationDenied
+	}
 	original := data
 	var err error
 	if s.fragments != nil {

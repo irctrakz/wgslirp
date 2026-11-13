@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"github.com/irctrakz/wgslirp/pkg/core"
+	"github.com/irctrakz/wgslirp/pkg/socket"
 	wg "github.com/irctrakz/wgslirp/pkg/wireguard"
 )
 
@@ -141,8 +143,13 @@ func (discardPackets) WritePacket(core.Packet) error { return nil }
 
 func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 	const marker = "WGSLIRP_RUNTIME_PENDING_DIAL_TEST"
-	if os.Getenv(marker) != "1" {
-		runRuntimeSubprocess(t, "TestCloseCancelsWireGuardHostDial", marker+"=1")
+	mode := os.Getenv(marker)
+	if mode == "" {
+		for _, mode := range []string{"unrestricted", "restricted"} {
+			t.Run(mode, func(t *testing.T) {
+				runRuntimeSubprocess(t, "TestCloseCancelsWireGuardHostDial", marker+"="+mode)
+			})
+		}
 		return
 	}
 	// Linux backlog zero admits one connection. Keep it queued so the next
@@ -183,6 +190,15 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 	cfg.Device.PrivateKey = serverPrivate
 	cfg.Device.Peers = []wg.PeerConfig{{PublicKey: clientPublic, AllowedIPs: []string{"10.0.0.2/32"}}}
 	cfg.Socket.Transport.FastDialMs = 8000
+	target := netip.MustParseAddrPort(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if mode == "restricted" {
+		host := target
+		target = netip.MustParseAddrPort("10.77.0.1:8096")
+		cfg.Socket.Destinations, err = socket.NewDestinationPolicy([]socket.TCPMapping{{Guest: target, Host: host}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	r, err := Start(context.Background(), cfg, Observers{})
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +219,7 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 	defer clientTun.Close()
 	client, err := wg.StartDevice(wg.DeviceConfig{
 		PrivateKey: clientPrivate, MTU: cfg.Device.MTU,
-		Peers: []wg.PeerConfig{{PublicKey: serverPublic, AllowedIPs: []string{"127.0.0.1/32"},
+		Peers: []wg.PeerConfig{{PublicKey: serverPublic, AllowedIPs: []string{netip.PrefixFrom(target.Addr(), 32).String()},
 			Endpoint: net.JoinHostPort("127.0.0.1", serverPort)}},
 	}, clientTun)
 	if err != nil {
@@ -211,9 +227,9 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 	}
 	defer client.Close()
 	var syn [40]byte
-	source, target := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
-	if !packetwire.IPv4Header(syn[:], source, target, 6, 0, 64, 0, 0) ||
-		!packetwire.TCP(syn[20:], source, target, 42000, uint16(port), 1, 0, 2, 65535, nil, nil) {
+	source, destination := [4]byte{10, 0, 0, 2}, target.Addr().As4()
+	if !packetwire.IPv4Header(syn[:], source, destination, 6, 0, 64, 0, 0) ||
+		!packetwire.TCP(syn[20:], source, destination, 42000, target.Port(), 1, 0, 2, 65535, nil, nil) {
 		t.Fatal("could not encode SYN")
 	}
 	if err := clientTun.InjectToPeer(syn[:]); err != nil {

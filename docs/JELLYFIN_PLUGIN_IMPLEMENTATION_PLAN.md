@@ -3,7 +3,8 @@
 Created: 2026-10-29
 
 W1 was approved at `459f6f1`. W2 was approved at `8b10bbd`.
-W3 was approved at `539d884`. Work continues on `codex/jellyfin-integration`.
+W3 was approved at `539d884` and recorded in `623f6ff`.
+W4 is ready for review on `codex/jellyfin-integration`.
 
 ## Architecture and scope
 
@@ -431,8 +432,8 @@ Starting points: [pkg/socket/socket.go](../pkg/socket/socket.go),
 [pkg/socket/udp_bridge.go](../pkg/socket/udp_bridge.go) and
 [pkg/wireguard/wg_tun_wg.go](../pkg/wireguard/wg_tun_wg.go).
 
-- [ ] Add an explicit restricted-forwarding mode independent of Jellyfin terminology.
-- [ ] Support mappings such as:
+- [x] Add an explicit restricted-forwarding mode independent of Jellyfin terminology.
+- [x] Support mappings such as:
 
   ```text
   Guest destination: TCP 10.77.0.1:8096
@@ -440,20 +441,41 @@ Starting points: [pkg/socket/socket.go](../pkg/socket/socket.go),
   Default action:    deny
   ```
 
-- [ ] Preserve guest-visible addresses in synthesized replies while dialing the
+- [x] Preserve guest-visible addresses in synthesized replies while dialing the
   mapped host destination.
-- [ ] Enforce policy for initial connections, existing-flow handling and
+- [x] Enforce policy for initial connections, existing-flow handling and
   reassembled packets.
-- [ ] Disable peer-to-peer overlay routing in the restricted profile so it cannot
+- [x] Disable peer-to-peer overlay routing in the restricted profile so it cannot
   provide a policy bypass.
-- [ ] Require unique, non-overlapping client IPv4 `/32` addresses in this profile
+- [x] Require unique, non-overlapping client IPv4 `/32` addresses in this profile
   and reserve the virtual service address separately.
-- [ ] Keep WireGuard source-address ownership separate from destination authorization.
-- [ ] Permit only explicitly mapped TCP services in the initial Jellyfin profile;
+- [x] Keep WireGuard source-address ownership separate from destination authorization.
+- [x] Permit only explicitly mapped TCP services in the initial Jellyfin profile;
   reject other guest traffic unless explicitly supported.
-- [ ] Leave the standalone router's existing unrestricted behavior available.
-- [ ] Verify allowed mappings, rejected addresses/ports/protocols, fragment handling,
+- [x] Leave the standalone router's existing unrestricted behavior available.
+- [x] Verify allowed mappings, rejected addresses/ports/protocols, fragment handling,
   reply endpoint preservation and unrestricted-mode regression coverage.
+
+The typed application configuration opts in through an immutable destination
+policy. The TCP bridge checks the guest tuple before looking up or changing
+flow state, including after reassembly. Only the host dial uses the mapped
+tuple. Restricted configuration rejects overlay routing, capture, ICMP echo
+and non-passive or conflicting peer assignments. The socket drops non-TCP
+traffic and suppresses fragment-expiry replies in restricted mode. W6 will
+translate validated protocol requests into this configuration.
+
+Encrypted tests exercised a loopback host listener at a different port from
+the virtual service. They verified fragmented SYN and data, guest-visible
+reply endpoints, and rejection of a direct host address, an unmapped port,
+UDP, and a forged data segment addressed to an unmapped port.
+
+Restricted and unrestricted encrypted forwarding passed five runs each in
+the isolated Linux amd64 VM and ten each on Windows. Linux runtime tests
+also passed three runs each for mapped and unrestricted pending-dial
+cancellation, standalone SIGTERM and helper pipes. Windows unit tests and
+vet, Linux integration vet, Linux and macOS ARM64 cross-builds of both
+binaries, and all 100 protocol compatibility cases passed. W4 awaits
+review before W5.
 
 **Complete when:** a WireGuard client can reach a mapped service, and alternate
 destinations or forwarding paths cannot escape the configured policy.

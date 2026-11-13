@@ -130,11 +130,7 @@ func parseStatus(state string) (Status, error) {
 		switch key {
 		case "allowed_ip":
 			prefix, err := netip.ParsePrefix(value)
-			if err != nil || !prefix.Addr().Is4() || prefix.Bits() != 32 || peer.Address != "" {
-				return Status{}, ErrRuntimeStateUncertain
-			}
-			firstOctet := prefix.Addr().As4()[0]
-			if firstOctet == 0 || firstOctet == 127 || firstOctet >= 224 {
+			if err != nil || !validGuestIPv4(prefix.Addr()) || prefix.Bits() != 32 || peer.Address != "" {
 				return Status{}, ErrRuntimeStateUncertain
 			}
 			peer.Address = prefix.Addr().String()

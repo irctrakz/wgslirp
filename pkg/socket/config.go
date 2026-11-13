@@ -13,6 +13,14 @@ var ErrFlowLimit = errors.New("flow limit reached")
 
 // Validate checks the protocol and resource controls before startup acquires resources.
 func (c Config) Validate() error {
+	if c.Destinations != nil {
+		if len(c.Destinations.tcp) == 0 {
+			return fmt.Errorf("restricted forwarding requires a destination policy with at least one mapping")
+		}
+		if c.Protocol != "ip4:tcp" || c.ICMPEcho || c.MaxTCPFlows <= 0 {
+			return fmt.Errorf("restricted forwarding requires TCP mode, disabled ICMP echo and a finite TCP flow limit")
+		}
+	}
 	protocol := c.socketProtocol()
 	if !strings.Contains(protocol, "icmp") && !strings.Contains(protocol, "tcp") && !strings.Contains(protocol, "udp") {
 		return fmt.Errorf("unsupported protocol: %s", protocol)
@@ -53,6 +61,9 @@ func (c Config) socketProtocol() string {
 
 // Config contains configuration for the socket interface
 type Config struct {
+	// Destinations opts in to restricted TCP forwarding.
+	Destinations *DestinationPolicy
+
 	// Transport is optional for source compatibility; nil uses transport defaults.
 	// NewSocketInterface copies the pointed-to value.
 	Transport *TransportConfig

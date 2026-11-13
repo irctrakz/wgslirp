@@ -32,6 +32,11 @@ func (c Config) Validate() error {
 	if err := c.Device.Validate(); err != nil {
 		return err
 	}
+	if c.Socket.Destinations != nil {
+		if err := c.validateRestricted(); err != nil {
+			return err
+		}
+	}
 	switch c.Socket.Protocol {
 	case "", "ip4:icmp", "ip4:tcp", "ip4:udp":
 	default:
