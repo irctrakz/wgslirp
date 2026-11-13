@@ -118,10 +118,21 @@ func (b *tcpBridge) requestStop() {
 	default:
 	}
 	b.mu.Lock()
-	close(b.stopCh)
 	sockets := b.hostSockets
+	// An admitted writer can be descheduled before it enters Conn.Write.
+	// Expire its deadline before publishing stop, under the same lock
+	// that lets writers set deadlines. No writer can rearm it after stop.
+	for conn := range sockets {
+		if err := conn.SetWriteDeadline(time.Now()); err != nil {
+			_ = conn.Close()
+		}
+	}
+	close(b.stopCh)
 	b.hostSockets = nil
 	b.mu.Unlock()
+	if b.beforeHostSocketsClose != nil {
+		b.beforeHostSocketsClose()
+	}
 	// Interrupt host I/O without waiting for flow state. A writer that
 	// already passed its cancellation check cannot use a closed socket.
 	for conn := range sockets {

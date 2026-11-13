@@ -62,6 +62,10 @@ type tcpBridge struct {
 	onDialAttached func(*tcpFlow)
 	// Optional test hook called under stateMu just before a pending host write.
 	beforePendingWrite func()
+	// Optional test hook after the write deadline is armed.
+	beforeHostWrite func()
+	// Optional test hook after admission closes and before the socket sweep.
+	beforeHostSocketsClose func()
 
 	metrics  core.SocketMetrics
 	maxFlows int

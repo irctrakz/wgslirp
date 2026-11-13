@@ -145,7 +145,7 @@ func (b *tcpBridge) receiveTCPDataLocked(flow *tcpFlow, segment tcpSegment) erro
 			flow.pendingBytes += len(payload)
 			atomic.AddUint64(&b.pendEnq, 1)
 		} else {
-			n, err := writeTCP(flow.conn, payload)
+			n, err := b.writeTCP(flow.conn, payload)
 			if err != nil {
 				b.abortBufferedFlowLocked(flow)
 				return fmt.Errorf("tcp: write: %w", err)

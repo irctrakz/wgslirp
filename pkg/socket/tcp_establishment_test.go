@@ -321,14 +321,20 @@ func TestShutdownRejectsCompletedDialBeforeAttachment(t *testing.T) {
 
 func TestShutdownAfterAsyncDialAttachmentDiscardsPendingData(t *testing.T) {
 	t.Run("before-reader-admission", func(t *testing.T) {
-		testShutdownAfterAsyncDialAttachment(t, false)
+		testShutdownAfterAsyncDialAttachment(t, "attachment", false)
 	})
 	t.Run("after-final-write-check", func(t *testing.T) {
-		testShutdownAfterAsyncDialAttachment(t, true)
+		testShutdownAfterAsyncDialAttachment(t, "pending", false)
+	})
+	t.Run("before-socket-sweep", func(t *testing.T) {
+		testShutdownAfterAsyncDialAttachment(t, "pending", true)
+	})
+	t.Run("admitted-write-before-socket-sweep", func(t *testing.T) {
+		testShutdownAfterAsyncDialAttachment(t, "admitted", true)
 	})
 }
 
-func testShutdownAfterAsyncDialAttachment(t *testing.T, atWrite bool) {
+func testShutdownAfterAsyncDialAttachment(t *testing.T, pauseAt string, holdSweep bool) {
 	t.Helper()
 	parent := NewSocketInterface(DefaultConfig())
 	parent.processor = &captureProcessor{}
@@ -338,7 +344,15 @@ func testShutdownAfterAsyncDialAttachment(t *testing.T, atWrite bool) {
 	attached := make(chan bool, 1)
 	resume := make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
-	t.Cleanup(func() { release(); b.stop() })
+	sweepReady, resumeSweep := make(chan struct{}), make(chan struct{})
+	releaseSweep := sync.OnceFunc(func() { close(resumeSweep) })
+	t.Cleanup(func() { release(); releaseSweep(); b.stop() })
+	if holdSweep {
+		b.beforeHostSocketsClose = func() {
+			close(sweepReady)
+			<-resumeSweep
+		}
+	}
 	b.tuning.FastDialMs = 1
 	b.dial = func(ctx context.Context, _ string, _ time.Duration) (*net.TCPConn, error) {
 		select {
@@ -350,16 +364,20 @@ func testShutdownAfterAsyncDialAttachment(t *testing.T, atWrite bool) {
 	}
 	b.onDialAttached = func(f *tcpFlow) {
 		attached <- f.conn == client && !f.connecting && f.pendingBytes > 0
-		if !atWrite {
+		if pauseAt == "attachment" {
 			<-resume
 		}
 	}
 	beforeWrite := make(chan struct{})
-	if atWrite {
-		b.beforePendingWrite = func() {
-			close(beforeWrite)
-			<-resume
-		}
+	pause := func() {
+		close(beforeWrite)
+		<-resume
+	}
+	switch pauseAt {
+	case "pending":
+		b.beforePendingWrite = pause
+	case "admitted":
+		b.beforeHostWrite = pause
 	}
 
 	src, dst := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
@@ -387,10 +405,31 @@ func testShutdownAfterAsyncDialAttachment(t *testing.T, atWrite bool) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("asynchronous dial did not attach")
 	}
-	if atWrite {
+	if pauseAt != "attachment" {
 		awaitBudgetWorker(t, beforeWrite)
 	}
-	b.requestStop()
+	if holdSweep {
+		stopped := make(chan struct{})
+		go func() {
+			b.requestStop()
+			close(stopped)
+		}()
+		awaitBudgetWorker(t, sweepReady)
+		select {
+		case <-b.stopCh:
+		default:
+			t.Fatal("bridge admission still open")
+		}
+		if err := client.SetNoDelay(true); err != nil {
+			t.Fatalf("host socket closed before writer resumed: %v", err)
+		}
+		defer func() {
+			releaseSweep()
+			awaitBudgetWorker(t, stopped)
+		}()
+	} else {
+		b.requestStop()
+	}
 	release()
 
 	if err := host.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
@@ -400,6 +439,7 @@ func testShutdownAfterAsyncDialAttachment(t *testing.T, atWrite bool) {
 	if err != nil || len(data) != 0 {
 		t.Fatalf("host received %q before EOF: %v", data, err)
 	}
+	releaseSweep()
 	b.stop()
 	if len(b.flowSnapshot()) != 0 || atomic.LoadInt64(&b.dialInflight) != 0 {
 		t.Fatal("retained flow or dial accounting")

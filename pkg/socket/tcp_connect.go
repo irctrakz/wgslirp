@@ -401,7 +401,7 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		if b.beforePendingWrite != nil {
 			b.beforePendingWrite()
 		}
-		n, err := writeTCP(f.conn, p)
+		n, err := b.writeTCP(f.conn, p)
 		if err != nil {
 			writeErr = err
 			break
@@ -415,9 +415,11 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 	if writeErr == nil {
 		writeErr = b.flushReassembly(f)
 	}
-	if b.ctx.Err() != nil {
+	select {
+	case <-b.stopCh:
 		b.removeFlowLocked(f)
 		return
+	default:
 	}
 	if writeErr != nil {
 		atomic.AddUint64(&b.parent.metrics.Errors, 1)

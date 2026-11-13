@@ -95,10 +95,7 @@ func (b *tcpBridge) flushReassembly(f *tcpFlow) error {
 		}
 		skip := int(f.clientNxt - s.seq)
 		if skip < len(s.data) {
-			if err := b.ctx.Err(); err != nil {
-				return err
-			}
-			n, err := writeTCP(f.conn, s.data[skip:])
+			n, err := b.writeTCP(f.conn, s.data[skip:])
 			if err != nil {
 				return err
 			}

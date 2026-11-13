@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -10,9 +11,23 @@ import (
 
 // Host writes have a deadline because the packet handler holds flow state.
 // This bounds shutdown even when the remote host stops reading.
-func writeTCP(conn *net.TCPConn, data []byte) (int, error) {
-	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+func (b *tcpBridge) writeTCP(conn *net.TCPConn, data []byte) (int, error) {
+	// Admit each write against the same lock that closes bridge admission.
+	// Release it before I/O so shutdown can interrupt an admitted write.
+	b.mu.RLock()
+	select {
+	case <-b.stopCh:
+		b.mu.RUnlock()
+		return 0, context.Canceled
+	default:
+	}
+	err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	b.mu.RUnlock()
+	if err != nil {
 		return 0, err
+	}
+	if b.beforeHostWrite != nil {
+		b.beforeHostWrite()
 	}
 	n, err := conn.Write(data)
 	if err == nil && n != len(data) {

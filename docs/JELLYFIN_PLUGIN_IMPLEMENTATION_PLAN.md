@@ -791,6 +791,25 @@ contract and has verified process-lifecycle behavior.
   checks. The full Windows integration suite, Windows and Linux integration
   vet, shared fixtures, and Linux, macOS and Windows ARM64 builds passed.
 
+**W6 writes during host socket shutdown**
+
+- Pending, reassembly and established TCP writes share bridge write
+  admission. Shutdown rejects new writes and expires the deadlines of
+  attached sockets before publishing admission closure. A writer paused after
+  arming its deadline cannot rearm it during shutdown. The socket sweep then
+  closes host I/O without taking flow locks.
+- Two async dial regressions hold the socket sweep after admission closes and
+  confirm the host socket is still open. They resume the writer either before
+  write admission or after arming its deadline. Both require host EOF with
+  zero payload before the sweep resumes, then verify flow and reservation
+  cleanup. With both protections disabled in a temporary overlay, each case
+  delivered the buffered payload in all three runs.
+- Both cases passed 30 focused Windows runs and ten unprivileged Linux amd64
+  VM runs. Native Windows stdout cancellation, Linux helper lifecycle and
+  pipe tests, and standalone SIGTERM passed. The full Windows integration
+  suite, Windows and Linux integration vet, the shared fixture verifier,
+  and Linux, macOS and Windows ARM64 builds also passed.
+
 W6 awaits review before W7.
 
 ### W7 — Publish versioned binaries and acceptance evidence
