@@ -3,7 +3,7 @@
 Created: 2026-10-29
 
 W1 was approved at `459f6f1`. W2 was approved at `8b10bbd`.
-W3 is ready for review on `codex/jellyfin-integration`.
+W3 was approved at `539d884`. Work continues on `codex/jellyfin-integration`.
 
 ## Architecture and scope
 
@@ -419,7 +419,7 @@ Fourth W3 review follow-up
 The synchronized regression and the other five Linux inherited-pipe cases
 passed three runs each in the isolated amd64 VM. Linux integration vet,
 frame-boundary tests, runtime lifecycle, stalled-host status and standalone
-SIGTERM also passed. W3 awaits review before W4.
+SIGTERM also passed. W3 was approved at `539d884`.
 
 **Complete when:** portable status is usable by the C# wrapper and control-channel
 backpressure cannot cause unbounded buffering or block packet callbacks.
