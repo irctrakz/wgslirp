@@ -42,6 +42,12 @@ cannot express. Both are part of the contract. The shared
   incomplete final line, malformed frame, oversized frame or queue overflow is
   terminal and exits nonzero. The corresponding diagnostic is
   `invalid_frame`, `frame_too_large` or `queue_full` when it can be delivered.
+- Report `frame_too_large` as soon as the payload exceeds 65,536 bytes,
+  without waiting for LF or EOF. At the limit, a following CR can still be
+  part of CRLF. Wait for the next byte or EOF to decide. If LF follows, the
+  CR is part of the delimiter. Otherwise the CR counts toward the payload
+  and the frame is oversized. EOF with a nonempty unfinished frame within
+  the limit is `invalid_frame`. EOF with no buffered bytes is clean.
 
 EOF, a terminal framing or queue error, and stdout failure all close admission
 to new requests and new forwarding work. At that point, discard queued requests
@@ -178,13 +184,17 @@ Use `invalid_config` for semantically invalid values that pass schema checks.
   and overlap with any virtual service IP.
 - Require dotted-decimal IPv4 with no leading-zero octets. For configured IPs,
   reject `0.0.0.0/8` and `224.0.0.0/3`. Loopback is permitted only on the host
-  side of a mapping. Each guest `(IP, port)` pair identifies one mapping.
+  side of a mapping. Reject duplicate guest `(IP, port)` pairs with
+  `invalid_config`, whether their host targets match or differ.
   Require at least one mapping, cap the configuration at 32 mappings and
   permit up to 128 peers. Configure peers as passive listeners on the server
   side. The client specifies the public WireGuard endpoint separately.
 - The server listens on UDP. Omit `listen_port` for `51820`, or supply `0`
-  to request an ephemeral port. Report the actual nonzero bound port on start
-  and in running status. The plaintext MTU accepts `576`–`9000` bytes and
+  to request an ephemeral port. Successful startup reports the actual bound
+  port, which must equal the requested or default port unless the request
+  supplied zero. It also reports the WireGuard public key derived from the
+  supplied private key. Running status repeats both values.
+  The plaintext MTU accepts `576`–`9000` bytes and
   defaults to `1380`.
 - Omitted resource limits use the defaults in the schema. Apply finite limits
   for TCP flows, concurrent pending TCP dials, shared socket buffer bytes and
@@ -226,8 +236,9 @@ control pipe, keeping it out of the command line and environment.
 
 Both peer operations include `expected_revision`, the controller's last known
 applied revision. A mismatch returns `revision_conflict` before any side effects.
-`peer_add` takes a peer record. An address used by a virtual service returns
-`invalid_config` before conflict or capacity checks. Return `peer_conflict` if
+`peer_add` takes a peer record. A peer key equal to the server public key or
+an address used by a virtual service returns `invalid_config` before conflict
+or capacity checks. Return `peer_conflict` if
 its public key or source address is in use or its address was previously
 revoked in this process.
 To avoid reassigning queued traffic in v1, restoring a revoked address requires

@@ -1,4 +1,9 @@
 [
+  {"id":"clean_eof","parts":[],"expect":"clean_eof"},
+  {"id":"limit_without_lf","parts":[{"text":"x","repeat":65536}],"expect":"invalid_frame"},
+  {"id":"oversize_without_lf","parts":[{"text":"x","repeat":65537}],"expect":"frame_too_large"},
+  {"id":"limit_plus_cr_eof","parts":[{"text":"x","repeat":65536},{"text":"\r"}],"expect":"frame_too_large"},
+  {"id":"limit_with_crlf","parts":[{"text":"{\"x\":\""},{"text":"é","repeat":32764},{"text":"\"}\r\n"}],"expect":"accepted"},
   {"id":"lf","parts":[{"text":"{\"id\":1,\"op\":\"hello\",\"params\":{\"versions\":[1]}}\n"}],"expect":"accepted"},
   {"id":"crlf","parts":[{"text":"{\"id\":1,\"op\":\"hello\",\"params\":{\"versions\":[1]}}\r\n"}],"expect":"accepted"},
   {"id":"exact_byte_limit","parts":[{"text":"{\"x\":\""},{"text":"é","repeat":32764},{"text":"\"}\n"}],"expect":"accepted"},

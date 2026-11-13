@@ -16,6 +16,11 @@ COUNTERS = {
 }
 PEER_OPERATIONS = {"peer_add", "peer_remove"}
 OPERATIONS = PEER_OPERATIONS | {"validate", "start", "status", "stop"}
+# Public test vector from RFC 7748 section 6.1, encoded as WireGuard keys.
+FIXTURE_PUBLIC_KEYS = {
+    "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=":
+        "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
+}
 
 
 def require(condition, detail):
@@ -63,12 +68,13 @@ def frame_outcome(parts):
         * part.get("repeat", 1)
         for part in parts
     )
-    if not raw.endswith(b"\n"):
-        return "invalid_frame"
-    payload = raw[:-1].removesuffix(b"\r")
+    if not raw:
+        return "clean_eof"
+    terminated = raw.endswith(b"\n")
+    payload = raw[:-1].removesuffix(b"\r") if terminated else raw
     if len(payload) > MAX_FRAME_BYTES:
         return "frame_too_large"
-    if b"\n" in payload:
+    if not terminated or b"\n" in payload:
         return "invalid_frame"
     try:
         obj = json.loads(
@@ -150,6 +156,16 @@ def peer_set(records):
     return peers
 
 
+def invalid_config(config):
+    mappings = {(mapping["guest_ip"], mapping["guest_port"]) for mapping in config["mappings"]}
+    if len(mappings) != len(config["mappings"]):
+        return True
+    service_addresses = {address for address, _ in mappings}
+    server_key = FIXTURE_PUBLIC_KEYS.get(config["private_key"])
+    return any(peer["address"] in service_addresses or peer["public_key"] == server_key
+               for peer in config["peers"])
+
+
 def check_session(case, validator):
     pending = []
     requests, replies = {}, {}
@@ -219,14 +235,12 @@ def check_session(case, validator):
                     require(code == "unsupported_version", "missing version mismatch error")
             else:
                 expected = request_rejection(request, validator, instance, capabilities, revision, duplicate)
-                if expected is None and request["op"] in {"start", "validate"}:
-                    config = request["params"]
-                    guest_addresses = {mapping["guest_ip"] for mapping in config["mappings"]}
-                    if any(peer["address"] in guest_addresses for peer in config["peers"]):
-                        expected = "invalid_config"
+                if (expected is None and request["op"] in {"start", "validate"}
+                        and invalid_config(request["params"])):
+                    expected = "invalid_config"
                 if expected is None and request["op"] == "peer_add":
                     peer = request["params"]["peer"]
-                    if peer["address"] in service_addresses:
+                    if peer["address"] in service_addresses or peer["public_key"] == startup_identity[1]:
                         expected = "invalid_config"
                     elif (peer["address"] in assigned_addresses
                           or peer["public_key"] in applied_peers):
@@ -241,10 +255,16 @@ def check_session(case, validator):
                                          "invalid_state", "revision_conflict", "unsupported_version"},
                             f"unexpected rejection: {code}")
             if value["ok"] and request["op"] == "start":
-                applied_peers = peer_set(request["params"]["peers"])
+                config = request["params"]
+                applied_peers = peer_set(config["peers"])
                 assigned_addresses = set(applied_peers.values())
-                service_addresses = {mapping["guest_ip"] for mapping in request["params"]["mappings"]}
+                service_addresses = {mapping["guest_ip"] for mapping in config["mappings"]}
                 startup_identity = (value["result"]["listen_port"], value["result"]["server_public_key"])
+                requested_port = config.get("listen_port", 51820)
+                require(requested_port in {0, startup_identity[0]}, "start did not bind the configured port")
+                expected_key = FIXTURE_PUBLIC_KEYS.get(config["private_key"])
+                require(expected_key is not None, "missing known public key for startup fixture")
+                require(startup_identity[1] == expected_key, "start public key disagrees with private key")
                 revision = 1
             if value["ok"] and request["op"] in PEER_OPERATIONS:
                 params = request["params"]

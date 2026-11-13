@@ -121,6 +121,23 @@ address, both configuration and live-add service address conflicts, and
 changes to the bound port or server key. Runtime behavior remains to be
 verified against the future helper.
 
+Third W1 review follow-up
+
+- [x] Check requested, default and ephemeral port behavior at startup. Verify
+  the reported public key against the fixture's known private/public key pair.
+- [x] Reject duplicate guest IP and port mappings, even when their host targets
+  differ. Cover peers whose key matches the server key at validation, startup
+  and live addition.
+- [x] Distinguish clean EOF from unfinished frames. Specify immediate
+  oversized-frame rejection and cover the CRLF boundary.
+
+The updated verifier passed the Draft 2020-12 schema, 24 frame cases, 19 message
+shapes and 30 session transcripts. Eight in-memory probes confirmed rejection
+of incorrect fixed and default ports, an unrelated public key repeated in
+startup and status, duplicate mappings accepted by validation or startup,
+and a peer matching the server key accepted by validation, startup or live
+addition. The protocol baseline still awaits review before W2.
+
 ### W2 — Extract a reusable application lifecycle
 
 Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).

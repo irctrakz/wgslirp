@@ -5,8 +5,9 @@ Use the [protocol specification](../../docs/HELPER_PROTOCOL.md) and
 both Go and C# consumers. They do not require either implementation to exist.
 
 All keys, endpoints, process IDs and metrics in the fixtures are public test
-data. The example private key is published test material and is unsuitable for
-deployment.
+data. The server key pair comes from section 6.1 of RFC 7748. The checker uses
+this known pair to verify startup identity. The private key is unsuitable for
+deployment. [RFC 7748](https://www.rfc-editor.org/rfc/rfc7748#section-6.1)
 
 ## Fixture files
 
@@ -21,8 +22,9 @@ Each file contains an array of cases with a stable `id`.
 For a frame case, concatenate its `parts` as bytes in order. A `text` part is
 UTF-8 encoded. A `hex` part contributes the decoded bytes. `repeat` defaults to
 `1` and repeats a part after encoding. Each case ends with EOF. `expect` is
-`accepted` for a decoded object or the required framing error code. A decoded
-object can still fail subsequent envelope, schema or semantic checks.
+`accepted` for a decoded object, `clean_eof` when no bytes are buffered, or
+the required framing error code. A decoded object can still fail subsequent
+envelope, schema or semantic checks.
 
 For a message-shape case, validate `message` against the root schema. `valid`
 is the expected outcome. Schema validation operates on a decoded object.
