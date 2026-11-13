@@ -4,7 +4,7 @@ Created: 2026-10-29
 
 W1 was approved at `459f6f1`. W2 was approved at `8b10bbd`.
 W3 was approved at `539d884` and recorded in `623f6ff`.
-W4 is ready for review on `codex/jellyfin-integration`.
+W4 was approved at `553f165` on `codex/jellyfin-integration`.
 
 ## Architecture and scope
 
@@ -557,7 +557,7 @@ Both pre-sweep capacity cases passed ten Linux runs and 100 Windows
 repetitions. Linux integration vet, encrypted peer isolation, runtime
 lifecycle, standalone SIGTERM and helper pipes passed. Windows unit tests,
 integration vet and ten runs each of restricted and unrestricted encrypted
-forwarding passed. W4 awaits review before W5.
+forwarding passed. W4 was approved at `553f165`.
 
 **Complete when:** a WireGuard client can reach a mapped service, and alternate
 destinations or forwarding paths cannot escape the configured policy.
