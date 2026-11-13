@@ -47,8 +47,11 @@ func (b *tcpBridge) registerCandidateLocked(candidate *tcpFlow) (*tcpFlow, error
 		return nil, fmt.Errorf("tcp: %w", ErrFlowLimit)
 	}
 	b.flows[candidate.key] = candidate
-	if candidate.owner != nil && candidate.conn != nil {
-		candidate.owner.conns[candidate.conn] = struct{}{}
+	if candidate.conn != nil {
+		b.hostSockets[candidate.conn] = struct{}{}
+		if candidate.owner != nil {
+			candidate.owner.conns[candidate.conn] = struct{}{}
+		}
 	}
 	atomic.AddUint64(&b.metrics.ConnectionsCreated, 1)
 	atomic.AddUint64(&b.parent.metrics.ConnectionsCreated, 1)
@@ -114,7 +117,16 @@ func (b *tcpBridge) requestStop() {
 		return
 	default:
 	}
+	b.mu.Lock()
 	close(b.stopCh)
+	sockets := b.hostSockets
+	b.hostSockets = nil
+	b.mu.Unlock()
+	// Interrupt host I/O without waiting for flow state. A writer that
+	// already passed its cancellation check cannot use a closed socket.
+	for conn := range sockets {
+		_ = conn.Close()
+	}
 	b.cancel()
 }
 
@@ -192,6 +204,7 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	// Keep the identity visible to revocation until its reservations and
 	// socket have been released.
 	b.mu.Lock()
+	delete(b.hostSockets, f.conn)
 	if b.flows[f.key] == f {
 		delete(b.flows, f.key)
 	}

@@ -245,6 +245,9 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string, owner *peer
 				if active && err == nil {
 					f.conn = conn
 					f.connecting = false
+					b.mu.Lock()
+					b.hostSockets[conn] = struct{}{}
+					b.mu.Unlock()
 					if owner != nil {
 						owner.conns[conn] = struct{}{}
 					}
@@ -394,6 +397,9 @@ func (b *tcpBridge) flushPending(f *tcpFlow) {
 		if b.ctx.Err() != nil {
 			b.removeFlowLocked(f)
 			return
+		}
+		if b.beforePendingWrite != nil {
+			b.beforePendingWrite()
 		}
 		n, err := writeTCP(f.conn, p)
 		if err != nil {

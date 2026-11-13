@@ -54,11 +54,14 @@ type tcpBridge struct {
 	parent          *SocketInterface
 	mu              sync.RWMutex
 	flows           map[string]*tcpFlow
+	hostSockets     map[*net.TCPConn]struct{} // guarded by mu, independent of flow locks
 	stopCh          chan struct{}
 	lifetime        time.Duration
 
 	// Optional test hook called under stateMu after asynchronous attachment.
 	onDialAttached func(*tcpFlow)
+	// Optional test hook called under stateMu just before a pending host write.
+	beforePendingWrite func()
 
 	metrics  core.SocketMetrics
 	maxFlows int
@@ -252,13 +255,14 @@ type tcpFlow struct {
 // scheduling/backpressure via the parent's FlowManager when present.
 func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	b := &tcpBridge{
-		parent:   parent,
-		deliver:  parent.packetDelivery(),
-		flows:    make(map[string]*tcpFlow),
-		stopCh:   make(chan struct{}),
-		lifetime: 2 * time.Minute,
-		ackDelay: 10 * time.Millisecond,
-		reasmCap: 128 * 1024,
+		parent:      parent,
+		deliver:     parent.packetDelivery(),
+		flows:       make(map[string]*tcpFlow),
+		hostSockets: make(map[*net.TCPConn]struct{}),
+		stopCh:      make(chan struct{}),
+		lifetime:    2 * time.Minute,
+		ackDelay:    10 * time.Millisecond,
+		reasmCap:    128 * 1024,
 		// Defaults: proactively gate reads after 6s of no ACK progress,
 		// and fail/reset truly stuck flows after 120s.
 		ackIdleGate:    6 * time.Second,

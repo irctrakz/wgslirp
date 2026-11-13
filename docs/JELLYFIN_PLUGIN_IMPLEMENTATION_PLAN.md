@@ -773,6 +773,24 @@ contract and has verified process-lifecycle behavior.
   integration vet, the shared fixture verifier, and Linux, macOS and Windows
   ARM64 cross-builds also passed.
 
+**W6 shutdown at the host write boundary**
+
+- TCP stop takes ownership of the attached host sockets and closes them before
+  publishing cancellation. It does this without acquiring the flow locks
+  held by host writers. Socket registration and removal are serialized with
+  that transfer for both fast and asynchronous dials.
+- The new regression holds the async completion worker after its final
+  cancellation check and before the first buffered host write. It completes
+  the stop transition before releasing the worker, then verifies host EOF
+  with zero payload and releases all flow, socket and reservation state.
+  With synchronous socket closure disabled in a temporary overlay, all three
+  reproduction runs delivered the buffered payload.
+- The fixed boundary passed 30 Windows runs together with the attachment,
+  normal flush and native stdout regressions. Ten unprivileged Linux amd64 VM
+  runs passed alongside the helper lifecycle, pipe and standalone SIGTERM
+  checks. The full Windows integration suite, Windows and Linux integration
+  vet, shared fixtures, and Linux, macOS and Windows ARM64 builds passed.
+
 W6 awaits review before W7.
 
 ### W7 — Publish versioned binaries and acceptance evidence

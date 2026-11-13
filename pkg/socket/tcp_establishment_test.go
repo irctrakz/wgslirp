@@ -320,6 +320,16 @@ func TestShutdownRejectsCompletedDialBeforeAttachment(t *testing.T) {
 }
 
 func TestShutdownAfterAsyncDialAttachmentDiscardsPendingData(t *testing.T) {
+	t.Run("before-reader-admission", func(t *testing.T) {
+		testShutdownAfterAsyncDialAttachment(t, false)
+	})
+	t.Run("after-final-write-check", func(t *testing.T) {
+		testShutdownAfterAsyncDialAttachment(t, true)
+	})
+}
+
+func testShutdownAfterAsyncDialAttachment(t *testing.T, atWrite bool) {
+	t.Helper()
 	parent := NewSocketInterface(DefaultConfig())
 	parent.processor = &captureProcessor{}
 	b := newTCPBridge(parent)
@@ -340,7 +350,16 @@ func TestShutdownAfterAsyncDialAttachmentDiscardsPendingData(t *testing.T) {
 	}
 	b.onDialAttached = func(f *tcpFlow) {
 		attached <- f.conn == client && !f.connecting && f.pendingBytes > 0
-		<-resume
+		if !atWrite {
+			<-resume
+		}
+	}
+	beforeWrite := make(chan struct{})
+	if atWrite {
+		b.beforePendingWrite = func() {
+			close(beforeWrite)
+			<-resume
+		}
 	}
 
 	src, dst := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
@@ -368,6 +387,9 @@ func TestShutdownAfterAsyncDialAttachmentDiscardsPendingData(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("asynchronous dial did not attach")
 	}
+	if atWrite {
+		awaitBudgetWorker(t, beforeWrite)
+	}
 	b.requestStop()
 	release()
 
@@ -381,6 +403,9 @@ func TestShutdownAfterAsyncDialAttachmentDiscardsPendingData(t *testing.T) {
 	b.stop()
 	if len(b.flowSnapshot()) != 0 || atomic.LoadInt64(&b.dialInflight) != 0 {
 		t.Fatal("retained flow or dial accounting")
+	}
+	if b.pendFlush != 0 || len(b.hostSockets) != 0 {
+		t.Fatal("pending flush or retained host socket after shutdown")
 	}
 	assertBudget(t, b.dialSlots, 0)
 	assertBudget(t, b.buffers, 0)
