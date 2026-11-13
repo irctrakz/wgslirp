@@ -2,8 +2,8 @@
 
 Created: 2026-10-29
 
-W1 was approved at `459f6f1`. W2 is ready for review on
-`codex/jellyfin-integration`. W3 starts after W2 review.
+W1 was approved at `459f6f1`. W2 was approved at `8b10bbd`.
+Work continues on `codex/jellyfin-integration`.
 
 ## Architecture and scope
 
@@ -282,7 +282,7 @@ runtime supplied through a temporary Go compiler overlay.
 
 The Linux run used the standalone binary directly. The Docker release-image
 acceptance job and race-enabled tests were not run for this follow-up.
-W2 awaits review before W3.
+W2 was approved at `8b10bbd`.
 
 Second W2 review follow-up
 
@@ -301,7 +301,7 @@ The final isolated Linux amd64 VM run passed ten repetitions of the lifecycle
 suite, encrypted pending-dial regression and protocol validation. The
 standalone SIGTERM test passed five consecutive runs. Linux integration vet,
 Linux ARM64 cross-build, Windows unit tests, vet and encrypted forwarding
-checks passed. W2 awaits review before W3.
+checks passed. W2 was approved at `8b10bbd`.
 
 ### W3 — Provide portable status and protocol-safe logging
 
