@@ -246,9 +246,10 @@ replacing the helper.
 Keep up to 1,024 distinct assignments (active or revoked) per process. The
 controller persists its own allocation history across process replacement.
 Exceeding either the assignment limit or 128 active peers returns `peer_limit`.
-`peer_remove` takes the public key and returns
-`peer_not_found` if absent. Invalid peer keys or source addresses return
-`invalid_config` after the payload shape has been checked.
+`peer_remove` takes the public key and returns `peer_not_found` if absent.
+Invalid peer keys or source addresses return `invalid_config` after the
+payload shape has been checked. `peer_conflict` and `peer_limit` apply only
+to addition. `peer_not_found` applies only to removal.
 
 Successful removal means the peer cannot admit new traffic, its WireGuard entry
 is gone, and its existing flows, pending dials and fragment state have been
@@ -265,9 +266,20 @@ Use 5 seconds for `hello`, `validate` and `status`, 15 seconds for `start`, and
 and the response write. A response deadline is a controller-side wait
 limit. It does not cancel or roll back a request. On a peer update timeout, keep
 the original ID reserved and send one `status` with a higher ID. Allow that
-status up to 15 seconds because it can queue behind the mutation. Read responses
-by ID, including the late mutation response if it arrives. Send no further
-requests until the status revision and applied peer set confirm the outcome.
+status up to 15 seconds because it can queue behind the mutation. Read both
+responses by ID. The mutation reply precedes the queued status reply. Require
+the status revision to match the revision reported by the mutation reply.
+A rejected mutation reports the current helper revision, which may differ
+from the request's expected revision.
+
+Use the mutation reply to determine whether this request applied. Use the
+status peer set to determine whether the desired state holds. A successful
+addition must appear with the requested address, and a successful removal
+must be absent. A rejection does not establish the desired state. For example,
+`peer_not_found` leaves the peer absent without applying a new removal. Send
+no further requests until both checks are complete. Use the reconciled
+revision and peer state to decide whether another mutation is needed.
+
 If reconciliation fails, times out, or the pipe becomes unusable, close stdin
 and reap the helper before replacing it from durable desired state. For other
 control timeouts,

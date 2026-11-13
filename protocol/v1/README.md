@@ -37,7 +37,7 @@ For a session case, interpret each step in order:
 | `in_flight` | Test harness holds the named request after execution begins and before it can publish a result |
 | `receive` | Expected helper response object, independent of key order |
 | `deadline` | The controller's response deadline expired for this request ID |
-| `decision` | After the specified status reply, the controller determines whether the timed-out mutation applied |
+| `decision` | With both replies available, the controller records the request's `outcome` and whether `desired_state_holds` |
 | `eof` | Controller closes stdin |
 | `stdout_failed` | Stdout becomes unusable. The string is the unterminated response prefix observed by the controller, or empty if no bytes reached it. |
 | `cleanup_timeout` | The harness advances cleanup past the shutdown deadline before any terminal diagnostic is written |

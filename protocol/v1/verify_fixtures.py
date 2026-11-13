@@ -115,12 +115,15 @@ def check_reconciliation(decision, requests, replies):
     else:
         require(mutation["op"] == "peer_remove", "reconciliation needs a peer mutation")
         desired_state_observed = params["public_key"] not in peers
-    applied = replies[mutation_id]["ok"]
+    reply = replies[mutation_id]
+    applied = reply["ok"]
     require(decision["outcome"] == ("applied" if applied else "not_applied"),
             "decision disagrees with the late mutation reply")
-    require(desired_state_observed == applied, "decision disagrees with status peers")
-    require(status["revision"] == params["expected_revision"] + int(applied),
-            "status revision disagrees with the mutation outcome")
+    require(decision["desired_state_holds"] is desired_state_observed,
+            "decision disagrees with status peers")
+    require(not applied or desired_state_observed, "successful mutation is missing from status")
+    require(status["revision"] == reply["revision"],
+            "status revision disagrees with the mutation reply")
 
 
 def request_rejection(request, validator, instance, capabilities, revision, duplicate):
@@ -278,15 +281,23 @@ def check_session(case, validator):
                         expected = "peer_conflict"
                     elif len(applied_peers) >= 128 or len(assigned_addresses) >= 1024:
                         expected = "peer_limit"
-                if (expected is None and request["op"] == "peer_remove"
-                        and request["params"]["public_key"] == ZERO_KEY):
-                    expected = "invalid_config"
+                if expected is None and request["op"] == "peer_remove":
+                    key = request["params"]["public_key"]
+                    if key == ZERO_KEY:
+                        expected = "invalid_config"
+                    elif key not in applied_peers:
+                        expected = "peer_not_found"
+                if code == "peer_not_found":
+                    require(request["op"] == "peer_remove", "peer_not_found is only valid for removal")
+                if code in {"peer_conflict", "peer_limit"}:
+                    require(request["op"] == "peer_add", f"{code} is only valid for addition")
                 if expected:
                     require(code == expected, f"expected {expected}, got {code}")
                 else:
                     require(code not in {"duplicate_id", "invalid_request", "wrong_instance",
                                          "unknown_operation", "unsupported_capability",
-                                         "invalid_state", "revision_conflict", "unsupported_version"},
+                                         "invalid_state", "revision_conflict", "unsupported_version",
+                                         "peer_not_found", "peer_conflict", "peer_limit"},
                             f"unexpected rejection: {code}")
             if value["ok"] and request["op"] == "start":
                 config = request["params"]

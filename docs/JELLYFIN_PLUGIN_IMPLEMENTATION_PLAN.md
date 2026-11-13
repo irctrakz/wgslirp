@@ -154,6 +154,19 @@ failed reconciliation, and false success replies for the four configuration
 examples and an all-zero live peer key. The protocol baseline remains open
 for review.
 
+Fifth W1 review follow-up
+
+- [x] Reconcile a late mutation reply against the helper's reported revision.
+  Record whether the request applied and whether status satisfies the desired
+  peer state separately. Cover stale revision and already absent peer cases.
+- [x] Require `peer_not_found` for an absent peer and reject it for an active
+  peer. Restrict `peer_limit` and `peer_conflict` to additions.
+
+Verification passed the Draft 2020-12 schema, 24 frame cases, 19 message shapes
+and 47 session transcripts. Six in-memory probes rejected impossible removal
+errors, success for removal of an absent peer, an incorrect status revision
+and an incorrect desired-state decision. W1 awaits review before W2.
+
 ### W2 — Extract a reusable application lifecycle
 
 Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).
