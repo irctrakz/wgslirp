@@ -180,6 +180,20 @@ reaping after either terminal failure, reconciliation replacement without a
 pending reconciliation, and `peer_update_failed` on an idle `status` request.
 The protocol baseline remains open for review.
 
+Seventh W1 review follow-up
+
+- [x] Cover abrupt helper exit during reconciliation and forced termination
+  after closing stdin and waiting the shutdown grace period. Require confirmed
+  exit and reaping before replacement in both paths.
+- [x] Cover non-peer control deadlines with a startup timeout followed by
+  clean exit on EOF and reaping. Reject further requests after that timeout.
+
+Verification passed the Draft 2020-12 schema, 24 frame cases, 22 message shapes
+and 52 session transcripts. Seven negative probes rejected replacement before
+reaping in all three new paths, forced termination without stdin closure or
+the grace period, reaping without confirmed exit, and further requests after a
+startup timeout. W1 awaits review before W2.
+
 ### W2 — Extract a reusable application lifecycle
 
 Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).

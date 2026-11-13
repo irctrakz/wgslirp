@@ -282,12 +282,12 @@ revision and peer state to decide whether another mutation is needed.
 
 If reconciliation fails, times out, or the pipe becomes unusable, close stdin
 if still open and reap the helper before replacing it from durable desired
-state. A terminal session error during reconciliation also counts as failure.
-Reap the terminating helper before replacement, even when neither pending
-request receives a correlated reply. For other control timeouts, close stdin
-and reap the helper before replacing it. After closing stdin on
-failure, allow up to 15 seconds for the helper to exit, then terminate the owned
-process if it is still running.
+state. A terminal session error or unexpected process exit during
+reconciliation counts as failure, even without a correlated reply. For other
+control timeouts, close stdin and reap the helper before replacing it. After
+closing stdin on failure, allow up to 15 seconds for the helper to exit, then
+terminate the owned process if it is still running. Wait for confirmed exit
+and reap the process after termination before starting its replacement.
 
 | Correlated error | Meaning |
 | --- | --- |

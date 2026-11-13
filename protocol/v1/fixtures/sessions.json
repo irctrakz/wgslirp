@@ -1,5 +1,56 @@
 [
   {
+    "id": "reconciliation_unexpected_exit",
+    "description": "The helper exits abruptly with reconciliation status queued. Reap it before replacement.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="}}},
+      {"deadline":3},
+      {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"unexpected_exit":1},
+      {"reap":true},
+      {"replace_helper":true}
+    ]
+  },
+  {
+    "id": "reconciliation_forced_termination",
+    "description": "After reconciliation times out, the helper does not exit within the grace period following stdin closure. Terminate it, wait for exit and reap before replacement.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="}}},
+      {"deadline":3},
+      {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"deadline":4},
+      {"eof":true},
+      {"shutdown_grace_expired":true},
+      {"force_terminate":true},
+      {"exit":1},
+      {"reap":true},
+      {"replace_helper":true}
+    ]
+  },
+  {
+    "id": "startup_timeout_clean_exit",
+    "description": "Startup times out while held. The controller closes stdin and the helper exits cleanly. Reap it before replacement.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"in_flight":2},
+      {"deadline":2},
+      {"eof":true},
+      {"exit":0},
+      {"reap":true},
+      {"replace_helper":true}
+    ]
+  },
+  {
     "id": "reconciliation_terminal_failure",
     "description": "The helper reports uncertain runtime state with reconciliation status queued. Reap it before replacement.",
     "steps": [

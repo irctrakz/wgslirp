@@ -42,8 +42,11 @@ For a session case, interpret each step in order:
 | `stdout_failed` | Stdout becomes unusable. The string is the unterminated response prefix observed by the controller, or empty if no bytes reached it. |
 | `cleanup_timeout` | The harness advances cleanup past the shutdown deadline before any terminal diagnostic is written |
 | `exit` | Helper process exits with the specified status, where `1` denotes any nonzero exit |
+| `unexpected_exit` | The process exits with the observed status without a terminal reply or controller termination, abandoning pending requests |
+| `shutdown_grace_expired` | The controller has closed stdin and the process is still running after the shutdown grace period |
+| `force_terminate` | The controller terminates its still-running helper after closing stdin and waiting the shutdown grace period |
 | `reap` | The controller waits for the old process to exit and releases its process resources |
-| `replace_helper` | The controller may launch a replacement after failed reconciliation and reaping |
+| `replace_helper` | The controller may launch a replacement after failed reconciliation or a control timeout, once the old helper is reaped |
 
 Controller tests can script these responses with a fake helper. Helper tests can
 fix process IDs, clocks, selected ports and runtime outcomes in the harness, or
@@ -68,6 +71,10 @@ status request. The transcript must establish the outcome with a
 `decision` before further requests. If status times out or the helper fails
 during reconciliation, the controller closes stdin if it is still open and
 reaps the old helper before replacement.
+
+A deadline for another control request, such as `start`, also requires
+closing stdin and reaping before replacement. A `force_terminate` event
+still needs a subsequent `exit` and `reap` before replacement.
 
 ## Verify the shared data
 
