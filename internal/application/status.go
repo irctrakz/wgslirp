@@ -54,6 +54,10 @@ func (r *Runtime) Status() (Status, error) {
 	if r == nil {
 		return Status{State: "idle", Peers: []PeerStatus{}}, nil
 	}
+	return r.status()
+}
+
+func (r *Runtime) status() (Status, error) {
 	if r.ctx.Err() != nil {
 		return Status{}, ErrRuntimeStateUncertain
 	}

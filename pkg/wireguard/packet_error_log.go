@@ -40,6 +40,9 @@ func (l *packetErrorLog) Errorf(format string, args ...any) {
 			if errors.Is(err, socket.ErrTCPTeardown) {
 				return
 			}
+			if errors.Is(err, socket.ErrPeerInactive) {
+				return
+			}
 			for i, reason := range packetErrorReasons {
 				if errors.Is(err, reason.err) {
 					category = i

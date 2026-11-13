@@ -68,7 +68,7 @@ func (b *tcpBridge) reader(f *tcpFlow) {
 	if conn == nil || closed {
 		return
 	}
-	b.launch(func() { b.retransmitLoop(f) })
+	b.launchForPeer(f.owner, func() { b.retransmitLoop(f) })
 	for {
 		f.stateMu.Lock()
 		allowed := b.sendAllowanceLocked(f)

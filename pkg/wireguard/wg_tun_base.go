@@ -60,6 +60,31 @@ type queuedFrame struct {
 	release func()
 }
 
+// DiscardPeerPackets drops queued IPv4 replies to a retired source. The
+// device owns frames already dequeued, and WireGuard removes its peer queues.
+func (t *WGTun) DiscardPeerPackets(address [4]byte) {
+	t.closeMu.Lock()
+	defer t.closeMu.Unlock()
+	// Read can consume concurrently, but no producer can add a frame.
+	retained := make([]queuedFrame, 0, len(t.outCh))
+drain:
+	for remaining := len(t.outCh); remaining > 0; remaining-- {
+		select {
+		case frame := <-t.outCh:
+			if len(frame.data) >= 20 && frame.data[0]>>4 == 4 && [4]byte(frame.data[16:20]) == address {
+				frame.release()
+			} else {
+				retained = append(retained, frame)
+			}
+		default:
+			break drain
+		}
+	}
+	for _, frame := range retained {
+		t.outCh <- frame
+	}
+}
+
 // NewWGTun reads legacy queue environment settings once.
 // Deprecated: use NewWGTunWithConfig and TunConfigFromEnv at the application boundary.
 func NewWGTun(name string, mtu int, writer core.PacketWriter) *WGTun {

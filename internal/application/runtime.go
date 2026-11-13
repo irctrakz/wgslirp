@@ -73,6 +73,8 @@ type Runtime struct {
 	socket        *socket.SocketInterface
 	tun           *wg.WGTun
 	device        wg.DeviceHandle
+	peerMu        sync.Mutex
+	peers         *restrictedPeers
 }
 
 // Start constructs a runtime and returns it after the WireGuard device is up.
@@ -112,6 +114,13 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 		return nil, err
 	}
 	r.socket = socket.NewSocketInterface(cfg.Socket)
+	if cfg.Socket.Destinations != nil {
+		r.peers = newRestrictedPeers(cfg)
+		r.socket.EnablePeerAdmission()
+		for _, address := range r.peers.active {
+			r.socket.AdmitPeerSource(address.As4())
+		}
+	}
 	r.tun, err = wg.NewWGTunWithConfig("wgmux0", cfg.Device.MTU, r.socket, cfg.Tun)
 	if err != nil {
 		return nil, err
@@ -162,6 +171,12 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 // Close cancels observers and releases all acquired resources. Concurrent
 // callers wait for the same shutdown and receive the same result.
 func (r *Runtime) Close() error {
+	r.peerMu.Lock()
+	defer r.peerMu.Unlock()
+	return r.close()
+}
+
+func (r *Runtime) close() error {
 	r.closeOnce.Do(func() {
 		r.cancel()
 		var socketDone <-chan struct{}

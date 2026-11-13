@@ -17,7 +17,7 @@ import (
 // registry/flow locks, then publishes a state-locked candidate under the registry
 // lock. A losing candidate closes only its own socket and processes the winner
 // before its deferred dial reservation release, matching the ordinary SYN path.
-func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
+func (b *tcpBridge) establishTCP(segment tcpSegment, address string, owner *peerWork) error {
 	pkt := segment.pkt
 	ihl := segment.ihl
 	tcpOff := segment.tcpOff
@@ -47,7 +47,11 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 		return ErrDialLimit
 	}
 	dialCtx, cancelDial := context.WithCancel(b.ctx)
-	releaseDial := sync.OnceFunc(func() { cancelDial(); b.dialSlots.release(1) })
+	stopPeerCancel := func() bool { return false }
+	if owner != nil {
+		stopPeerCancel = context.AfterFunc(owner.ctx, cancelDial)
+	}
+	releaseDial := sync.OnceFunc(func() { stopPeerCancel(); cancelDial(); b.dialSlots.release(1) })
 	handedOff := false
 	defer func() {
 		if !handedOff {
@@ -63,7 +67,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 		fastT = time.Millisecond
 	}
 	dialTimeout := max(fastT, 5*time.Second)
-	if !b.launch(func() {
+	if !b.launchForPeer(owner, func() {
 		defer releaseDial()
 		conn, err := b.dial(dialCtx, address, dialTimeout)
 		select {
@@ -85,6 +89,12 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 	select {
 	case outcome := <-result:
 		releaseDial()
+		if owner != nil && owner.ctx.Err() != nil {
+			if outcome.conn != nil {
+				_ = outcome.conn.Close()
+			}
+			return ErrPeerInactive
+		}
 		if outcome.err != nil {
 			b.signalDialFailure(srcIP, dstIP, srcPort, dstPort, seq, pkt)
 			atomic.AddUint64(&b.parent.metrics.Errors, 1)
@@ -99,6 +109,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 	}
 	serverISN := rand.Uint32()
 	candidate := &tcpFlow{
+		owner:      owner,
 		key:        key,
 		srcIP:      srcIP,
 		dstIP:      dstIP,
@@ -203,7 +214,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 			quotedPacket := make([]byte, quoteLen)
 			copy(quotedPacket, pkt[:quoteLen])
 			handedOff = true
-			if !b.launch(func() {
+			if !b.launchForPeer(owner, func() {
 				defer b.buffers.release(quoteLen)
 				atomic.AddUint64(&b.dialStart, 1)
 				atomic.AddInt64(&b.dialInflight, 1)
@@ -221,7 +232,19 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 				}
 				f.stateMu.Lock()
 				defer f.stateMu.Unlock()
-				if f.closed {
+				active := !f.closed
+				if owner != nil {
+					owner.mu.Lock()
+					active = active && owner.ctx.Err() == nil
+				}
+				if active && err == nil {
+					f.conn = conn
+					f.connecting = false
+				}
+				if owner != nil {
+					owner.mu.Unlock()
+				}
+				if !active {
 					if err == nil {
 						conn.Close()
 					}
@@ -234,8 +257,6 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 					atomic.AddUint64(&b.parent.metrics.Errors, 1)
 					atomic.AddUint64(&b.metrics.Errors, 1)
 				} else {
-					f.conn = conn
-					f.connecting = false
 					f.lastAckTime = time.Now()
 					atomic.AddUint64(&b.dialOk, 1)
 				}
@@ -247,7 +268,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 				}
 
 				// Start reader now that conn exists
-				b.launch(func() { b.reader(f) })
+				b.launchForPeer(owner, func() { b.reader(f) })
 				// Flush any pre-connect pending data and contiguous reassembly
 				b.flushPending(f)
 			}) {
@@ -264,7 +285,7 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string) error {
 		}
 		// If already connected (fast pre-dial), start reader immediately
 		if flow.conn != nil {
-			b.launch(func() { b.reader(flow) })
+			b.launchForPeer(owner, func() { b.reader(flow) })
 		}
 		return nil
 	}

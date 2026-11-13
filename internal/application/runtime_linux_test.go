@@ -145,7 +145,7 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 	const marker = "WGSLIRP_RUNTIME_PENDING_DIAL_TEST"
 	mode := os.Getenv(marker)
 	if mode == "" {
-		for _, mode := range []string{"unrestricted", "restricted"} {
+		for _, mode := range []string{"unrestricted", "restricted", "restricted-async"} {
 			t.Run(mode, func(t *testing.T) {
 				runRuntimeSubprocess(t, "TestCloseCancelsWireGuardHostDial", marker+"="+mode)
 			})
@@ -191,13 +191,16 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 	cfg.Device.Peers = []wg.PeerConfig{{PublicKey: clientPublic, AllowedIPs: []string{"10.0.0.2/32"}}}
 	cfg.Socket.Transport.FastDialMs = 8000
 	target := netip.MustParseAddrPort(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if mode == "restricted" {
+	if mode != "unrestricted" {
 		host := target
 		target = netip.MustParseAddrPort("10.77.0.1:8096")
 		cfg.Socket.Destinations, err = socket.NewDestinationPolicy([]socket.TCPMapping{{Guest: target, Host: host}})
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	if mode == "restricted-async" {
+		cfg.Socket.Transport.FastDialMs = 1
 	}
 	r, err := Start(context.Background(), cfg, Observers{})
 	if err != nil {
@@ -228,6 +231,23 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 	defer client.Close()
 	var syn [40]byte
 	source, destination := [4]byte{10, 0, 0, 2}, target.Addr().As4()
+	if mode != "unrestricted" {
+		fragment := make([]byte, 28)
+		if !packetwire.IPv4Header(fragment, source, destination, 6, 0, 64, 42, 0x2000) {
+			t.Fatal("could not encode partial TCP fragment")
+		}
+		binary.BigEndian.PutUint16(fragment[22:24], target.Port())
+		if err := clientTun.InjectToPeer(fragment); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for r.socket.DetailedMetrics().IPv4Fragments["live"] != 1 {
+			if time.Now().After(deadline) {
+				t.Fatal("peer fragment never reserved reassembly space")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 	if !packetwire.IPv4Header(syn[:], source, destination, 6, 0, 64, 0, 0) ||
 		!packetwire.TCP(syn[20:], source, destination, 42000, target.Port(), 1, 0, 2, 65535, nil, nil) {
 		t.Fatal("could not encode SYN")
@@ -242,6 +262,14 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	if mode == "restricted-async" {
+		for r.socket.DetailedMetrics().TCPExt["dial_inflight"] != 1 {
+			if time.Now().After(deadline) {
+				t.Fatal("mapped dial never reached asynchronous completion")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 	status, err = r.Status()
 	if err != nil || len(status.Peers) != 1 {
 		t.Fatalf("live peer status: %+v (%v)", status, err)
@@ -253,16 +281,29 @@ func TestCloseCancelsWireGuardHostDial(t *testing.T) {
 		t.Fatalf("missing telemetry after encrypted guest traffic: %+v", peer)
 	}
 	done := make(chan error, 1)
-	go func() { done <- r.Close() }()
+	go func() {
+		if mode != "unrestricted" {
+			done <- r.RemovePeer(clientPublic)
+		} else {
+			done <- r.Close()
+		}
+	}()
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("runtime close waited on the host dial instead of cancelling it")
+		t.Fatal("shutdown or revocation waited on the host dial instead of cancelling it")
 	}
 	if got := r.socket.DetailedMetrics().TCPExt["dial_reserved"]; got != 0 {
 		t.Fatalf("shutdown left %d pending dial reservations", got)
+	}
+	if mode != "unrestricted" {
+		metrics := r.socket.DetailedMetrics()
+		if metrics.TCP.ActiveFlows != 0 || metrics.IPv4Fragments["live"] != 0 ||
+			metrics.TCPExt["dial_inflight"] != 0 || metrics.TCPExt["socket_buffer_bytes"] != 0 {
+			t.Fatal("revocation returned before peer reservations were released")
+		}
 	}
 }

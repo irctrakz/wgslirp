@@ -49,6 +49,8 @@ type SocketInterface struct {
 	stopDone chan struct{}
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
+	peerMu   sync.RWMutex
+	peers    map[[4]byte]*peerWork
 
 	// Slirp bridges
 	udp       *udpBridge
@@ -300,6 +302,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	}
 
 	data := core.BorrowPacketData(packet)
+	var peer *peerWork
 	// Check the destination IP on every fragment before it can reserve
 	// storage. Reassembly checks the port as soon as fragment zero arrives,
 	// and the TCP bridge authorizes the complete segment.
@@ -307,6 +310,16 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 		if data[9] != 6 || !policy.Reserves(netip.AddrFrom4([4]byte(data[16:20]))) {
 			return ErrDestinationDenied
 		}
+		s.peerMu.RLock()
+		if s.peers != nil {
+			peer = s.peers[[4]byte(data[12:16])]
+			if peer == nil || !peer.begin() {
+				s.peerMu.RUnlock()
+				return ErrPeerInactive
+			}
+			defer peer.work.Done()
+		}
+		s.peerMu.RUnlock()
 	}
 	original := data
 	var err error
@@ -370,7 +383,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 			atomic.AddUint64(&s.metrics.Errors, 1)
 			return fmt.Errorf("TCP bridge not initialized")
 		}
-		if err := s.tcp.HandleOutbound(data); err != nil {
+		if err := s.tcp.handleOutbound(data, peer); err != nil {
 			return s.outboundPacketError("TCP", wireSize, err)
 		}
 		break

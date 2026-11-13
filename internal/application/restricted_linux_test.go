@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -94,11 +95,16 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 			AllowedIPs: []string{netip.PrefixFrom(address, 32).String()},
 		})
 	}
+	addedPeer := cfg.Device.Peers[1]
+	cfg.Device.Peers = cfg.Device.Peers[:1]
 	runtime, err := Start(context.Background(), cfg, Observers{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
+	if err := runtime.AddPeer(addedPeer.PublicKey, addresses[1]); err != nil {
+		t.Fatal(err)
+	}
 	status, err := runtime.Status()
 	if err != nil || status.ListenPort == nil || status.ServerPublicKey == nil || len(status.Peers) != 2 {
 		t.Fatalf("restricted runtime status: %+v (%v)", status, err)
@@ -137,7 +143,7 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	roundTrip := func(peer int, port uint16) {
+	roundTrip := func(peer int, port uint16) *net.TCPConn {
 		t.Helper()
 		send(peer, addresses[peer], service, port, 100, 0, 2, nil)
 		wait := time.NewTimer(3 * time.Second)
@@ -173,7 +179,7 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		t.Cleanup(func() { conn.Close() })
 		if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
 			t.Fatal(err)
 		}
@@ -183,6 +189,7 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 		if _, err := io.ReadFull(conn, got); err != nil || !bytes.Equal(got, payload) {
 			t.Fatalf("mapped host received %x from peer %d (%v)", got, peer, err)
 		}
+		return conn
 	}
 
 	expectDenial := func(observed <-chan struct{}, name string) {
@@ -194,13 +201,30 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 		}
 	}
 
-	roundTrip(1, 42001)
+	revoked := roundTrip(1, 42001)
 	roundTrip(0, 42004)
 	send(0, addresses[0], netip.AddrPortFrom(addresses[1], service.Port()), 42002, 200, 0, 2, nil)
 	expectDenial(denials.destination, "destination policy")
 	send(0, addresses[1], service, 42003, 300, 0, 2, nil)
 	expectDenial(denials.source, "WireGuard source ownership")
-	roundTrip(1, 42005)
+	if err := runtime.RemovePeer(addedPeer.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := revoked.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("revoked host stream did not close: %v", err)
+	}
+	if err := runtime.AddPeer(addedPeer.PublicKey, addresses[1]); !errors.Is(err, ErrPeerConflict) {
+		t.Fatalf("revoked address reuse: %v", err)
+	}
+	status, err = runtime.Status()
+	if err != nil || len(status.Peers) != 1 || status.Peers[0].Address != addresses[0].String() {
+		t.Fatalf("status after revocation: %+v (%v)", status, err)
+	}
+	if status.Metrics == nil || status.Metrics.ActiveTCPFlows != 1 {
+		t.Fatalf("expected only the other peer's existing flow: %+v", status.Metrics)
+	}
+	send(1, addresses[1], service, 42006, 100, 0, 2, nil)
+	roundTrip(0, 42005)
 
 	// The rejection events establish that the probes reached their checks.
 	// Drain any remaining replies for the targeted peer before checking flows.

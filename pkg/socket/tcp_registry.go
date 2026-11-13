@@ -25,6 +25,13 @@ func (b *tcpBridge) atFlowCapacity() bool {
 // Registry publication rechecks shutdown, tuple identity and the flow cap after
 // dialing; no registry lock is held during any dial or delivery callback.
 func (b *tcpBridge) registerCandidateLocked(candidate *tcpFlow) (*tcpFlow, error) {
+	if owner := candidate.owner; owner != nil {
+		owner.mu.Lock()
+		defer owner.mu.Unlock()
+		if owner.ctx.Err() != nil {
+			return nil, ErrPeerInactive
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	select {
@@ -65,6 +72,20 @@ func (b *tcpBridge) launch(work func()) bool {
 	}
 	go func() { defer b.workers.Done(); work() }()
 	return true
+}
+
+func (b *tcpBridge) launchForPeer(owner *peerWork, work func()) bool {
+	if owner == nil {
+		return b.launch(work)
+	}
+	if !owner.begin() {
+		return false
+	}
+	if b.launch(func() { defer owner.work.Done(); work() }) {
+		return true
+	}
+	owner.work.Done()
+	return false
 }
 
 func (b *tcpBridge) flowSnapshot() []*tcpFlow {
@@ -135,11 +156,6 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	if f.closed {
 		return
 	}
-	b.mu.Lock()
-	if b.flows[f.key] == f {
-		delete(b.flows, f.key)
-	}
-	b.mu.Unlock()
 	f.closed = true
 	f.state = tcpClosed
 	if f.cancelDial != nil {
@@ -165,6 +181,13 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	b.rtoMu.Unlock()
 	atomic.AddUint64(&b.metrics.ConnectionsClosed, 1)
 	atomic.AddUint64(&b.parent.metrics.ConnectionsClosed, 1)
+	// Keep the identity visible to revocation until its reservations and
+	// socket have been released.
+	b.mu.Lock()
+	if b.flows[f.key] == f {
+		delete(b.flows, f.key)
+	}
+	b.mu.Unlock()
 }
 
 func (b *tcpBridge) reaper() {

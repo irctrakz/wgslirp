@@ -25,7 +25,7 @@ func (s *SocketInterface) expireIPv4Fragments(now time.Time) {
 	for _, d := range s.fragments.expire(now) {
 		// Feedback borrows the original first-fragment header/payload while its
 		// reservation remains live. It is emitted outside the cache lock.
-		if d.first && s.config.Destinations == nil {
+		if d.first {
 			s.sendFragmentTimeout(d.data[:28])
 		}
 		s.fragments.release(d)

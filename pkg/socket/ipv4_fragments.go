@@ -350,7 +350,11 @@ func (r *ipv4Fragments) expire(now time.Time) []*fragmentDatagram {
 		if !now.Before(d.deadline) {
 			delete(r.entries, k)
 			r.expired++
-			expired = append(expired, d)
+			if r.destinations != nil {
+				r.releaseLocked(d)
+			} else {
+				expired = append(expired, d)
+			}
 		}
 	}
 	return expired

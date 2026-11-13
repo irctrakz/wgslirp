@@ -4,7 +4,8 @@ Created: 2026-10-29
 
 W1 was approved at `459f6f1`. W2 was approved at `8b10bbd`.
 W3 was approved at `539d884` and recorded in `623f6ff`.
-W4 was approved at `553f165` on `codex/jellyfin-integration`.
+W4 was approved at `553f165` and pushed with approval commit `2155c9e`.
+W5 is ready for review on `codex/jellyfin-integration`.
 
 ## Architecture and scope
 
@@ -568,24 +569,44 @@ Starting points: [pkg/wireguard/device_common.go](../pkg/wireguard/device_common
 [pkg/wireguard/device_wg.go](../pkg/wireguard/device_wg.go) and the TCP/UDP flow
 registries in `pkg/socket`.
 
-- [ ] Add peer-management APIs without unnecessarily breaking existing consumers
+- [x] Add peer-management APIs without unnecessarily breaking existing consumers
   and mocks of the device handle.
-- [ ] Validate public keys and address ownership before applying peer configuration.
-- [ ] Associate admitted work with the peer's validated, uniquely assigned source address.
-- [ ] On revocation, close admission, remove the WireGuard peer, cancel pending
+- [x] Validate public keys and address ownership before applying peer configuration.
+- [x] Associate admitted work with the peer's validated, uniquely assigned source address.
+- [x] On revocation, close admission, remove the WireGuard peer, cancel pending
   dials, close owned TCP/UDP flows and release associated buffers and incomplete
   fragment state.
-- [ ] Recheck admission when asynchronous dials complete so revoked work cannot
+- [x] Recheck admission when asynchronous dials complete so revoked work cannot
   publish a new host connection.
-- [ ] Return successful revocation only after the peer's cleanup completes;
+- [x] Return successful revocation only after the peer's cleanup completes;
   document that previously delivered bytes cannot be retracted.
-- [ ] Do not automatically recycle revoked client addresses in the initial profile.
-- [ ] Define failure and reconciliation behavior for partially applied WireGuard
+- [x] Do not automatically recycle revoked client addresses in the initial profile.
+- [x] Define failure and reconciliation behavior for partially applied WireGuard
   updates. Do not assume the underlying update operation is transactional.
-- [ ] Stop forwarding if an uncertain update means access policy cannot be
+- [x] Stop forwarding if an uncertain update means access policy cannot be
   established safely.
-- [ ] Verify add/revoke during streaming and pending dials, reconnection rejection,
+- [x] Verify add/revoke during streaming and pending dials, reconnection rejection,
   resource cleanup and continued service for unrelated peers.
+
+The optional WireGuard peer API preserves the base device interface. The
+restricted runtime tracks assignments for the life of the process and opens
+socket admission only after confirming the applied peer set. Revocation
+closes source admission, cancels pending dials, verifies the WireGuard
+removal, joins peer work and discards fragment state and queued TUN replies.
+Restricted forwarding admits only TCP. Bytes already delivered cannot be
+retracted. If a failed removal leaves the prior policy intact, admission
+reopens after cleanup. Existing connections may have been interrupted.
+Uncertain applied state closes the runtime. W6 supplies protocol dispatch,
+revision checks and process-exit handling.
+
+In the Linux amd64 VM, encrypted live add and revocation during an active
+stream, revocation during both pending-dial phases, fragment and reservation
+cleanup, and injected UAPI failure reconciliation passed three runs each.
+Linux integration vet, runtime lifecycle, direct SIGTERM and inherited
+helper pipes passed. Windows unit tests and integration vet, ten runs each
+of encrypted restricted and unrestricted forwarding, Linux and macOS ARM64
+cross-builds of both binaries, and all 100 protocol fixtures passed.
+Race-enabled tests and Docker acceptance were outside this run.
 
 **Complete when:** revocation removes both tunnel access and associated host work
 without restarting other peers or silently leaving uncertain access state.

@@ -143,7 +143,7 @@ func (b *tcpBridge) scheduleAck(f *tcpFlow) {
 		return
 	}
 	f.ackScheduled = true
-	if !b.launch(func() {
+	if !b.launchForPeer(f.owner, func() {
 		timer := time.NewTimer(b.ackDelay)
 		defer timer.Stop()
 		select {

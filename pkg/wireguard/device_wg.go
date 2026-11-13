@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -57,6 +58,17 @@ func (h *wgHandle) IpcGet() (string, error) {
 		return "", fmt.Errorf("nil device")
 	}
 	return h.dev.IpcGet()
+}
+
+func (h *wgHandle) AddPeer(publicKey [32]byte, address netip.Addr) error {
+	if !address.Is4() {
+		return fmt.Errorf("peer requires an IPv4 address")
+	}
+	return h.dev.IpcSet(fmt.Sprintf("public_key=%x\nreplace_allowed_ips=true\nallowed_ip=%s/32\n", publicKey, address))
+}
+
+func (h *wgHandle) RemovePeer(publicKey [32]byte) error {
+	return h.dev.IpcSet(fmt.Sprintf("public_key=%x\nremove=true\n", publicKey))
 }
 
 // RebindListenPort updates the device's UDP listen port (0 = random) via UAPI.

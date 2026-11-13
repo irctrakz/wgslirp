@@ -134,6 +134,7 @@ const (
 )
 
 type tcpFlow struct {
+	owner             *peerWork
 	retransmitBlocked bool // stateMu; counts transitions, not polling iterations
 	// stateMu owns connection attachment, sequence/window state, timers and
 	// flow accounting. Never acquire it while holding the bridge registry lock.
@@ -336,7 +337,9 @@ func (b *tcpBridge) SetPaceUS(us int) {
 
 func (b *tcpBridge) Name() string { return "tcp" }
 
-func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
+func (b *tcpBridge) HandleOutbound(pkt []byte) error { return b.handleOutbound(pkt, nil) }
+
+func (b *tcpBridge) handleOutbound(pkt []byte, owner *peerWork) (err error) {
 	admitted := false
 	// Publish the operation's error before allowing lifecycle waits to complete.
 	defer func() {
@@ -372,7 +375,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 	flow := b.lookupFlow(segment.key)
 
 	if flow == nil && segment.flags&fSYN != 0 && segment.flags&fACK == 0 {
-		return b.establishTCP(segment, host.String())
+		return b.establishTCP(segment, host.String(), owner)
 	}
 	return b.handleTCPFlow(flow, segment)
 }
