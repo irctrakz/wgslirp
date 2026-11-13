@@ -39,6 +39,7 @@ func (r isolationReplies) WritePacket(packet core.Packet) error {
 type isolationDenials struct {
 	destination chan struct{}
 	source      chan struct{}
+	handshake   chan struct{}
 }
 
 func (d isolationDenials) Write(record []byte) (int, error) {
@@ -48,6 +49,8 @@ func (d isolationDenials) Write(record []byte) (int, error) {
 		observed = d.destination
 	case strings.Contains(string(record), "IPv4 packet with disallowed source address"):
 		observed = d.source
+	case strings.Contains(string(record), "Received invalid initiation message"):
+		observed = d.handshake
 	default:
 		return len(record), nil
 	}
@@ -79,7 +82,7 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 	cfg := testConfig()
 	cfg.Socket.Destinations = policy
 	cfg.Socket.Transport.FastDialMs = 500
-	denials := isolationDenials{destination: make(chan struct{}, 1), source: make(chan struct{}, 1)}
+	denials := isolationDenials{destination: make(chan struct{}, 1), source: make(chan struct{}, 1), handshake: make(chan struct{}, 1)}
 	cfg.WireGuardLogOutput = denials
 	cfg.Device.Options = &wg.DeviceOptions{WGDebug: true}
 	addresses := []netip.Addr{netip.MustParseAddr("10.77.0.2"), netip.MustParseAddr("10.77.0.3")}
@@ -112,6 +115,7 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 	endpoint := netip.AddrPortFrom(host.Addr(), *status.ListenPort)
 	var tuns []*wg.WGTun
 	var replies []isolationReplies
+	var devices []wg.DeviceHandle
 	for _, key := range privateKeys {
 		reply := make(isolationReplies, 16)
 		tun, err := wg.NewWGTunWithConfig("isolation-client", cfg.Device.MTU, reply, wg.DefaultTunConfig())
@@ -128,6 +132,7 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer device.Close()
+		devices = append(devices, device)
 		tuns, replies = append(tuns, tun), append(replies, reply)
 	}
 
@@ -223,7 +228,28 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 	if status.Metrics == nil || status.Metrics.ActiveTCPFlows != 1 {
 		t.Fatalf("expected only the other peer's existing flow: %+v", status.Metrics)
 	}
+	// Force a fresh handshake with the revoked identity so the server can
+	// confirm processing the attempt, instead of silently dropping old keys.
+	if err := devices[1].Close(); err != nil {
+		t.Fatal(err)
+	}
+	reconnect, err := wg.NewWGTunWithConfig("revoked-reconnect", cfg.Device.MTU, replies[1], wg.DefaultTunConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reconnect.Close()
+	reconnectDevice, err := wg.StartDevice(wg.DeviceConfig{
+		PrivateKey: privateKeys[1], MTU: cfg.Device.MTU,
+		Peers: []wg.PeerConfig{{PublicKey: *status.ServerPublicKey,
+			AllowedIPs: []string{"10.77.0.0/24"}, Endpoint: endpoint.String()}},
+	}, reconnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reconnectDevice.Close()
+	tuns[1] = reconnect
 	send(1, addresses[1], service, 42006, 100, 0, 2, nil)
+	expectDenial(denials.handshake, "revoked WireGuard handshake")
 	roundTrip(0, 42005)
 
 	// The rejection events establish that the probes reached their checks.
@@ -232,7 +258,7 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 		select {
 		case p := <-replies[1]:
 			if len(p) >= 40 && (binary.BigEndian.Uint16(p[20:22]) == 42002 ||
-				binary.BigEndian.Uint16(p[22:24]) == 42003) {
+				binary.BigEndian.Uint16(p[22:24]) == 42003 || binary.BigEndian.Uint16(p[22:24]) == 42006) {
 				t.Fatalf("second peer received an unauthorized packet: %x", p)
 			}
 		default:

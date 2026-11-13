@@ -3,6 +3,7 @@ package socket
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 )
 
@@ -15,6 +16,7 @@ type peerWork struct {
 	cancel context.CancelFunc
 	mu     sync.Mutex
 	work   sync.WaitGroup
+	conns  map[*net.TCPConn]struct{} // guarded by mu, independent of flow state locks
 }
 
 func (p *peerWork) begin() bool {
@@ -43,20 +45,27 @@ func (s *SocketInterface) AdmitPeerSource(source [4]byte) {
 	defer s.peerMu.Unlock()
 	if s.peers[source] == nil {
 		ctx, cancel := context.WithCancel(context.Background())
-		s.peers[source] = &peerWork{ctx: ctx, cancel: cancel}
+		s.peers[source] = &peerWork{ctx: ctx, cancel: cancel, conns: make(map[*net.TCPConn]struct{})}
 	}
 }
 
-// QuiescePeerSource closes admission and cancels pending dials. The caller
+// QuiescePeerSource closes admission and interrupts host I/O. The caller
 // must retire the source before reopening it after a verified failed update.
 func (s *SocketInterface) QuiescePeerSource(source [4]byte) {
 	s.peerMu.Lock()
-	defer s.peerMu.Unlock()
-	if p := s.peers[source]; p != nil {
-		p.mu.Lock()
-		p.cancel()
-		p.mu.Unlock()
+	p := s.peers[source]
+	s.peerMu.Unlock()
+	if p == nil {
+		return
 	}
+	p.mu.Lock()
+	p.cancel()
+	// Host writes can hold a flow lock while WireGuard waits for the
+	// receive worker. Close without acquiring any flow lock.
+	for conn := range p.conns {
+		_ = conn.Close()
+	}
+	p.mu.Unlock()
 }
 
 // RetirePeerSource joins admitted work and releases the source's state.

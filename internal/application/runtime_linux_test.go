@@ -38,8 +38,13 @@ func (p captureSYNACK) ProcessPacket(packet core.Packet) error {
 
 func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 	const marker = "WGSLIRP_RUNTIME_STALLED_WRITE_TEST"
-	if os.Getenv(marker) != "1" {
-		runRuntimeSubprocess(t, "TestRuntimeStatusWhileHostWriteStalled", marker+"=1")
+	mode := os.Getenv(marker)
+	if mode == "" {
+		for _, mode := range []string{"status", "revoke"} {
+			t.Run(mode, func(t *testing.T) {
+				runRuntimeSubprocess(t, "TestRuntimeStatusWhileHostWriteStalled", marker+"="+mode)
+			})
+		}
 		return
 	}
 	lc := net.ListenConfig{Control: func(_, _ string, raw syscall.RawConn) error {
@@ -59,6 +64,19 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 	cfg := testConfig()
 	cfg.Socket.Transport.SocketSendBuffer = 4096
 	cfg.Socket.Transport.FastDialMs = 2000
+	source, target := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	const peerKey = "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="
+	if mode == "revoke" {
+		guest := netip.MustParseAddrPort("10.77.0.1:8096")
+		host := netip.AddrPortFrom(netip.AddrFrom4(target), port)
+		cfg.Socket.Destinations, err = socket.NewDestinationPolicy([]socket.TCPMapping{{Guest: guest, Host: host}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Device.Peers = []wg.PeerConfig{{PublicKey: peerKey, AllowedIPs: []string{"10.0.0.2/32"}}}
+		target, port = guest.Addr().As4(), guest.Port()
+	}
 	synACK := make(chan uint32, 1)
 	r, err := Start(context.Background(), cfg, Observers{
 		WrapProcessor: func(primary core.PacketProcessor) core.PacketProcessor {
@@ -69,8 +87,6 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	source, target := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
-	port := uint16(ln.Addr().(*net.TCPAddr).Port)
 	makePacket := func(seq, ack uint32, flags byte, payload []byte) core.Packet {
 		t.Helper()
 		data := make([]byte, 40+len(payload))
@@ -109,6 +125,30 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 			}
 			continue
 		case <-time.After(150 * time.Millisecond):
+		}
+		if mode == "revoke" {
+			removed := make(chan error, 1)
+			go func() { removed <- r.RemovePeer(peerKey) }()
+			select {
+			case err := <-removed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("revocation waited for the stalled host write deadline")
+			}
+			select {
+			case err := <-write:
+				if err == nil {
+					t.Fatal("stalled host write succeeded during revocation")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("revocation did not interrupt the host write")
+			}
+			if got := r.socket.DetailedMetrics().TCP.ActiveFlows; got != 0 {
+				t.Fatalf("revocation retained %d active flows", got)
+			}
+			return
 		}
 		type result struct {
 			status Status

@@ -240,6 +240,9 @@ func (b *tcpBridge) establishTCP(segment tcpSegment, address string, owner *peer
 				if active && err == nil {
 					f.conn = conn
 					f.connecting = false
+					if owner != nil {
+						owner.conns[conn] = struct{}{}
+					}
 				}
 				if owner != nil {
 					owner.mu.Unlock()

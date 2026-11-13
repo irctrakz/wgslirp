@@ -608,6 +608,24 @@ of encrypted restricted and unrestricted forwarding, Linux and macOS ARM64
 cross-builds of both binaries, and all 100 protocol fixtures passed.
 Race-enabled tests and Docker acceptance were outside this run.
 
+W5 review follow-up
+
+- [x] Close peer-owned host sockets before WireGuard removal waits for the
+  peer's workers. Connection publication and revocation share the source
+  lock, and socket closure does not wait for a blocked flow lock.
+- [x] Inject failed removals with prior, desired and partial applied state.
+  Verify closed admission during the update, cleanup of fragment state,
+  reopening only with the prior policy verified, and shutdown on uncertainty.
+- [x] Restart the revoked encrypted client and observe the server reject
+  its fresh WireGuard handshake before checking that no host flow opened.
+
+The stalled-host, failed-removal and encrypted reconnect regressions passed
+three runs each in the isolated Linux amd64 VM. Linux pending-dial,
+lifecycle, standalone SIGTERM, inherited-pipe checks and integration vet
+also passed. Windows unit tests and integration vet, ten runs each of
+encrypted restricted and unrestricted forwarding, Linux and macOS ARM64
+cross-builds, and all 100 protocol fixtures passed. W5 awaits review.
+
 **Complete when:** revocation removes both tunnel access and associated host work
 without restarting other peers or silently leaving uncertain access state.
 

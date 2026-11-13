@@ -47,6 +47,9 @@ func (b *tcpBridge) registerCandidateLocked(candidate *tcpFlow) (*tcpFlow, error
 		return nil, fmt.Errorf("tcp: %w", ErrFlowLimit)
 	}
 	b.flows[candidate.key] = candidate
+	if candidate.owner != nil && candidate.conn != nil {
+		candidate.owner.conns[candidate.conn] = struct{}{}
+	}
 	atomic.AddUint64(&b.metrics.ConnectionsCreated, 1)
 	atomic.AddUint64(&b.parent.metrics.ConnectionsCreated, 1)
 	return candidate, nil
@@ -170,6 +173,11 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	f.txBytes = 0
 	if f.conn != nil {
 		_ = f.conn.Close()
+		if f.owner != nil {
+			f.owner.mu.Lock()
+			delete(f.owner.conns, f.conn)
+			f.owner.mu.Unlock()
+		}
 	}
 	if f.rtoStop != nil {
 		close(f.rtoStop)
