@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,30 @@ func (r isolationReplies) WritePacket(packet core.Packet) error {
 	default:
 		return fmt.Errorf("isolation test reply queue full")
 	}
+}
+
+// The runtime routes WireGuard's own receive diagnostics here. Each probe is
+// sent separately, and both sessions are established before either probe.
+type isolationDenials struct {
+	destination chan struct{}
+	source      chan struct{}
+}
+
+func (d isolationDenials) Write(record []byte) (int, error) {
+	var observed chan struct{}
+	switch {
+	case strings.Contains(string(record), "Failed to write packets to TUN device: "+socket.ErrDestinationDenied.Error()):
+		observed = d.destination
+	case strings.Contains(string(record), "IPv4 packet with disallowed source address"):
+		observed = d.source
+	default:
+		return len(record), nil
+	}
+	select {
+	case observed <- struct{}{}:
+	default:
+	}
+	return len(record), nil
 }
 
 func TestRestrictedRuntimePeerIsolation(t *testing.T) {
@@ -52,9 +77,10 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 
 	cfg := testConfig()
 	cfg.Socket.Destinations = policy
-	// Keep loopback dials on the fast path so each positive probe is an
-	// ordering barrier for packets sent before it by that peer.
 	cfg.Socket.Transport.FastDialMs = 500
+	denials := isolationDenials{destination: make(chan struct{}, 1), source: make(chan struct{}, 1)}
+	cfg.WireGuardLogOutput = denials
+	cfg.Device.Options = &wg.DeviceOptions{WGDebug: true}
 	addresses := []netip.Addr{netip.MustParseAddr("10.77.0.2"), netip.MustParseAddr("10.77.0.3")}
 	var privateKeys []string
 	for _, address := range addresses {
@@ -159,17 +185,25 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 		}
 	}
 
-	// Establish both WireGuard sessions before trying peer-to-peer traffic.
+	expectDenial := func(observed <-chan struct{}, name string) {
+		t.Helper()
+		select {
+		case <-observed:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("probe did not reach %s rejection", name)
+		}
+	}
+
 	roundTrip(1, 42001)
-	// Target the second peer, then try its source address against the service.
-	send(0, addresses[0], netip.AddrPortFrom(addresses[1], service.Port()), 42002, 200, 0, 2, nil)
-	send(0, addresses[1], service, 42003, 300, 0, 2, nil)
 	roundTrip(0, 42004)
+	send(0, addresses[0], netip.AddrPortFrom(addresses[1], service.Port()), 42002, 200, 0, 2, nil)
+	expectDenial(denials.destination, "destination policy")
+	send(0, addresses[1], service, 42003, 300, 0, 2, nil)
+	expectDenial(denials.source, "WireGuard source ownership")
 	roundTrip(1, 42005)
 
-	// Any unauthorized SYN-ACK or forwarded SYN carries one of these ports.
-	quiet := time.NewTimer(200 * time.Millisecond)
-	defer quiet.Stop()
+	// The rejection events establish that the probes reached their checks.
+	// Drain any remaining replies for the targeted peer before checking flows.
 	for {
 		select {
 		case p := <-replies[1]:
@@ -177,7 +211,7 @@ func TestRestrictedRuntimePeerIsolation(t *testing.T) {
 				binary.BigEndian.Uint16(p[22:24]) == 42003) {
 				t.Fatalf("second peer received an unauthorized packet: %x", p)
 			}
-		case <-quiet.C:
+		default:
 			if got := runtime.socket.DetailedMetrics().TCP.Counters.ConnectionsCreated; got != 3 {
 				t.Fatalf("host flow count = %d, want three mapped connections", got)
 			}

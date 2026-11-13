@@ -187,6 +187,7 @@ func (s *SocketInterface) Start() error {
 	s.icmp = newICMPBridge(s)
 	if s.config.IPv4Reassembly {
 		s.fragments = newIPv4Fragments(s.buffers(), s.config.IPv4FragmentBufferCapBytes)
+		s.fragments.destinations = s.config.Destinations
 		s.wg.Add(1)
 		go s.maintainIPv4Fragments()
 	}
@@ -300,7 +301,8 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 
 	data := core.BorrowPacketData(packet)
 	// Check the destination IP on every fragment before it can reserve
-	// storage. The TCP port is authorized on the complete segment.
+	// storage. Reassembly checks the port as soon as fragment zero arrives,
+	// and the TCP bridge authorizes the complete segment.
 	if policy := s.config.Destinations; policy != nil && len(data) >= 20 && data[0]>>4 == 4 {
 		if data[9] != 6 || !policy.Reserves(netip.AddrFrom4([4]byte(data[16:20]))) {
 			return ErrDestinationDenied

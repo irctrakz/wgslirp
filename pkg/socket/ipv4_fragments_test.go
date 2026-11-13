@@ -446,6 +446,63 @@ func TestRestrictedFragmentsReserveOnlyMappedAddresses(t *testing.T) {
 	assertBudget(t, s.buffers(), 0)
 }
 
+func TestRestrictedFragmentsRejectUnmappedPort(t *testing.T) {
+	guest := netip.MustParseAddrPort("10.77.0.1:8096")
+	policy, err := NewDestinationPolicy([]TCPMapping{{
+		Guest: guest, Host: netip.MustParseAddrPort("127.0.0.1:8096"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, laterFirst := range []bool{false, true} {
+		name := "initial-first"
+		if laterFirst {
+			name = "later-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Protocol = "ip4:tcp"
+			cfg.SocketBufferCapBytes = ipv4FragmentCharge
+			cfg.Destinations = policy
+			s := NewSocketInterface(cfg)
+			s.SetPacketProcessor(&captureProcessor{})
+			if err := s.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Stop() })
+			write := func(id uint16, offset int, port uint16) error {
+				body := make([]byte, 8)
+				binary.BigEndian.PutUint16(body[2:4], port)
+				packet := fragmentFixture(6, id, offset, true, body)
+				copy(packet[16:20], guest.Addr().AsSlice())
+				fragmentChecksum(packet)
+				return s.WritePacket(core.NewBorrowedPacket(packet))
+			}
+			if laterFirst {
+				if err := write(1, 8, 0); err != nil {
+					t.Fatal(err)
+				}
+				assertBudget(t, s.buffers(), ipv4FragmentCharge)
+			}
+			if err := write(1, 0, guest.Port()+1); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("unmapped TCP port: %v", err)
+			}
+			assertBudget(t, s.buffers(), 0)
+			_, peak, _, _ := s.buffers().snapshot()
+			if !laterFirst && peak != 0 {
+				t.Fatalf("denied initial fragment reserved %d bytes", peak)
+			}
+			if got := s.DetailedMetrics().IPv4Fragments["live"]; got != 0 {
+				t.Fatalf("denied assembly left %d live reservations", got)
+			}
+			if err := write(2, 0, guest.Port()); err != nil {
+				t.Fatalf("mapped TCP port could not use the budget: %v", err)
+			}
+			assertBudget(t, s.buffers(), ipv4FragmentCharge)
+		})
+	}
+}
+
 func TestIPv4FragmentsTimeoutSuppression(t *testing.T) {
 	for _, kind := range []string{"no first", "multicast", "invalid source", "ICMP error"} {
 		t.Run(kind, func(t *testing.T) {

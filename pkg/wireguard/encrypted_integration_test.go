@@ -233,6 +233,11 @@ func TestEncryptedRestrictedDestination(t *testing.T) {
 		packets := [][]byte{p}
 		if id != 0 {
 			packets = encryptedFragments(p, id, 8)
+			if port != service.Port() {
+				// A denied first fragment is sufficient to exercise the
+				// early port check. Later fragments carry no port.
+				packets = packets[:1]
+			}
 		}
 		for _, p := range packets {
 			if err := tun.InjectToPeer(p); err != nil {
@@ -310,7 +315,7 @@ func TestEncryptedRestrictedDestination(t *testing.T) {
 			break
 		}
 	}
-	if fragments := s.DetailedMetrics().IPv4Fragments["completed"]; fragments < 4 {
+	if fragments := s.DetailedMetrics().IPv4Fragments["completed"]; fragments != 2 {
 		t.Fatalf("completed reassemblies: %d", fragments)
 	}
 }

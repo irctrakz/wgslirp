@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -52,6 +53,7 @@ type fragmentDatagram struct {
 type ipv4Fragments struct {
 	mu                sync.Mutex
 	budget            *resourceBudget
+	destinations      *DestinationPolicy // set before the cache is published
 	limit, used, live int
 	entries           map[fragmentKey]*fragmentDatagram
 	sources           map[[4]byte]int
@@ -108,6 +110,19 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.entries[k]
+	// Even the shortest valid initial fragment carries both TCP ports.
+	// Discard any provisional assembly for this tuple under the cache lock.
+	if r.destinations != nil && start == 0 {
+		guest := netip.AddrPortFrom(netip.AddrFrom4(k.dst), binary.BigEndian.Uint16(p[22:24]))
+		if _, allowed := r.destinations.tcp[guest]; !allowed {
+			r.rejected++
+			if d != nil {
+				delete(r.entries, k)
+				r.releaseLocked(d)
+			}
+			return nil, nil, ErrDestinationDenied
+		}
+	}
 	if d != nil && !now.Before(d.deadline) {
 		r.rejected++
 		// Maintenance owns timeout feedback and disposal, including fragment zero.

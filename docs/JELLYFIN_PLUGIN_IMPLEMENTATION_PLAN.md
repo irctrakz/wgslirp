@@ -496,6 +496,23 @@ and vet passed, including ten runs each of restricted and unrestricted
 encrypted forwarding. Both binaries cross-built for Linux and macOS
 ARM64, and all 100 protocol compatibility cases passed. W4 awaits review.
 
+Second W4 review follow-up
+
+- [x] Check the destination port as soon as the first TCP fragment arrives.
+  An unmapped port cannot create a reservation, and it releases any
+  provisional reservation for that datagram. Later fragments can reserve
+  provisional space because they carry no TCP ports.
+- [x] Wait for the destination-policy rejection and WireGuard source-address
+  rejection in the encrypted two-peer test. Verify that both peers can
+  still reach the mapped service and only the expected host flows opened.
+
+Both fragment arrival orders passed ten Linux runs and 100 Windows
+repetitions. The encrypted isolation test passed three Linux runs per VM
+run. Linux integration vet, lifecycle, SIGTERM and helper pipe checks
+passed, as did Windows tests and vet and Linux and macOS ARM64 cross-builds.
+Restricted and unrestricted encrypted forwarding passed five runs each on
+Linux and ten each on Windows. W4 awaits review before W5.
+
 **Complete when:** a WireGuard client can reach a mapped service, and alternate
 destinations or forwarding paths cannot escape the configured policy.
 
