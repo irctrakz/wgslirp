@@ -123,6 +123,94 @@ func TestTUNQueueBudgetCopyReadAndDrain(t *testing.T) {
 	assertAllQueueBudgetAvailable(t, s, 300)
 }
 
+type purgeBudgetWriter struct {
+	*socket.SocketInterface
+	reservations int
+	purgeEntered chan struct{}
+	resumePurge  chan struct{}
+}
+
+func (w *purgeBudgetWriter) ReservePacketBuffer(n int) (func(), error) {
+	release, err := w.SocketInterface.ReservePacketBuffer(n)
+	w.reservations++
+	if err != nil || w.reservations != 2 {
+		return release, err
+	}
+	return func() {
+		close(w.purgeEntered)
+		<-w.resumePurge
+		release()
+	}, nil
+}
+
+func TestTUNPeerPurgePreservesReplyOrderAndReservations(t *testing.T) {
+	const frameBytes = 20
+	const budget = 4 * (frameBytes + 128)
+	s := socket.NewSocketInterface(socket.Config{SocketBufferCapBytes: budget})
+	writer := &purgeBudgetWriter{
+		SocketInterface: s,
+		purgeEntered:    make(chan struct{}),
+		resumePurge:     make(chan struct{}),
+	}
+	tun, err := NewWGTunWithConfig("purge", 1380, writer, TunConfig{QueueCapacity: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tun.Close()
+	var resume sync.Once
+	defer resume.Do(func() { close(writer.resumePurge) })
+	revoked, survivor := [4]byte{10, 0, 0, 2}, [4]byte{10, 0, 0, 3}
+	for i, address := range [][4]byte{survivor, revoked, survivor, revoked} {
+		packet := make([]byte, frameBytes)
+		packet[0], packet[4] = 0x45, byte(i+1)
+		copy(packet[16:20], address[:])
+		if err := tun.InjectToPeer(packet); err != nil {
+			t.Fatal(err)
+		}
+	}
+	purged := make(chan struct{})
+	go func() {
+		tun.DiscardPeerPackets(revoked)
+		close(purged)
+	}()
+	select {
+	case <-writer.purgeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("purge never reached the first revoked frame")
+	}
+	type readResult struct {
+		order [2]byte
+		count int
+		err   error
+	}
+	read := make(chan readResult, 1)
+	go func() {
+		buffers := [][]byte{make([]byte, frameBytes), make([]byte, frameBytes)}
+		count, err := tun.Read(buffers, make([]int, len(buffers)), 0)
+		read <- readResult{order: [2]byte{buffers[0][4], buffers[1][4]}, count: count, err: err}
+	}()
+	select {
+	case got := <-read:
+		t.Fatalf("reader dequeued during purge: %+v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	resume.Do(func() { close(writer.resumePurge) })
+	select {
+	case <-purged:
+	case <-time.After(time.Second):
+		t.Fatal("purge did not finish")
+	}
+	select {
+	case got := <-read:
+		if got.err != nil || got.count != 2 || got.order != [2]byte{1, 3} {
+			t.Fatalf("surviving replies: %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reader did not receive surviving frames")
+	}
+	assertAllQueueBudgetAvailable(t, s, budget)
+}
+
 type queueCountingWriter struct {
 	*socket.SocketInterface
 	reservations atomic.Int32

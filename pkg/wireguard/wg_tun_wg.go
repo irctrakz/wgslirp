@@ -21,23 +21,12 @@ func (t *WGTun) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		return 0, fmt.Errorf("invalid TUN read buffers or offset")
 	}
 	for n := 0; n < min(len(buffs), t.BatchSize()); n++ {
-		var frame queuedFrame
-		if n == 0 {
-			select {
-			case <-t.closed:
-				return 0, fmt.Errorf("wg tun closed")
-			case frame = <-t.outCh:
-			}
-		} else {
-			// Drain only already queued frames; never delay a packet to fill a
-			// batch. Close owns frames that this Read has not dequeued.
-			select {
-			case <-t.closed:
-				return n, nil
-			case frame = <-t.outCh:
-			default:
-				return n, nil
-			}
+		frame, err := t.dequeueFrame(n == 0)
+		if err != nil && n == 0 {
+			return 0, err
+		}
+		if frame.release == nil {
+			return n, nil
 		}
 		if offset > len(buffs[n]) || len(frame.data) > len(buffs[n])-offset {
 			frame.release()

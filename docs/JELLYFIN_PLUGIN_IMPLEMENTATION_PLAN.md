@@ -626,6 +626,24 @@ also passed. Windows unit tests and integration vet, ten runs each of
 encrypted restricted and unrestricted forwarding, Linux and macOS ARM64
 cross-builds, and all 100 protocol fixtures passed. W5 awaits review.
 
+Second W5 review follow-up
+
+- [x] Serialize queued reply purge with dequeue. Verify a concurrent reader
+  waits for the purge, surviving replies stay in FIFO order, and every
+  queue reservation is released.
+- [x] Make the stalled-write regression model WireGuard joining its receive
+  worker inside peer removal. The test requires the blocked write to return
+  before the device removal can proceed.
+
+The Linux amd64 rerun passed five repetitions of the queue purge and
+encrypted forwarding tests and three each of stalled-write revocation,
+failed removal, encrypted reconnect rejection, pending-dial cancellation,
+standalone SIGTERM and helper pipes. The first Linux run was killed partway
+through the repeated forwarding suite. The rerun used 768 MiB of VM memory.
+Windows unit tests and integration vet, 50 runs of the TUN suite, ten each
+of restricted and unrestricted encrypted forwarding, and Linux and macOS
+ARM64 cross-builds passed. W5 awaits review before W6.
+
 **Complete when:** revocation removes both tunnel access and associated host work
 without restarting other peers or silently leaving uncertain access state.
 

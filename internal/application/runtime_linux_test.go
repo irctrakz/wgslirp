@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -23,6 +24,25 @@ import (
 type captureSYNACK struct {
 	core.PacketProcessor
 	sequence chan uint32
+}
+
+type waitingPeerDevice struct {
+	wg.DeviceHandle
+	wg.PeerDevice
+	receiveDone <-chan error
+}
+
+func (d waitingPeerDevice) RemovePeer(key [32]byte) error {
+	// Model WireGuard joining its receive worker before returning.
+	select {
+	case err := <-d.receiveDone:
+		if err == nil {
+			return fmt.Errorf("host write completed without interruption")
+		}
+	case <-time.After(3 * time.Second):
+		return fmt.Errorf("peer removal waited for the stalled receive worker")
+	}
+	return d.PeerDevice.RemovePeer(key)
 }
 
 func (p captureSYNACK) ProcessPacket(packet core.Packet) error {
@@ -127,6 +147,9 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 		case <-time.After(150 * time.Millisecond):
 		}
 		if mode == "revoke" {
+			r.device = waitingPeerDevice{
+				DeviceHandle: r.device, PeerDevice: r.device.(wg.PeerDevice), receiveDone: write,
+			}
 			removed := make(chan error, 1)
 			go func() { removed <- r.RemovePeer(peerKey) }()
 			select {
@@ -136,14 +159,6 @@ func TestRuntimeStatusWhileHostWriteStalled(t *testing.T) {
 				}
 			case <-time.After(time.Second):
 				t.Fatal("revocation waited for the stalled host write deadline")
-			}
-			select {
-			case err := <-write:
-				if err == nil {
-					t.Fatal("stalled host write succeeded during revocation")
-				}
-			case <-time.After(time.Second):
-				t.Fatal("revocation did not interrupt the host write")
 			}
 			if got := r.socket.DetailedMetrics().TCP.ActiveFlows; got != 0 {
 				t.Fatalf("revocation retained %d active flows", got)
