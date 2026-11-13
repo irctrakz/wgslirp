@@ -1,5 +1,103 @@
 [
   {
+    "id": "eof_during_start",
+    "description": "Hold startup before readiness. EOF cancels it and cleans partial state without acknowledging readiness.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"in_flight":2},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "eof_during_revocation",
+    "description": "Hold revocation before its commit. EOF shuts down the entire runtime without acknowledging the mutation.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="}}},
+      {"in_flight":3},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "queue_overflow_during_start",
+    "description": "A third pending request overflows the queue while startup is held. Suppress startup and queued responses.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"in_flight":2},
+      {"send":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"type":"session_error","instance_id":"0123456789abcdef0123456789abcdef","code":"queue_full"}},
+      {"exit":1}
+    ]
+  },
+  {
+    "id": "post_handshake_hello_and_precedence",
+    "description": "Check repeated negotiation and errors when several validation steps could fail.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp"]}}},
+      {"send":{"id":2,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":2,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_request"}}},
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"duplicate_id"}}},
+      {"send":{"id":2,"op":"future","instance_id":"0123456789abcdef0123456789abcdef","params":null}},
+      {"receive":{"id":2,"op":"future","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"duplicate_id"}}},
+      {"send":{"id":3,"op":"future","instance_id":"0123456789abcdef0123456789abcdef","params":null}},
+      {"receive":{"id":3,"op":"future","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_request"}}},
+      {"send":{"id":4,"op":"future","instance_id":"ffffffffffffffffffffffffffffffff","params":{}}},
+      {"receive":{"id":4,"op":"future","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"wrong_instance"}}},
+      {"send":{"id":5,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":5,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"unsupported_capability"}}},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "peer_shape_state_and_revision_precedence",
+    "description": "Validate payload shape before state, then state before revision.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":2,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_request"}}},
+      {"send":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":7,"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="}}},
+      {"receive":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_state"}}},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "start_failed_permission_denied",
+    "description": "Startup failure reports its classified reason and exits.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed","reason":"permission_denied"}}},
+      {"exit":1}
+    ]
+  },
+  {
+    "id": "start_failed_other",
+    "description": "Startup failure reports its classified reason and exits.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed","reason":"other"}}},
+      {"exit":1}
+    ]
+  },
+  {
     "id": "start_status_stop",
     "description": "Negotiation, local validation, ephemeral bind, portable telemetry and graceful shutdown.",
     "steps": [
@@ -157,7 +255,7 @@
       {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
       {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
       {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
-      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed"}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed","reason":"address_in_use"}}},
       {"exit":1}
     ]
   },

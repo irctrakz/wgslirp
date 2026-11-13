@@ -180,8 +180,12 @@
       "required": ["code"],
       "additionalProperties": false,
       "properties": {
-        "code": { "enum": ["unsupported_version", "duplicate_id", "invalid_request", "wrong_instance", "unknown_operation", "unsupported_capability", "invalid_state", "invalid_config", "start_failed", "revision_conflict", "peer_conflict", "peer_limit", "peer_not_found", "peer_update_failed"] }
-      }
+        "code": { "enum": ["unsupported_version", "duplicate_id", "invalid_request", "wrong_instance", "unknown_operation", "unsupported_capability", "invalid_state", "invalid_config", "start_failed", "revision_conflict", "peer_conflict", "peer_limit", "peer_not_found", "peer_update_failed"] },
+        "reason": { "enum": ["address_in_use", "permission_denied", "other"] }
+      },
+      "if": { "properties": { "code": { "const": "start_failed" } } },
+      "then": { "required": ["reason"] },
+      "else": { "properties": { "reason": false } }
     },
     "response": {
       "type": "object",
@@ -207,7 +211,12 @@
           { "properties": { "op": { "enum": ["validate", "stop", "peer_add", "peer_remove"] }, "result": { "$ref": "#/$defs/empty" } } }
         ]
       },
-      "else": { "required": ["error"], "properties": { "result": false } }
+      "else": {
+        "required": ["error"],
+        "properties": { "result": false },
+        "if": { "properties": { "error": { "properties": { "code": { "const": "start_failed" } } } } },
+        "then": { "properties": { "op": { "const": "start" }, "revision": { "const": 0 } } }
+      }
     },
     "sessionError": {
       "type": "object",

@@ -1,4 +1,8 @@
 [
+  {"id":"bad_start_failure_missing_reason","valid":false,"message":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed"}}},
+  {"id":"bad_start_failure_arbitrary_reason","valid":false,"message":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed","reason":"arbitrary platform error"}}},
+  {"id":"bad_start_reason_on_other_error","valid":false,"message":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_config","reason":"other"}}},
+  {"id":"bad_start_failure_wrong_operation","valid":false,"message":{"id":2,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed","reason":"other"}}},
   {"id":"good_hello","valid":true,"message":{"id":1,"op":"hello","params":{"versions":[1]}}},
   {"id":"bad_duplicate_versions","valid":false,"message":{"id":1,"op":"hello","params":{"versions":[1,1]}}},
   {"id":"bad_missing_instance","valid":false,"message":{"id":2,"op":"status","params":{}}},

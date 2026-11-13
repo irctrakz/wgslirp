@@ -44,6 +44,23 @@ cannot express. Both are part of the contract. The shared
   or `queue_full`, then clean up and exit nonzero. A pipe failure can prevent
   delivery of that frame. The controller must also observe process exit.
 
+EOF, a terminal framing or queue error, and stdout failure all close admission
+to new requests and new forwarding work. At that point, discard queued requests
+and cancel the executing request, if any. Serialize this transition with
+publication of readiness, peer revisions and correlated responses. Once shutdown
+has begun, the interrupted request cannot publish a new runtime or revision or
+send a correlated response. A response already written before shutdown remains
+valid.
+
+An executing operation may already own resources or have changed the device.
+Wait for it to relinquish those resources before finishing teardown. If an
+underlying call cannot be cancelled, keep forwarding closed, let the call finish
+as part of teardown, and close its resources without publishing the result.
+Tear down the entire runtime, including partial startup and any peer work. The
+10-second shutdown limit covers both waiting for the interrupted operation and
+cleanup. EOF at a line boundary exits zero after cleanup. A fatal pipe or protocol
+error exits nonzero, as does shutdown exceeding the deadline.
+
 ## Session and response rules
 
 The controller sends `hello` first, with ID `1` and an array of distinct
@@ -72,15 +89,28 @@ Each correlated response echoes `id` and `op` and includes `instance_id`,
 The helper does not return raw decoder errors or arbitrary messages. Rejections
 carry the current revision. The error codes are stable machine-readable values.
 
-After the handshake, check the request ID first, then the envelope and instance,
-the operation and capability, payload shape, runtime state, expected revision
-and finally operation-specific values and conflicts. Return `invalid_request`
-for a malformed envelope or payload, `wrong_instance` for a mismatched valid
-instance ID, `unknown_operation` for an unrecognized operation token,
-`unsupported_capability` for a known optional operation that was not advertised,
-and `invalid_state` for a valid operation in the wrong state. The bootstrap
-envelope is valid only with ID `1`, so a later `hello` with a fresh ID returns
-`invalid_request`.
+After the handshake, apply these checks in order and return the first failure.
+
+1. Require a valid `id` and `op` token or terminate with `invalid_frame`.
+   Return `duplicate_id` for an ID at or below the high-water mark. Otherwise
+   consume the ID before performing any remaining checks.
+2. Validate the generic envelope. It must contain exactly `id`, `op`,
+   `instance_id` and `params`. The instance ID must be well formed and
+   `params` must be an object. Reject a fresh post-handshake `hello` here as
+   well. Any failure in this step returns `invalid_request`.
+3. Compare the instance ID and return `wrong_instance` on a mismatch.
+4. Recognize the operation and check its advertised capability. Return
+   `unknown_operation` or `unsupported_capability` as appropriate.
+5. Validate the operation-specific contents of the `params` object. Return
+   `invalid_request` for the wrong shape.
+6. Check runtime state, then the expected revision if present. Return
+   `invalid_state` or `revision_conflict` as appropriate.
+7. Check operation-specific semantic values, then conflicts and capacity.
+
+The request schema describes accepted shapes. It cannot select an error for a
+rejected request. For example, an unknown operation with `params: null` fails
+the envelope check. With `params: {}` and the correct instance, it fails the
+operation check.
 
 The revision starts at `0` with no runtime. Successful `start` sets it to `1`.
 Each successful peer addition or removal increments it once. Validation, status
@@ -107,9 +137,20 @@ can omit `live_peers` until it implements the full revocation contract.
 listener is operational. This reports local readiness. A launch can still need
 external firewall, endpoint or port publication configuration. A configuration
 that fails semantic validation leaves the process idle and returns
-`invalid_config`. If runtime
-construction fails after validation, finish cleanup, return `start_failed` and
-exit nonzero. Successful `stop` responds only after runtime cleanup is complete,
+`invalid_config`. If runtime construction fails after validation, finish cleanup,
+return `start_failed` with a required `error.reason` and exit nonzero. Classify
+startup errors using the underlying platform error where available.
+
+| Startup reason | Meaning |
+| --- | --- |
+| `address_in_use` | The UDP listener could not bind because the address or port is occupied. |
+| `permission_denied` | A startup operation failed because the platform denied access. |
+| `other` | The failure could not be classified as either of the above. |
+
+The reason is a fixed token. Use `other` when classification is unavailable.
+The controller can select a user-facing message without parsing stderr.
+
+Successful `stop` responds only after runtime cleanup is complete,
 then exits zero. A terminal operation drops queued requests. If cleanup cannot
 finish within 10 seconds after shutdown begins, report `shutdown_timeout` as a
 terminal session error if possible and exit nonzero. A terminal error takes
@@ -220,7 +261,7 @@ process if it is still running.
 | `unsupported_capability` | The operation requires a capability that was not advertised. |
 | `invalid_state` | The operation is unavailable in the current state. |
 | `invalid_config` | Configuration or peer values fail semantic validation. |
-| `start_failed` | Validated startup failed. The helper exits after cleanup. |
+| `start_failed` | Validated startup failed. The required `reason` identifies the failure category. The helper exits after cleanup. |
 | `revision_conflict` | The expected revision is stale. Refresh status before deciding what to do. |
 | `peer_conflict` | The key or address is assigned or the address was revoked in this session. |
 | `peer_limit` | The active peer or process assignment limit was reached. |

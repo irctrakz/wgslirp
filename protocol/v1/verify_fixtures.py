@@ -14,6 +14,8 @@ UINT64_MAX = 2**64 - 1
 COUNTERS = {
     "rx_bytes", "tx_bytes", "tcp_flow_refusals", "pending_dial_refusals", "buffer_refusals"
 }
+PEER_OPERATIONS = {"peer_add", "peer_remove"}
+OPERATIONS = PEER_OPERATIONS | {"validate", "start", "status", "stop"}
 
 
 def require(condition, detail):
@@ -115,6 +117,39 @@ def check_reconciliation(decision, requests, replies, deadlines):
             "status revision disagrees with the mutation outcome")
 
 
+def request_rejection(request, validator, instance, capabilities, revision, duplicate):
+    """Check the specified precedence through revision validation."""
+    if duplicate:
+        return "duplicate_id"
+    if (set(request) != {"id", "op", "instance_id", "params"}
+            or not isinstance(request["params"], dict)
+            or not isinstance(request["instance_id"], str)
+            or re.fullmatch(r"[0-9a-f]{32}", request["instance_id"]) is None
+            or request["op"] == "hello"):
+        return "invalid_request"
+    if request["instance_id"] != instance:
+        return "wrong_instance"
+    op = request["op"]
+    if op not in OPERATIONS:
+        return "unknown_operation"
+    if op in PEER_OPERATIONS and "live_peers" not in capabilities:
+        return "unsupported_capability"
+    if not validator.is_valid(request):
+        return "invalid_request"
+    if (op == "start" and revision != 0) or (op in PEER_OPERATIONS and revision == 0):
+        return "invalid_state"
+    if op in PEER_OPERATIONS and request["params"]["expected_revision"] != revision:
+        return "revision_conflict"
+    return None
+
+
+def peer_set(records):
+    peers = {peer["public_key"]: peer["address"] for peer in records}
+    require(len(peers) == len(records), "duplicate peer public key")
+    require(len(set(peers.values())) == len(peers), "duplicate peer address")
+    return peers
+
+
 def check_session(case, validator):
     pending = []
     requests, replies = {}, {}
@@ -123,15 +158,23 @@ def check_session(case, validator):
     revision = 0
     high_id = 0
     capabilities = None
+    applied_peers = {}
+    in_flight = None
+    queue_overflow = False
     input_closed = False
     terminal_failure = False
     for index, step in enumerate(case["steps"]):
         require(len(step) == 1, "each step needs one action")
         action, value = next(iter(step.items()))
+        if queue_overflow:
+            require(action == "receive" and value.get("code") == "queue_full",
+                    "overflow must produce a terminal queue_full error")
         if action == "send":
             require(not input_closed, "request follows a closed session")
             pending.append(value)
-            require(len(pending) <= 2, "more than one executing and one queued request")
+            if len(pending) > 2:
+                require(in_flight == pending[0]["id"], "overflow needs a held executing request")
+                queue_overflow = True
             requests[value["id"]] = value
         elif action == "receive":
             validator.validate(value)
@@ -139,23 +182,27 @@ def check_session(case, validator):
             instance = instance or value["instance_id"]
             require(value["instance_id"] == instance, "helper response changed instance")
             if value.get("type") == "session_error":
+                require(not terminal_failure, "response follows terminal failure")
+                require(not input_closed or value["code"] == "shutdown_timeout",
+                        "only shutdown_timeout may follow EOF")
+                require((value["code"] == "queue_full") == queue_overflow,
+                        "queue_full requires one executing, one queued and one excess request")
                 input_closed = terminal_failure = True
+                queue_overflow = False
                 pending.clear()
                 continue
+            require(not input_closed and pending, "correlated response without open pending work")
             request = pending.pop(0)
+            if in_flight == request["id"]:
+                in_flight = None
             require((value["id"], value["op"]) == (request["id"], request["op"]),
                     "response does not match the oldest request")
             duplicate = request["id"] <= high_id
             high_id = max(high_id, request["id"])
             code = value.get("error", {}).get("code")
-            require((code == "duplicate_id") == duplicate, "duplicate ID outcome is inconsistent")
-            shape_error = code in {"unknown_operation", "invalid_request"}
-            require(validator.is_valid(request) != shape_error, "request shape does not match outcome")
-            if code == "wrong_instance":
-                require(request["instance_id"] != instance, "wrong_instance needs a mismatched instance")
-            elif request["op"] != "hello":
-                require(request["instance_id"] == instance, "request instance does not match response")
-            if request["op"] == "hello":
+            if capabilities is None:
+                require(validator.is_valid(request) and request["op"] == "hello",
+                        "first correlated exchange must be valid bootstrap")
                 common = {1}.intersection(request["params"]["versions"])
                 require(value["ok"] == bool(common), "negotiation outcome disagrees with versions")
                 if value["ok"]:
@@ -164,37 +211,57 @@ def check_session(case, validator):
                 else:
                     require(code == "unsupported_version", "missing version mismatch error")
             else:
-                require(capabilities is not None, "operation before negotiation")
-            if request["op"] in {"peer_add", "peer_remove"}:
-                require((code == "unsupported_capability") == ("live_peers" not in capabilities),
-                        "peer operation outcome disagrees with capabilities")
-                if value["ok"] or code == "revision_conflict":
-                    matches = request["params"]["expected_revision"] == revision
-                    require(value["ok"] == matches, "peer operation outcome disagrees with revision")
-            if value["ok"] and request["op"] in {"start", "peer_add", "peer_remove"}:
+                expected = request_rejection(request, validator, instance, capabilities, revision, duplicate)
+                if expected:
+                    require(code == expected, f"expected {expected}, got {code}")
+                else:
+                    require(code not in {"duplicate_id", "invalid_request", "wrong_instance",
+                                         "unknown_operation", "unsupported_capability",
+                                         "invalid_state", "revision_conflict", "unsupported_version"},
+                            f"unexpected rejection: {code}")
+            if value["ok"] and request["op"] == "start":
+                applied_peers = peer_set(request["params"]["peers"])
+                revision = 1
+            if value["ok"] and request["op"] in PEER_OPERATIONS:
+                params = request["params"]
+                if request["op"] == "peer_add":
+                    peer = params["peer"]
+                    require(peer["public_key"] not in applied_peers
+                            and peer["address"] not in applied_peers.values(),
+                            "successful add would replace an active peer")
+                    applied_peers[peer["public_key"]] = peer["address"]
+                else:
+                    require(params["public_key"] in applied_peers, "successful removal of unknown peer")
+                    del applied_peers[params["public_key"]]
                 revision += 1
             require(value["revision"] == revision, "revision did not track applied mutations")
             if value["ok"] and request["op"] == "status":
                 state = "running" if revision else "idle"
                 require(value["result"]["state"] == state, "status disagrees with runtime state")
+                require(peer_set(value["result"]["peers"]) == applied_peers,
+                        "status does not contain the complete applied peer set")
             if code in {"unsupported_version", "start_failed"}:
                 input_closed = terminal_failure = True
             if value["ok"] and request["op"] == "stop":
                 input_closed = True
             replies[value["id"]] = value
+        elif action == "in_flight":
+            require(not input_closed and len(pending) == 1 and pending[0]["id"] == value
+                    and in_flight is None, "in_flight must hold the executing request")
+            in_flight = value
         elif action == "deadline":
             require(pending and pending[0]["id"] == value, "deadline must name the outstanding request")
             deadlines.add(value)
         elif action == "decision":
             check_reconciliation(value, requests, replies, deadlines)
         elif action == "eof":
-            require(value is True, "eof must be true")
+            require(value is True and not input_closed, "unexpected EOF step")
             input_closed = True
             pending.clear()
         elif action == "exit":
             require(index == len(case["steps"]) - 1, "exit must be last")
             require(input_closed and not pending, "exit without terminal action or with pending work")
-            require(value == int(terminal_failure), "exit does not match terminal outcome")
+            require((value != 0) == terminal_failure, "exit does not match terminal outcome")
         else:
             raise AssertionError(f"unknown session step {action}")
     require("exit" in case["steps"][-1], "missing exit step")

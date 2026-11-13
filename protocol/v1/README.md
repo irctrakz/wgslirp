@@ -32,6 +32,7 @@ For a session case, interpret each step in order:
 | Step | Meaning |
 | --- | --- |
 | `send` | Controller writes the object as a request line |
+| `in_flight` | Test harness holds the named request after execution begins and before it can publish a result |
 | `receive` | Expected helper response object, independent of key order |
 | `deadline` | The controller's response deadline expired for this request ID |
 | `decision` | After the specified status reply, the controller determines whether the timed-out mutation applied |
@@ -45,6 +46,12 @@ failure events where possible instead of making tests wait for wall-clock
 deadlines. Some `send` steps intentionally fail the message schema or the
 session rules. Preserve those inputs when checking rejection behavior.
 
+For a held request, the harness releases the operation for teardown after
+shutdown starts. Assert that no correlated response, readiness or revision is
+published after that transition and that resources acquired before cancellation
+are closed. The transcript records the wire outcome. Future helper tests can
+verify cancellation and resource cleanup directly.
+
 ## Verify the shared data
 
 From the repository root, with Python 3 and `jsonschema` available:
@@ -54,6 +61,6 @@ python protocol/v1/verify_fixtures.py
 ```
 
 The check validates the schema, frame outcomes, message-shape expectations and
-transcript integrity, including correlation and revision/peer evidence for
-reconciliation. It does not run a helper or a Jellyfin instance. The Python
+transcript integrity, including error precedence, terminal responses and the
+complete applied peer set. It does not run a helper or a Jellyfin instance. The Python
 package is needed only for this fixture check.

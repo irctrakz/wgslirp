@@ -2,7 +2,8 @@
 
 Created: 2026-10-29
 
-Status for 2026-11-12. W1 is ready for review on `codex/jellyfin-integration`.
+Status for 2026-11-12. The W1 fixes are ready for a second review on
+`codex/jellyfin-integration`.
 W2 begins after W1 review. Check off work when its acceptance criteria are
 satisfied and evidence is recorded.
 
@@ -82,8 +83,24 @@ Review the [protocol specification](HELPER_PROTOCOL.md),
 [message schema](../protocol/v1/message.schema.json) and
 [shared compatibility fixtures](../protocol/v1/README.md).
 
-Verification on 2026-11-12 checked the Draft 2020-12 schema, 19 frame cases,
-15 message shapes and 11 session transcripts using the shared fixture checker.
+W1 review follow-up:
+
+- [x] Define cancellation, publication and teardown for EOF and fatal pipe or
+  queue errors. Add held-start, held-revocation and queue-overflow transcripts.
+- [x] Define error precedence separately for the generic envelope and the
+  operation payload. Cover inputs that fail multiple checks.
+- [x] Check the complete applied peer set on every status response and handle
+  repeated handshake requests after negotiation.
+- [x] Require a fixed startup failure reason for an occupied address, denied
+  permission or other failure. Cover accepted and rejected error shapes.
+
+Verification on 2026-11-12 passed the Draft 2020-12 schema, 19 frame cases,
+19 message shapes and 18 session transcripts. In-memory negative checks rejected
+an omitted untouched peer, an incorrect error for an invalid envelope, a
+success response after EOF and a success response after queue overflow. These
+checks exercise the contract and fixture checker. Cancellation and resource
+cleanup in a running Go helper remain for later work.
+
 The protocol baseline delivery checkpoint stays open until W1 is accepted in review.
 
 ### W2 — Extract a reusable application lifecycle
