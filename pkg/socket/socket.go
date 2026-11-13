@@ -103,12 +103,7 @@ func (s *SocketInterface) Start() error {
 
 	// Create a raw socket based on the protocol specified in the config
 	var err error
-	protocol := "ip4:icmp" // Default to ICMP
-
-	// If a specific protocol is specified in the config, use it
-	if s.config.Protocol != "" {
-		protocol = s.config.Protocol
-	}
+	protocol := s.config.socketProtocol()
 
 	logging.Debugf("Creating raw socket with protocol: %s", protocol)
 

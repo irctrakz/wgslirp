@@ -142,12 +142,18 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		r.cancel()
+		var socketDone <-chan struct{}
+		if r.socket != nil {
+			// A WireGuard receiver can be inside a synchronous socket write
+			// waiting on a host dial. Cancel socket work before joining it.
+			socketDone = r.socket.RequestStop()
+		}
 		r.workers.Wait()
 		if r.device != nil {
 			r.closeErr = errors.Join(r.closeErr, r.device.Close())
 		}
-		if r.socket != nil {
-			r.closeErr = errors.Join(r.closeErr, r.socket.Stop())
+		if socketDone != nil {
+			<-socketDone
 		}
 		if r.tun != nil {
 			r.closeErr = errors.Join(r.closeErr, r.tun.Close())

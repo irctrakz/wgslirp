@@ -38,7 +38,7 @@ func TestRuntimeLifecycle(t *testing.T) {
 	}
 }
 
-func testRuntimeLifecycle(t *testing.T, mode string) {
+func testConfig() Config {
 	cfg := Config{
 		Device: wg.DeviceConfig{
 			PrivateKey: "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=",
@@ -51,6 +51,11 @@ func testRuntimeLifecycle(t *testing.T, mode string) {
 	}
 	cfg.Socket.Protocol = "ip4:tcp"
 	cfg.Socket.MTU = cfg.Device.MTU
+	return cfg
+}
+
+func testRuntimeLifecycle(t *testing.T, mode string) {
+	cfg := testConfig()
 	cfg.Capture.Path = filepath.Join(t.TempDir(), "capture.pcap")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -66,6 +71,11 @@ func testRuntimeLifecycle(t *testing.T, mode string) {
 		invalid.Tun.QueueCapacity = 0
 		if _, err := Start(ctx, invalid, Observers{}); err == nil {
 			t.Fatal("invalid TUN settings accepted")
+		}
+		invalid = cfg
+		invalid.Socket.Protocol = "unsupported"
+		if _, err := Start(ctx, invalid, Observers{}); err == nil || !strings.Contains(err.Error(), "unsupported protocol") {
+			t.Fatalf("invalid socket protocol: %v", err)
 		}
 		if _, err := os.Stat(cfg.Capture.Path); !os.IsNotExist(err) {
 			t.Fatalf("preflight touched capture file: %v", err)

@@ -4,14 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
 // ErrFlowLimit indicates that an active-flow admission limit was reached.
 var ErrFlowLimit = errors.New("flow limit reached")
 
-// Validate checks resource controls before startup creates network resources.
+// Validate checks the protocol and resource controls before startup acquires resources.
 func (c Config) Validate() error {
+	protocol := c.socketProtocol()
+	if !strings.Contains(protocol, "icmp") && !strings.Contains(protocol, "tcp") && !strings.Contains(protocol, "udp") {
+		return fmt.Errorf("unsupported protocol: %s", protocol)
+	}
 	for _, setting := range []struct {
 		name  string
 		value int
@@ -37,6 +42,13 @@ func (c Config) Validate() error {
 		return fmt.Errorf("IPv4FragmentBufferCapBytes must admit at least one bounded datagram (%d bytes)", ipv4FragmentCharge)
 	}
 	return c.transportConfig().Validate()
+}
+
+func (c Config) socketProtocol() string {
+	if c.Protocol == "" {
+		return "ip4:icmp"
+	}
+	return c.Protocol
 }
 
 // Config contains configuration for the socket interface

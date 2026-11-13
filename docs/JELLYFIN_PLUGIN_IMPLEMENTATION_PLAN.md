@@ -242,8 +242,9 @@ Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).
 the networking lifecycle or changing the standalone CLI's supported behavior.
 
 The runtime validates typed settings before claiming process-wide resources.
-It cancels and joins observers, then closes the WireGuard device, sockets, TUN
-and capture. Startup checks cancellation between acquisition steps. The
+It cancels observers and starts socket shutdown before joining WireGuard.
+It waits for observers and socket cleanup before releasing capture. Startup
+checks cancellation between acquisition steps. The
 standalone command retains its existing health and metrics observers.
 The helper scaffold exits with an error until W6 provides the protocol controller
 and restricted configuration.
@@ -255,7 +256,33 @@ tests checked typed configuration despite conflicting environment settings,
 failed bind cleanup, cancellation during startup and after readiness, and
 concurrent close. The lifecycle suite passed ten consecutive runs. Linux
 amd64 and ARM64 cross-builds and focused Linux amd64 vet passed. Native Linux
-runtime and race validation were unavailable on this Windows host.
+runtime and race validation were unavailable in the initial Windows-only run.
+
+W2 review follow-up
+
+- [x] Close socket admission and cancel pending host dials before waiting
+  for WireGuard receive workers. Join socket cleanup before returning.
+- [x] Reject unsupported typed socket protocols before opening capture or
+  claiming the runtime slot. The regression starts successfully after
+  the invalid attempt in the same process.
+- [x] Exercise actual Linux SIGTERM on the built standalone binary and
+  include the regression in the Linux integration workflow.
+
+The Windows amd64 full unit suite, vet and encrypted standalone binary test
+passed, including forwarding with fragment reassembly enabled and disabled.
+Linux amd64 integration vet and the Linux ARM64 cross-build passed.
+
+The application and standalone CLI test suites passed as an unprivileged
+user in a network-isolated Linux amd64 VM (Alpine kernel 6.12.51). The
+standalone binary exited zero on SIGTERM and released its UDP listener.
+The encrypted shutdown regression observed a pending host dial before
+closing the runtime and verified that shutdown cleared the dial reservation.
+The same regression failed at the expected shutdown deadline with the old
+runtime supplied through a temporary Go compiler overlay.
+
+The Linux run used the standalone binary directly. The Docker release-image
+acceptance job and race-enabled tests were not run for this follow-up.
+W2 awaits review before W3.
 
 ### W3 — Provide portable status and protocol-safe logging
 
