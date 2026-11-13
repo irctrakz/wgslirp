@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -399,6 +400,50 @@ func TestIPv4FragmentConfigurationAndShutdown(t *testing.T) {
 	if s.DetailedMetrics().IPv4Fragments["live"] != 0 {
 		t.Fatal("shutdown retained fragment ownership")
 	}
+}
+
+func TestRestrictedFragmentsReserveOnlyMappedAddresses(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Protocol = "ip4:tcp"
+	cfg.SocketBufferCapBytes = ipv4FragmentCharge
+	policy, err := NewDestinationPolicy([]TCPMapping{{
+		Guest: netip.MustParseAddrPort("10.77.0.1:8096"),
+		Host:  netip.MustParseAddrPort("127.0.0.1:8096"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Destinations = policy
+	s := NewSocketInterface(cfg)
+	s.SetPacketProcessor(&captureProcessor{})
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Stop() })
+
+	for _, offset := range []int{0, 8} {
+		packet := fragmentFixture(6, uint16(offset+1), offset, true, make([]byte, 8))
+		if err := s.WritePacket(core.NewBorrowedPacket(packet)); !errors.Is(err, ErrDestinationDenied) {
+			t.Fatalf("unmapped fragment at offset %d: %v", offset, err)
+		}
+	}
+	used, peak, _, _ := s.buffers().snapshot()
+	if used != 0 || peak != 0 || s.DetailedMetrics().IPv4Fragments["live"] != 0 {
+		t.Fatalf("unmapped fragments touched the budget: used=%d peak=%d", used, peak)
+	}
+
+	mapped := fragmentFixture(6, 20, 8, true, make([]byte, 8))
+	copy(mapped[16:20], netip.MustParseAddr("10.77.0.1").AsSlice())
+	fragmentChecksum(mapped)
+	if err := s.WritePacket(core.NewBorrowedPacket(mapped)); err != nil {
+		t.Fatalf("mapped fragment could not use the budget: %v", err)
+	}
+	assertBudget(t, s.buffers(), ipv4FragmentCharge)
+	if got := s.DetailedMetrics().IPv4Fragments["live"]; got != 1 {
+		t.Fatalf("mapped fragment cache entries: %d", got)
+	}
+	s.Stop()
+	assertBudget(t, s.buffers(), 0)
 }
 
 func TestIPv4FragmentsTimeoutSuppression(t *testing.T) {

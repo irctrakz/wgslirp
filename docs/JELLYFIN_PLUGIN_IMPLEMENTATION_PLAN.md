@@ -477,6 +477,25 @@ vet, Linux integration vet, Linux and macOS ARM64 cross-builds of both
 binaries, and all 100 protocol compatibility cases passed. W4 awaits
 review before W5.
 
+W4 review follow-up
+
+- [x] Reject unmapped destination IPs before reserving IPv4 reassembly
+  storage. Test first and later fragments against a one-datagram budget,
+  verify zero current and peak usage for denied traffic, and verify that
+  a mapped fragment can still reserve and release the budget.
+- [x] Test the restricted application runtime with two encrypted peers.
+  Verify that a direct packet to the second peer and a mapped SYN with
+  that peer's forged source address cannot reach the peer or open a
+  host flow. Verify legitimate mapped payloads from both peers.
+
+The fragment-budget regression passed ten Linux runs and the encrypted
+two-peer regression passed three in the isolated amd64 VM. Linux
+integration vet, mapped and unrestricted pending-dial shutdown,
+standalone SIGTERM and helper pipe checks passed. Windows unit tests
+and vet passed, including ten runs each of restricted and unrestricted
+encrypted forwarding. Both binaries cross-built for Linux and macOS
+ARM64, and all 100 protocol compatibility cases passed. W4 awaits review.
+
 **Complete when:** a WireGuard client can reach a mapped service, and alternate
 destinations or forwarding paths cannot escape the configured policy.
 
