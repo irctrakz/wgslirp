@@ -513,6 +513,23 @@ passed, as did Windows tests and vet and Linux and macOS ARM64 cross-builds.
 Restricted and unrestricted encrypted forwarding passed five runs each on
 Linux and ten each on Windows. W4 awaits review before W5.
 
+Third W4 review follow-up
+
+- [x] Retain denied fragment keys for the 60-second reassembly lifetime so
+  subsequent fragments cannot recreate the reservation. An admitted first
+  fragment can reuse the IP ID and starts with fresh reassembly state.
+- [x] Cap denial tracking at 128 keys. If the table fills, temporarily
+  refuse new assemblies that arrive without their first fragment. Mapped
+  first fragments and existing assemblies can still proceed.
+- [x] Verify both arrival orders, zero reservation after subsequent denied
+  fragments, IP ID reuse, table saturation and expiry.
+
+All restricted fragment regressions passed ten Linux runs and 100 Windows
+repetitions. Linux integration vet, encrypted two-peer isolation, runtime
+lifecycle, standalone SIGTERM and helper pipes passed. Windows unit tests,
+integration vet, ten runs each of restricted and unrestricted encrypted
+forwarding, and both Linux ARM64 cross-builds passed. W4 awaits review.
+
 **Complete when:** a WireGuard client can reach a mapped service, and alternate
 destinations or forwarding paths cannot escape the configured policy.
 

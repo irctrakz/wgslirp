@@ -16,6 +16,7 @@ const (
 	ipv4FragmentDatagrams        = 32
 	ipv4FragmentSources          = 8 // live datagrams per source, including dispatch
 	ipv4FragmentRanges           = 128
+	ipv4FragmentDenials          = 128
 	ipv4FragmentLifetime         = 60 * time.Second
 	ipv4FragmentInline           = 2048
 	// Full wire allocation plus inline storage, compact ranges and map allowance.
@@ -57,6 +58,10 @@ type ipv4Fragments struct {
 	limit, used, live int
 	entries           map[fragmentKey]*fragmentDatagram
 	sources           map[[4]byte]int
+	deniedUntil       map[fragmentKey]time.Time
+	// If denial tracking fills up, refuse new out-of-order assemblies
+	// until untracked denials expire. Existing assemblies can still finish.
+	denyOrphansUntil time.Time
 	// Reuse only released inline assemblies, never promoted payload storage.
 	// Cached plus live objects cannot exceed the 32-datagram admission cap.
 	free                                                   [ipv4FragmentDatagrams]*fragmentDatagram
@@ -112,14 +117,20 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 	d := r.entries[k]
 	// Even the shortest valid initial fragment carries both TCP ports.
 	// Discard any provisional assembly for this tuple under the cache lock.
-	if r.destinations != nil && start == 0 {
-		guest := netip.AddrPortFrom(netip.AddrFrom4(k.dst), binary.BigEndian.Uint16(p[22:24]))
-		if _, allowed := r.destinations.tcp[guest]; !allowed {
-			r.rejected++
-			if d != nil {
-				delete(r.entries, k)
-				r.releaseLocked(d)
+	if r.destinations != nil {
+		if start == 0 {
+			guest := netip.AddrPortFrom(netip.AddrFrom4(k.dst), binary.BigEndian.Uint16(p[22:24]))
+			if _, allowed := r.destinations.tcp[guest]; !allowed {
+				r.rejected++
+				if d != nil {
+					delete(r.entries, k)
+					r.releaseLocked(d)
+				}
+				r.rememberDenialLocked(k, now)
+				return nil, nil, ErrDestinationDenied
 			}
+		} else if d == nil && (now.Before(r.deniedUntil[k]) || now.Before(r.denyOrphansUntil)) {
+			r.rejected++
 			return nil, nil, ErrDestinationDenied
 		}
 	}
@@ -217,6 +228,8 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 	d.covered += size
 	d.ecn = ecn
 	if start == 0 {
+		// A mapped first fragment can start a new datagram with the same ID.
+		delete(r.deniedUntil, k)
 		copy(d.data[:20], p[:20])
 		d.first = true
 	}
@@ -240,6 +253,31 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 	return out, func() { once.Do(func() { r.mu.Lock(); defer r.mu.Unlock(); r.releaseLocked(d) }) }, nil
 }
 
+func (r *ipv4Fragments) rememberDenialLocked(key fragmentKey, now time.Time) {
+	if r.deniedUntil == nil {
+		r.deniedUntil = make(map[fragmentKey]time.Time)
+	}
+	deadline := now.Add(ipv4FragmentLifetime)
+	if _, tracked := r.deniedUntil[key]; !tracked && len(r.deniedUntil) == ipv4FragmentDenials {
+		r.expireDenialsLocked(now)
+		if len(r.deniedUntil) == ipv4FragmentDenials {
+			if deadline.After(r.denyOrphansUntil) {
+				r.denyOrphansUntil = deadline
+			}
+			return
+		}
+	}
+	r.deniedUntil[key] = deadline
+}
+
+func (r *ipv4Fragments) expireDenialsLocked(now time.Time) {
+	for key, deadline := range r.deniedUntil {
+		if !now.Before(deadline) {
+			delete(r.deniedUntil, key)
+		}
+	}
+}
+
 func (r *ipv4Fragments) releaseLocked(d *fragmentDatagram) {
 	r.used -= ipv4FragmentCharge
 	r.live--
@@ -261,6 +299,7 @@ func (r *ipv4Fragments) releaseLocked(d *fragmentDatagram) {
 func (r *ipv4Fragments) expire(now time.Time) []*fragmentDatagram {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.expireDenialsLocked(now)
 	var expired []*fragmentDatagram
 	for k, d := range r.entries {
 		if !now.Before(d.deadline) {
@@ -286,6 +325,7 @@ func (r *ipv4Fragments) close() {
 		r.releaseLocked(d)
 	}
 	clear(r.free[:])
+	clear(r.deniedUntil)
 	r.freeCount = 0
 }
 
