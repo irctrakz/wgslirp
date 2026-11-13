@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/socket"
@@ -20,6 +22,9 @@ type Config struct {
 	Tun     wg.TunConfig
 	Capture wg.CaptureConfig
 	Pool    socket.PoolConfig
+	// WireGuardLogOutput selects the dependency logger's destination.
+	// Nil preserves the standalone stdout destination.
+	WireGuardLogOutput io.Writer
 }
 
 // Validate checks settings without acquiring process-wide policies or opening resources.
@@ -53,7 +58,9 @@ var runtimeClaimed atomic.Bool
 
 // Runtime owns the networking resources acquired by Start.
 type Runtime struct {
+	ctx           context.Context
 	cancel        context.CancelFunc
+	readyAt       time.Time
 	workers       sync.WaitGroup
 	closeOnce     sync.Once
 	closeErr      error
@@ -80,7 +87,7 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	r := &Runtime{cancel: cancel}
+	r := &Runtime{ctx: ctx, cancel: cancel}
 	defer func() {
 		if err != nil {
 			if cleanupErr := r.Close(); cleanupErr != nil {
@@ -125,13 +132,18 @@ func Start(ctx context.Context, cfg Config, observers Observers) (_ *Runtime, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	r.device, err = wg.StartDevice(cfg.Device, r.tun)
+	if cfg.WireGuardLogOutput == nil {
+		r.device, err = wg.StartDevice(cfg.Device, r.tun)
+	} else {
+		r.device, err = wg.StartDeviceWithLogOutput(cfg.Device, r.tun, cfg.WireGuardLogOutput)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("wireguard start: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	r.readyAt = time.Now()
 	if observers.DeviceReady != nil {
 		r.workers.Add(1)
 		go func() {

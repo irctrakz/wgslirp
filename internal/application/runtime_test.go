@@ -97,6 +97,11 @@ func testRuntimeLifecycle(t *testing.T, mode string) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		status, err := r.Status()
+		if err != nil || status.ListenPort == nil || *status.ListenPort == 0 ||
+			status.ServerPublicKey == nil || *status.ServerPublicKey != publicBase64 || status.Metrics == nil {
+			t.Fatalf("actual runtime status: %+v (%v)", status, err)
+		}
 		var callers sync.WaitGroup
 		for i := 0; i < 2; i++ {
 			callers.Add(1)
@@ -108,6 +113,9 @@ func testRuntimeLifecycle(t *testing.T, mode string) {
 			}()
 		}
 		callers.Wait()
+		if _, err := r.Status(); !errors.Is(err, ErrRuntimeStateUncertain) {
+			t.Fatalf("status after shutdown: %v", err)
+		}
 		select {
 		case <-joined:
 		default:

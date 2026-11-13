@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -146,6 +147,12 @@ func logPeerStatus(publicKey string, handshakeTime int64, endpoint string, rx, t
 // StartDevice starts wireguard-go device bound to cfg.ListenPort using the
 // provided WGTun for plaintext exchange. It applies configuration via IpcSet.
 func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
+	return StartDeviceWithLogOutput(cfg, tun, os.Stdout)
+}
+
+// StartDeviceWithLogOutput routes WireGuard dependency diagnostics to output.
+// The caller supplies a writer safe for concurrent use.
+func StartDeviceWithLogOutput(cfg DeviceConfig, tun *WGTun, output io.Writer) (DeviceHandle, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -173,7 +180,13 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 		wgLevel = wgdev.LogLevelVerbose
 	}
 
-	logger := wgdev.NewLogger(wgLevel, "[wg]")
+	logger := &wgdev.Logger{
+		Verbosef: wgdev.DiscardLogf,
+		Errorf:   log.New(output, "ERROR: [wg]", log.Ldate|log.Ltime).Printf,
+	}
+	if wgLevel == wgdev.LogLevelVerbose {
+		logger.Verbosef = log.New(output, "DEBUG: [wg]", log.Ldate|log.Ltime).Printf
+	}
 	packetErrors := &packetErrorLog{emit: logger.Errorf}
 	logger.Errorf = packetErrors.Errorf
 	dev := wgdev.NewDevice(managedTun{tun}, bind, logger)

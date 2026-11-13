@@ -3,7 +3,7 @@
 Created: 2026-10-29
 
 W1 was approved at `459f6f1`. W2 was approved at `8b10bbd`.
-Work continues on `codex/jellyfin-integration`.
+W3 is ready for review on `codex/jellyfin-integration`.
 
 ## Architecture and scope
 
@@ -302,6 +302,7 @@ suite, encrypted pending-dial regression and protocol validation. The
 standalone SIGTERM test passed five consecutive runs. Linux integration vet,
 Linux ARM64 cross-build, Windows unit tests, vet and encrypted forwarding
 checks passed. W2 was approved at `8b10bbd`.
+The approval checkpoint `a6a57d0` was pushed to GitHub before W3 began.
 
 ### W3 — Provide portable status and protocol-safe logging
 
@@ -309,20 +310,36 @@ Starting points: [pkg/logging/logging.go](../pkg/logging/logging.go),
 [cmd/wgslirp/metrics_reporter.go](../cmd/wgslirp/metrics_reporter.go) and
 [pkg/wireguard/state.go](../pkg/wireguard/state.go).
 
-- [ ] Redirect every helper logging source to stderr before initialization.
-  The current logging package defaults to stdout.
-- [ ] Reserve stdout exclusively for protocol messages, including error and debug paths.
-- [ ] Separate portable status from Linux-specific resource collectors.
-- [ ] Define structured status for runtime state, uptime, effective listener port,
+- [x] Redirect standard Go, wgslirp and WireGuard dependency logging to stderr
+  before starting the helper runtime. Preserve standalone logging destinations.
+- [x] Reserve stdout exclusively for protocol messages, including error and debug paths.
+- [x] Separate portable status from Linux-specific resource collectors.
+- [x] Define structured status for runtime state, uptime, effective listener port,
   peer public keys/endpoints/handshakes/transfers, active flows, refusals, buffer
-  pressure, configuration revision and actionable failures.
-- [ ] Return sanitized peer state, never raw WireGuard UAPI output or private keys.
-- [ ] Define counter direction and reset behavior. Represent unavailable platform
-  metrics as unavailable rather than zero.
-- [ ] Start with bounded status polling rather than continuous unsolicited metrics events.
-- [ ] Keep protocol writes off packet-processing callbacks and bound output buffering.
-- [ ] Verify protocol-only stdout, secret omission, slow readers, disconnected
-  readers and cleanup under output pressure.
+  pressure and a sanitized error for uncertain applied state. The version 1
+  response envelope carries the configuration revision.
+- [x] Return sanitized peer state without raw WireGuard UAPI output or private keys.
+- [x] Use the version 1 counter direction and reset rules. Preserve known zero
+  values and return null for unavailable telemetry.
+- [x] Collect a fresh snapshot on demand without a background metrics publisher.
+- [x] Bound each protocol write to one frame and five seconds. The serial
+  controller owns output and a failed write retires the stream.
+- [x] Verify protocol-only stdout, secret omission, slow and disconnected
+  readers, and pipe closure after interrupted output.
+
+The stdout subprocess tests start the shared runtime in debug mode and exercise
+a UDP bind failure. W6 will wire the status snapshot and bounded writer into the
+command loop, attach the revision, and verify runtime shutdown and process exit
+when the real controller's stdout stalls or disconnects.
+
+The final isolated Linux amd64 run passed three repetitions each of the
+runtime lifecycle suite, encrypted pending-dial shutdown, direct standalone
+SIGTERM, helper logging, status and output checks. Windows unit tests and vet,
+the encrypted TCP/UDP forwarding regression, 100 repetitions of the output
+suite, Linux integration vet and Linux ARM64 cross-builds of both binaries
+passed. The compatibility verifier passed 24 frame cases, 22 message shapes
+and 54 session transcripts. The Docker acceptance and race-enabled suites
+were outside this verification run.
 
 **Complete when:** portable status is usable by the C# wrapper and control-channel
 backpressure cannot cause unbounded buffering or block packet callbacks.
