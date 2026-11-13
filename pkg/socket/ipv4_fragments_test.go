@@ -597,6 +597,64 @@ func TestRestrictedFragmentsDenialCapacityAndExpiry(t *testing.T) {
 	assertBudget(t, budget, ipv4FragmentCharge)
 }
 
+func TestRestrictedFragmentsReclaimExpiredDenialsBeforeSweep(t *testing.T) {
+	guest := netip.MustParseAddrPort("10.77.0.1:8096")
+	policy, err := NewDestinationPolicy([]TCPMapping{{
+		Guest: guest, Host: netip.MustParseAddrPort("127.0.0.1:8096"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := &resourceBudget{limit: ipv4FragmentCharge}
+	now := time.Now()
+	expiry := now.Add(ipv4FragmentLifetime)
+	for _, scope := range []string{"keys", "sources"} {
+		t.Run(scope, func(t *testing.T) {
+			r := newIPv4Fragments(budget, budget.limit)
+			r.destinations = policy
+			defer r.close()
+			add := func(src byte, id uint16, offset int, at time.Time) error {
+				body := make([]byte, 8)
+				binary.BigEndian.PutUint16(body[2:4], guest.Port()+1)
+				packet := fragmentFixture(6, id, offset, true, body)
+				packet[15] = src
+				copy(packet[16:20], guest.Addr().AsSlice())
+				fragmentChecksum(packet)
+				_, _, err := r.add(packet, at)
+				return err
+			}
+			limit := ipv4FragmentDenialsPerSource
+			newSource := byte(2)
+			if scope == "sources" {
+				limit = ipv4FragmentDenialSources
+				newSource = byte(limit + 2)
+			}
+			for i := 0; i < limit; i++ {
+				src := byte(2)
+				if scope == "sources" {
+					src += byte(i)
+				}
+				if err := add(src, uint16(i+1), 0, now); !errors.Is(err, ErrDestinationDenied) {
+					t.Fatalf("fill denial table: %v", err)
+				}
+			}
+			const newID = 1000
+			// Advance the clock without running the maintenance sweep.
+			if err := add(newSource, newID, 0, expiry); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("new denial: %v", err)
+			}
+			if err := add(newSource, newID, 8, expiry); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("later fragment for the new denial: %v", err)
+			}
+			assertBudget(t, budget, 0)
+			if err := add(newSource, 1, 8, expiry); err != nil {
+				t.Fatalf("expired denials blocked an unrelated out-of-order fragment: %v", err)
+			}
+			assertBudget(t, budget, ipv4FragmentCharge)
+		})
+	}
+}
+
 func TestIPv4FragmentsTimeoutSuppression(t *testing.T) {
 	for _, kind := range []string{"no first", "multicast", "invalid source", "ICMP error"} {
 		t.Run(kind, func(t *testing.T) {

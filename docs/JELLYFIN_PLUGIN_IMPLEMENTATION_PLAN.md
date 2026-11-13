@@ -546,6 +546,19 @@ pipes and integration vet passed. Windows unit tests, integration vet and
 ten runs each of encrypted restricted and unrestricted forwarding passed.
 Both binaries cross-built for Linux ARM64. W4 awaits review before W5.
 
+Fifth W4 review follow-up
+
+- [x] Reclaim expired denial keys and source entries before triggering
+  overflow. Test a new denial at expiry before the maintenance sweep,
+  verifying that its later fragments stay denied and an unrelated
+  out-of-order fragment can still reserve space.
+
+Both pre-sweep capacity cases passed ten Linux runs and 100 Windows
+repetitions. Linux integration vet, encrypted peer isolation, runtime
+lifecycle, standalone SIGTERM and helper pipes passed. Windows unit tests,
+integration vet and ten runs each of restricted and unrestricted encrypted
+forwarding passed. W4 awaits review before W5.
+
 **Complete when:** a WireGuard client can reach a mapped service, and alternate
 destinations or forwarding paths cannot escape the configured policy.
 

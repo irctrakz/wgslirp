@@ -272,6 +272,9 @@ func (r *ipv4Fragments) rememberDenialLocked(key fragmentKey, now time.Time) {
 	source := r.denials[key.src]
 	if source == nil {
 		if len(r.denials) == ipv4FragmentDenialSources {
+			r.expireDenialsLocked(now)
+		}
+		if len(r.denials) == ipv4FragmentDenialSources {
 			if deadline.After(r.untrackedSourcesUntil) {
 				r.untrackedSourcesUntil = deadline
 			}
@@ -292,6 +295,9 @@ func (r *ipv4Fragments) rememberDenialLocked(key fragmentKey, now time.Time) {
 		return
 	}
 	if len(source.keys) == ipv4FragmentDenialsPerSource {
+		source.expireKeys(now)
+	}
+	if len(source.keys) == ipv4FragmentDenialsPerSource {
 		if deadline.After(source.overflowUntil) {
 			source.overflowUntil = deadline
 		}
@@ -300,13 +306,17 @@ func (r *ipv4Fragments) rememberDenialLocked(key fragmentKey, now time.Time) {
 	source.keys[key] = deadline
 }
 
+func (source *fragmentDenials) expireKeys(now time.Time) {
+	for key, deadline := range source.keys {
+		if !now.Before(deadline) {
+			delete(source.keys, key)
+		}
+	}
+}
+
 func (r *ipv4Fragments) expireDenialsLocked(now time.Time) {
 	for address, source := range r.denials {
-		for key, deadline := range source.keys {
-			if !now.Before(deadline) {
-				delete(source.keys, key)
-			}
-		}
+		source.expireKeys(now)
 		if len(source.keys) == 0 && !now.Before(source.overflowUntil) {
 			delete(r.denials, address)
 		}
