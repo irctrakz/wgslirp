@@ -1,0 +1,21 @@
+[
+  {"id":"lf","parts":[{"text":"{\"id\":1,\"op\":\"hello\",\"params\":{\"versions\":[1]}}\n"}],"expect":"accepted"},
+  {"id":"crlf","parts":[{"text":"{\"id\":1,\"op\":\"hello\",\"params\":{\"versions\":[1]}}\r\n"}],"expect":"accepted"},
+  {"id":"exact_byte_limit","parts":[{"text":"{\"x\":\""},{"text":"é","repeat":32764},{"text":"\"}\n"}],"expect":"accepted"},
+  {"id":"one_byte_over_limit","parts":[{"text":"{\"x\":\""},{"text":"é","repeat":32764},{"text":"a\"}\n"}],"expect":"frame_too_large"},
+  {"id":"truncated","parts":[{"text":"{\"id\":1"}],"expect":"invalid_frame"},
+  {"id":"eof_without_line_ending","parts":[{"text":"{\"id\":1}"}],"expect":"invalid_frame"},
+  {"id":"blank","parts":[{"text":"\n"}],"expect":"invalid_frame"},
+  {"id":"array","parts":[{"text":"[]\n"}],"expect":"invalid_frame"},
+  {"id":"bad_json","parts":[{"text":"{\"id\":,}\n"}],"expect":"invalid_frame"},
+  {"id":"bom","parts":[{"hex":"efbbbf"},{"text":"{}\n"}],"expect":"invalid_frame"},
+  {"id":"bad_utf8","parts":[{"text":"{\"x\":\""},{"hex":"ff"},{"text":"\"}\n"}],"expect":"invalid_frame"},
+  {"id":"duplicate_nested_name","parts":[{"text":"{\"params\":{\"port\":1,\"p\\u006frt\":2}}\n"}],"expect":"invalid_frame"},
+  {"id":"unpaired_surrogate","parts":[{"text":"{\"x\":\"\\ud800\"}\n"}],"expect":"invalid_frame"},
+  {"id":"paired_surrogates","parts":[{"text":"{\"x\":\"\\ud83d\\ude00\"}\n"}],"expect":"accepted"},
+  {"id":"nesting_at_limit","parts":[{"text":"{\"x\":"},{"text":"[","repeat":15},{"text":"0"},{"text":"]","repeat":15},{"text":"}\n"}],"expect":"accepted"},
+  {"id":"nesting_over_limit","parts":[{"text":"{\"x\":"},{"text":"[","repeat":16},{"text":"0"},{"text":"]","repeat":16},{"text":"}\n"}],"expect":"invalid_frame"},
+  {"id":"number_exponent","parts":[{"text":"{\"id\":1e0}\n"}],"expect":"invalid_frame"},
+  {"id":"negative_zero","parts":[{"text":"{\"id\":-0}\n"}],"expect":"invalid_frame"},
+  {"id":"nonfinite","parts":[{"text":"{\"id\":NaN}\n"}],"expect":"invalid_frame"}
+]

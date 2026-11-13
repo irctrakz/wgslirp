@@ -1,0 +1,177 @@
+[
+  {
+    "id": "start_status_stop",
+    "description": "Negotiation, local validation, ephemeral bind, portable telemetry and graceful shutdown.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers","future_feature"]}}},
+      {"send":{"id":2,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":2,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"state":"idle","listen_port":null,"server_public_key":null,"uptime_ms":0,"peers":[],"metrics":null}}},
+      {"send":{"id":3,"op":"validate","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":3,"op":"validate","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{}}},
+      {"send":{"id":4,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":4,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":5,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":5,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"state":"running","listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=","uptime_ms":1234,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2","endpoint":"[2001:db8::2]:41000","last_handshake_unix_sec":1794528000,"rx_bytes":"9007199254740993","tx_bytes":"18446744073709551615"}],"metrics":{"active_tcp_flows":2,"buffer_bytes_in_use":4096,"tcp_flow_refusals":"0","pending_dial_refusals":"1","buffer_refusals":"0"}}}},
+      {"send":{"id":6,"op":"stop","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":6,"op":"stop","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{}}},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "incompatible_version",
+    "description": "The bootstrap error is readable without agreement on a version. No configuration is sent.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[3,2]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"unsupported_version"}}},
+      {"exit":1}
+    ]
+  },
+  {
+    "id": "unknown_invalid_and_duplicate",
+    "description": "A rejected request consumes its ID. An unknown operation, malformed known payload and mismatched instance are independently detectable.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"future_operation","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":2,"op":"future_operation","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"unknown_operation"}}},
+      {"send":{"id":2,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":2,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"duplicate_id"}}},
+      {"send":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{"extra":true}}},
+      {"receive":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_request"}}},
+      {"send":{"id":4,"op":"status","instance_id":"ffffffffffffffffffffffffffffffff","params":{}}},
+      {"receive":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"wrong_instance"}}},
+      {"send":{"id":5,"op":"stop","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":5,"op":"stop","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{}}},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "semantic_config_conflict",
+    "description": "A schema-valid configuration that assigns a peer the virtual service address is rejected without starting.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"validate","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.1"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"validate","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"invalid_config"}}},
+      {"send":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":3,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"state":"idle","listen_port":null,"server_public_key":null,"uptime_ms":0,"peers":[],"metrics":null}}},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "peer_capability_missing",
+    "description": "The vertical-slice helper can start without offering live peer operations.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"peer":{"public_key":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=","address":"10.77.0.3"}}}},
+      {"receive":{"id":3,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":false,"error":{"code":"unsupported_capability"}}},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "peer_revision_and_address_conflicts",
+    "description": "Stale revisions and duplicate addresses have no side effects. An address revoked in this instance remains reserved.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":0,"peer":{"public_key":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=","address":"10.77.0.3"}}}},
+      {"receive":{"id":3,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":false,"error":{"code":"revision_conflict"}}},
+      {"send":{"id":4,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"peer":{"public_key":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=","address":"10.77.0.2"}}}},
+      {"receive":{"id":4,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":false,"error":{"code":"peer_conflict"}}},
+      {"send":{"id":5,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"peer":{"public_key":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=","address":"10.77.0.3"}}}},
+      {"receive":{"id":5,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","revision":2,"ok":true,"result":{}}},
+      {"send":{"id":6,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":2,"public_key":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI="}}},
+      {"receive":{"id":6,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","revision":3,"ok":true,"result":{}}},
+      {"send":{"id":7,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":3,"peer":{"public_key":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=","address":"10.77.0.3"}}}},
+      {"receive":{"id":7,"op":"peer_add","instance_id":"0123456789abcdef0123456789abcdef","revision":3,"ok":false,"error":{"code":"peer_conflict"}}},
+      {"send":{"id":8,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":8,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":3,"ok":true,"result":{"state":"running","listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=","uptime_ms":1234,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2","endpoint":"[2001:db8::2]:41000","last_handshake_unix_sec":1794528000,"rx_bytes":"9007199254740993","tx_bytes":"18446744073709551615"}],"metrics":null}}},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "timeout_reconcile_applied",
+    "description": "A timed-out removal completed. One queued status confirms removal; do not send another remove.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="}}},
+      {"deadline":3},
+      {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","revision":2,"ok":true,"result":{}}},
+      {"receive":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":2,"ok":true,"result":{"state":"running","listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=","uptime_ms":1234,"peers":[],"metrics":null}}},
+      {"decision":{"mutation_id":3,"status_id":4,"outcome":"applied"}},
+      {"send":{"id":5,"op":"stop","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":5,"op":"stop","instance_id":"0123456789abcdef0123456789abcdef","revision":2,"ok":true,"result":{}}},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "timeout_reconcile_not_applied",
+    "description": "A timed-out removal failed with prior state intact. Status still lists the peer, permitting a new request with a fresh ID.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="}}},
+      {"deadline":3},
+      {"send":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":false,"error":{"code":"peer_update_failed"}}},
+      {"receive":{"id":4,"op":"status","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"state":"running","listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=","uptime_ms":1234,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2","endpoint":"[2001:db8::2]:41000","last_handshake_unix_sec":1794528000,"rx_bytes":"9007199254740993","tx_bytes":"18446744073709551615"}],"metrics":null}}},
+      {"decision":{"mutation_id":3,"status_id":4,"outcome":"not_applied"}},
+      {"send":{"id":5,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="}}},
+      {"receive":{"id":5,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","revision":2,"ok":true,"result":{}}},
+      {"eof":true},
+      {"exit":0}
+    ]
+  },
+  {
+    "id": "uncertain_peer_update",
+    "description": "If the applied policy cannot be confirmed, the helper terminates without a successful mutation response.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"peer_remove","instance_id":"0123456789abcdef0123456789abcdef","params":{"expected_revision":1,"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="}}},
+      {"receive":{"type":"session_error","instance_id":"0123456789abcdef0123456789abcdef","code":"runtime_state_uncertain"}},
+      {"exit":1}
+    ]
+  },
+  {
+    "id": "start_failed",
+    "description": "A validated startup can fail to bind. The process reports a correlated failure and exits.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":false,"error":{"code":"start_failed"}}},
+      {"exit":1}
+    ]
+  },
+  {
+    "id": "shutdown_timeout",
+    "description": "A stop operation that cannot complete cleanup produces a terminal error rather than acknowledging success.",
+    "steps": [
+      {"send":{"id":1,"op":"hello","params":{"versions":[2,1]}}},
+      {"receive":{"id":1,"op":"hello","instance_id":"0123456789abcdef0123456789abcdef","revision":0,"ok":true,"result":{"version":1,"binary_version":"0.1.0-fixture","os":"linux","arch":"amd64","capabilities":["restricted_tcp","live_peers"]}}},
+      {"send":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","params":{"private_key":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=","listen_port":0,"peers":[{"public_key":"3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=","address":"10.77.0.2"}],"mappings":[{"guest_ip":"10.77.0.1","guest_port":8096,"host_ip":"127.0.0.1","host_port":8096}]}}},
+      {"receive":{"id":2,"op":"start","instance_id":"0123456789abcdef0123456789abcdef","revision":1,"ok":true,"result":{"listen_port":51821,"server_public_key":"hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="}}},
+      {"send":{"id":3,"op":"stop","instance_id":"0123456789abcdef0123456789abcdef","params":{}}},
+      {"receive":{"type":"session_error","instance_id":"0123456789abcdef0123456789abcdef","code":"shutdown_timeout"}},
+      {"exit":1}
+    ]
+  }
+]

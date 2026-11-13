@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "wgslirp helper protocol version 1 message",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" },
+    { "$ref": "#/$defs/sessionError" }
+  ],
+  "$defs": {
+    "nonnegative": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "requestId": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "instanceId": { "type": "string", "pattern": "^[0-9a-f]{32}(?![\\s\\S])" },
+    "token": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}(?![\\s\\S])" },
+    "counter": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,19})(?![\\s\\S])" },
+    "key": { "type": "string", "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=(?![\\s\\S])" },
+    "version": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "empty": { "type": "object", "additionalProperties": false },
+    "ipv4": {
+      "type": "string",
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?![\\s\\S])"
+    },
+    "peer": {
+      "type": "object",
+      "required": ["public_key", "address"],
+      "additionalProperties": false,
+      "properties": {
+        "public_key": { "$ref": "#/$defs/key" },
+        "address": { "$ref": "#/$defs/ipv4" }
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "required": ["guest_ip", "guest_port", "host_ip", "host_port"],
+      "additionalProperties": false,
+      "properties": {
+        "guest_ip": { "$ref": "#/$defs/ipv4" },
+        "guest_port": { "$ref": "#/$defs/port" },
+        "host_ip": { "$ref": "#/$defs/ipv4" },
+        "host_port": { "$ref": "#/$defs/port" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_tcp_flows": { "type": "integer", "minimum": 1, "maximum": 65536, "default": 256 },
+        "max_pending_dials": { "type": "integer", "minimum": 1, "maximum": 65536, "default": 64 },
+        "socket_buffer_bytes": { "type": "integer", "minimum": 1048576, "maximum": 1073741824, "default": 67108864 },
+        "tun_queue_packets": { "type": "integer", "minimum": 1, "maximum": 65536, "default": 1024 }
+      }
+    },
+    "config": {
+      "type": "object",
+      "required": ["private_key", "peers", "mappings"],
+      "additionalProperties": false,
+      "properties": {
+        "private_key": { "$ref": "#/$defs/key" },
+        "listen_port": { "type": "integer", "minimum": 0, "maximum": 65535, "default": 51820 },
+        "mtu": { "type": "integer", "minimum": 576, "maximum": 9000, "default": 1380 },
+        "peers": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/peer" } },
+        "mappings": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/mapping" } },
+        "limits": { "$ref": "#/$defs/limits", "default": {} }
+      }
+    },
+    "helloParams": {
+      "type": "object",
+      "required": ["versions"],
+      "additionalProperties": false,
+      "properties": {
+        "versions": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/version" } }
+      }
+    },
+    "addParams": {
+      "type": "object",
+      "required": ["expected_revision", "peer"],
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": { "$ref": "#/$defs/nonnegative" },
+        "peer": { "$ref": "#/$defs/peer" }
+      }
+    },
+    "removeParams": {
+      "type": "object",
+      "required": ["expected_revision", "public_key"],
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": { "$ref": "#/$defs/nonnegative" },
+        "public_key": { "$ref": "#/$defs/key" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["id", "op", "params"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/requestId" },
+        "op": { "$ref": "#/$defs/token" },
+        "params": { "type": "object" },
+        "instance_id": { "$ref": "#/$defs/instanceId" }
+      },
+      "if": { "properties": { "op": { "const": "hello" } } },
+      "then": {
+        "properties": { "id": { "const": 1 }, "params": { "$ref": "#/$defs/helloParams" }, "instance_id": false }
+      },
+      "else": {
+        "required": ["instance_id"],
+        "oneOf": [
+          { "properties": { "op": { "enum": ["validate", "start"] }, "params": { "$ref": "#/$defs/config" } } },
+          { "properties": { "op": { "enum": ["status", "stop"] }, "params": { "$ref": "#/$defs/empty" } } },
+          { "properties": { "op": { "const": "peer_add" }, "params": { "$ref": "#/$defs/addParams" } } },
+          { "properties": { "op": { "const": "peer_remove" }, "params": { "$ref": "#/$defs/removeParams" } } }
+        ]
+      }
+    },
+    "helloResult": {
+      "type": "object",
+      "required": ["version", "binary_version", "os", "arch", "capabilities"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": 1 },
+        "binary_version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}(?![\\s\\S])" },
+        "os": { "$ref": "#/$defs/token" },
+        "arch": { "$ref": "#/$defs/token" },
+        "capabilities": { "type": "array", "maxItems": 32, "uniqueItems": true, "contains": { "const": "restricted_tcp" }, "items": { "$ref": "#/$defs/token" } }
+      }
+    },
+    "startResult": {
+      "type": "object",
+      "required": ["listen_port", "server_public_key"],
+      "additionalProperties": false,
+      "properties": {
+        "listen_port": { "$ref": "#/$defs/port" },
+        "server_public_key": { "$ref": "#/$defs/key" }
+      }
+    },
+    "peerStatus": {
+      "type": "object",
+      "required": ["public_key", "address", "endpoint", "last_handshake_unix_sec", "rx_bytes", "tx_bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "public_key": { "$ref": "#/$defs/key" },
+        "address": { "$ref": "#/$defs/ipv4" },
+        "endpoint": { "type": ["string", "null"], "minLength": 3, "maxLength": 96, "pattern": "^[^\\s\\x00-\\x1f\\x7f]+(?![\\s\\S])" },
+        "last_handshake_unix_sec": { "oneOf": [{ "$ref": "#/$defs/requestId" }, { "type": "null" }] },
+        "rx_bytes": { "oneOf": [{ "$ref": "#/$defs/counter" }, { "type": "null" }] },
+        "tx_bytes": { "oneOf": [{ "$ref": "#/$defs/counter" }, { "type": "null" }] }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["active_tcp_flows", "buffer_bytes_in_use", "tcp_flow_refusals", "pending_dial_refusals", "buffer_refusals"],
+      "additionalProperties": false,
+      "properties": {
+        "active_tcp_flows": { "$ref": "#/$defs/nonnegative" },
+        "buffer_bytes_in_use": { "$ref": "#/$defs/nonnegative" },
+        "tcp_flow_refusals": { "$ref": "#/$defs/counter" },
+        "pending_dial_refusals": { "$ref": "#/$defs/counter" },
+        "buffer_refusals": { "$ref": "#/$defs/counter" }
+      }
+    },
+    "statusResult": {
+      "type": "object",
+      "required": ["state", "listen_port", "server_public_key", "uptime_ms", "peers", "metrics"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "enum": ["idle", "running"] },
+        "listen_port": {},
+        "server_public_key": {},
+        "uptime_ms": { "$ref": "#/$defs/nonnegative" },
+        "peers": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/peerStatus" } },
+        "metrics": { "oneOf": [{ "$ref": "#/$defs/metrics" }, { "type": "null" }] }
+      },
+      "if": { "properties": { "state": { "const": "idle" } } },
+      "then": { "properties": { "listen_port": { "type": "null" }, "server_public_key": { "type": "null" }, "uptime_ms": { "const": 0 }, "peers": { "maxItems": 0 }, "metrics": { "type": "null" } } },
+      "else": { "properties": { "listen_port": { "$ref": "#/$defs/port" }, "server_public_key": { "$ref": "#/$defs/key" } } }
+    },
+    "responseError": {
+      "type": "object",
+      "required": ["code"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "enum": ["unsupported_version", "duplicate_id", "invalid_request", "wrong_instance", "unknown_operation", "unsupported_capability", "invalid_state", "invalid_config", "start_failed", "revision_conflict", "peer_conflict", "peer_limit", "peer_not_found", "peer_update_failed"] }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["id", "op", "instance_id", "revision", "ok"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/requestId" },
+        "op": { "$ref": "#/$defs/token" },
+        "instance_id": { "$ref": "#/$defs/instanceId" },
+        "revision": { "$ref": "#/$defs/nonnegative" },
+        "ok": { "type": "boolean" },
+        "result": {},
+        "error": { "$ref": "#/$defs/responseError" }
+      },
+      "if": { "properties": { "ok": { "const": true } } },
+      "then": {
+        "required": ["result"],
+        "properties": { "error": false },
+        "oneOf": [
+          { "properties": { "id": { "const": 1 }, "op": { "const": "hello" }, "revision": { "const": 0 }, "result": { "$ref": "#/$defs/helloResult" } } },
+          { "properties": { "op": { "const": "start" }, "revision": { "const": 1 }, "result": { "$ref": "#/$defs/startResult" } } },
+          { "properties": { "op": { "const": "status" }, "result": { "$ref": "#/$defs/statusResult" } } },
+          { "properties": { "op": { "enum": ["validate", "stop", "peer_add", "peer_remove"] }, "result": { "$ref": "#/$defs/empty" } } }
+        ]
+      },
+      "else": { "required": ["error"], "properties": { "result": false } }
+    },
+    "sessionError": {
+      "type": "object",
+      "required": ["type", "instance_id", "code"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "session_error" },
+        "instance_id": { "$ref": "#/$defs/instanceId" },
+        "code": { "enum": ["invalid_frame", "frame_too_large", "queue_full", "runtime_state_uncertain", "shutdown_timeout"] }
+      }
+    }
+  }
+}
