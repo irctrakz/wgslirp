@@ -38,7 +38,7 @@ For a session case, interpret each step in order:
 | `receive` | Expected helper response object, independent of key order |
 | `deadline` | The controller's response deadline expired for this request ID |
 | `decision` | With both replies available, the controller records the request's `outcome` and whether `desired_state_holds` |
-| `eof` | Controller closes stdin |
+| `eof` | Controller closes its stdin pipe once. This is separate from the helper ceasing to accept requests. |
 | `stdout_failed` | Stdout becomes unusable. The string is the unterminated response prefix observed by the controller, or empty if no bytes reached it. |
 | `cleanup_timeout` | The harness advances cleanup past the shutdown deadline before any terminal diagnostic is written |
 | `exit` | Helper process exits with the specified status, where `1` denotes any nonzero exit |
@@ -70,7 +70,10 @@ After a peer mutation deadline, the controller may send one reconciliation
 status request. The transcript must establish the outcome with a
 `decision` before further requests. If status times out or the helper fails
 during reconciliation, the controller closes stdin if it is still open and
-reaps the old helper before replacement.
+reaps the old helper before replacement. A terminal diagnostic or stdout
+failure can stop request processing before the controller closes stdin.
+Closing stdin afterward preserves the failure outcome and starts the
+controller's shutdown grace period.
 
 A deadline for another control request, such as `start`, also requires
 closing stdin and reaping before replacement. A `force_terminate` event

@@ -283,7 +283,10 @@ revision and peer state to decide whether another mutation is needed.
 If reconciliation fails, times out, or the pipe becomes unusable, close stdin
 if still open and reap the helper before replacing it from durable desired
 state. A terminal session error or unexpected process exit during
-reconciliation counts as failure, even without a correlated reply. For other
+reconciliation counts as failure, even without a correlated reply. A terminal
+session error or stdout failure can close request admission while the
+controller's stdin pipe is still open. Closing that pipe afterward preserves
+the failure outcome. For other
 control timeouts, close stdin and reap the helper before replacing it. After
 closing stdin on failure, allow up to 15 seconds for the helper to exit, then
 terminate the owned process if it is still running. Wait for confirmed exit

@@ -210,7 +210,7 @@ def check_session(case, validator):
     terminal_code = None
     terminal_response_sent = False
     stdout_failed = False
-    input_closed = False
+    requests_closed = False
     stdin_closed_by_controller = False
     shutdown_grace_expired = False
     forced_termination = False
@@ -220,7 +220,7 @@ def check_session(case, validator):
         action, value = next(iter(step.items()))
         require(not exited or action in {"reap", "replace_helper"}, "action after helper exit")
         if action == "send":
-            require(not input_closed, "request follows a closed session")
+            require(not requests_closed, "request follows a closed session")
             require(not reconciliation_failed, "failed reconciliation requires shutdown")
             require(not control_timed_out, "control timeout requires shutdown")
             if unresolved_mutation is not None:
@@ -232,7 +232,7 @@ def check_session(case, validator):
             if len(pending) > 2:
                 require(in_flight == pending[0]["id"], "overflow needs a held executing request")
                 terminal_code = "queue_full"
-                input_closed = terminal_failure = True
+                requests_closed = terminal_failure = True
                 pending.clear()
             requests[value["id"]] = value
         elif action == "receive":
@@ -246,14 +246,14 @@ def check_session(case, validator):
                 if terminal_code:
                     require(value["code"] == terminal_code, f"expected terminal {terminal_code}")
                 else:
-                    require(not input_closed or value["code"] == "shutdown_timeout",
+                    require(not requests_closed or value["code"] == "shutdown_timeout",
                             "only shutdown_timeout may follow EOF")
                     require(value["code"] != "queue_full", "queue_full requires an overflow")
-                input_closed = terminal_failure = True
+                requests_closed = terminal_failure = True
                 terminal_response_sent = True
                 pending.clear()
                 continue
-            require(not input_closed and pending, "correlated response without open pending work")
+            require(not requests_closed and pending, "correlated response without open pending work")
             request = pending.pop(0)
             if in_flight == request["id"]:
                 in_flight = None
@@ -336,18 +336,18 @@ def check_session(case, validator):
                     identity = (value["result"]["listen_port"], value["result"]["server_public_key"])
                     require(identity == startup_identity, "status identity disagrees with start")
             if code in {"unsupported_version", "start_failed"}:
-                input_closed = terminal_failure = True
+                requests_closed = terminal_failure = True
                 terminal_response_sent = True
                 pending.clear()
             if value["ok"] and request["op"] == "stop":
-                input_closed = True
+                requests_closed = True
                 terminal_response_sent = True
                 pending.clear()
             replies[value["id"]] = value
             if value["id"] == reconciliation_status and not value["ok"]:
                 reconciliation_failed = True
         elif action == "in_flight":
-            require(not input_closed and len(pending) == 1 and pending[0]["id"] == value
+            require(not requests_closed and len(pending) == 1 and pending[0]["id"] == value
                     and in_flight is None, "in_flight must hold the executing request")
             in_flight = value
         elif action == "deadline":
@@ -365,7 +365,7 @@ def check_session(case, validator):
                 require(unresolved_mutation is None, "unexpected deadline during reconciliation")
                 control_timed_out = True
         elif action == "decision":
-            require(not input_closed and not reconciliation_failed
+            require(not requests_closed and not reconciliation_failed
                     and unresolved_mutation is not None and reconciliation_status is not None
                     and value["mutation_id"] == unresolved_mutation
                     and value["status_id"] == reconciliation_status,
@@ -375,17 +375,18 @@ def check_session(case, validator):
             check_reconciliation(value, requests, replies)
             unresolved_mutation = reconciliation_status = None
         elif action == "eof":
-            require(value is True and not input_closed, "unexpected EOF step")
-            stdin_closed_by_controller = input_closed = True
+            require(value is True and not stdin_closed_by_controller,
+                    "controller may close stdin only once")
+            stdin_closed_by_controller = requests_closed = True
             pending.clear()
         elif action == "stdout_failed":
             require(isinstance(value, str) and "\n" not in value and not stdout_failed
                     and not terminal_response_sent,
                     "stdout failure must give an unterminated prefix or an empty string")
-            stdout_failed = input_closed = terminal_failure = True
+            stdout_failed = requests_closed = terminal_failure = True
             pending.clear()
         elif action == "cleanup_timeout":
-            require(value is True and input_closed and not terminal_response_sent
+            require(value is True and requests_closed and not terminal_response_sent
                     and terminal_code != "shutdown_timeout", "unexpected cleanup timeout")
             terminal_code = "shutdown_timeout"
             terminal_failure = True
@@ -400,10 +401,10 @@ def check_session(case, validator):
         elif action == "unexpected_exit":
             require(type(value) is int and not terminal_response_sent and not forced_termination,
                     "unexpected exit must precede any terminal response or forced termination")
-            input_closed = terminal_failure = exited = True
+            requests_closed = terminal_failure = exited = True
             pending.clear()
         elif action == "exit":
-            require(input_closed and not pending, "exit without terminal action or with pending work")
+            require(requests_closed and not pending, "exit without terminal action or with pending work")
             require(type(value) is int, "exit status must be an integer")
             require((value != 0) == terminal_failure, "exit does not match terminal outcome")
             exited = True
@@ -413,7 +414,7 @@ def check_session(case, validator):
         elif action == "replace_helper":
             recovery_failed = (control_timed_out or reconciliation_failed
                                or (unresolved_mutation is not None and terminal_failure))
-            require(value is True and recovery_failed and input_closed and reaped
+            require(value is True and recovery_failed and requests_closed and reaped
                     and index == len(case["steps"]) - 1,
                     "replacement after failed recovery requires closing and reaping the helper")
         else:

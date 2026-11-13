@@ -194,6 +194,20 @@ reaping in all three new paths, forced termination without stdin closure or
 the grace period, reaping without confirmed exit, and further requests after a
 startup timeout. W1 awaits review before W2.
 
+Eighth W1 review follow-up
+
+- [x] Track controller stdin closure separately from helper request admission.
+  Allow one closure after a terminal diagnostic or stdout failure. Exercise
+  both paths through exit and reaping, including forced termination after the
+  shutdown grace period.
+
+Verification passed the Draft 2020-12 schema, 24 frame cases, 22 message shapes
+and 54 session transcripts. Twelve negative probes across the two failure
+paths rejected duplicate stdin closure, a clean exit status after failure,
+new requests after admission closed, skipping stdin closure or the grace
+period before forced termination, and replacement before reaping. W1 awaits
+review before W2.
+
 ### W2 — Extract a reusable application lifecycle
 
 Starting point: [cmd/wgslirp/main.go](../cmd/wgslirp/main.go).
