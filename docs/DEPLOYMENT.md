@@ -76,6 +76,24 @@ an ordinary user with finite process/memory limits and working CA certificates;
 Linux ping-socket permission still applies. Container security/resource limits
 are supplied by the container runtime and are not embedded in the binary.
 
+### Linux helper for supervised integrations
+
+Use `wgslirp-helper-<version>-linux-amd64.tar.gz` or
+`wgslirp-helper-<version>-linux-arm64.tar.gz` from the same versioned release.
+Verify the archive against `SHA256SUMS`. The archive contains the executable,
+license and `SOURCE.json` with the source commit, binary SHA-256, platform,
+binary version, protocol versions and capabilities.
+
+Run `wgslirp-helper --version` to inspect the artifact version. For a session,
+launch the executable with all three standard streams redirected and negotiate
+compatibility before sending configuration. Follow the
+[helper protocol](HELPER_PROTOCOL.md) for lifecycle and key handling.
+
+The helper publication gate runs the exact Linux amd64 and arm64 binaries
+natively. It covers pipe lifecycle and encrypted TCP mapping through live
+peer addition, revocation and stop. Windows and macOS helper CI cross-builds
+amd64 and arm64. Linux is the helper release matrix.
+
 ### Windows amd64
 
 The Windows job builds `wgslirp.exe` with CGO disabled, runs native unit tests,

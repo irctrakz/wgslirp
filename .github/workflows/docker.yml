@@ -13,7 +13,7 @@ on:
         options: [basic, sustained]
         default: basic
   push:
-    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite, codex/master-tested-image, codex/binary-releases]
+    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite, codex/master-tested-image, codex/binary-releases, codex/jellyfin-integration]
     tags: ["v*"]
   pull_request:                 # PRs = build-only
 
@@ -495,8 +495,68 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  helper-linux:
+    needs: test
+    if: github.repository == 'irctrakz/wgslirp' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/jellyfin-integration')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    env:
+      CGO_ENABLED: '0'
+      RELEASE_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.12'
+          cache-dependency-path: go.sum
+      - name: Build and accept the release helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)" = linux
+          test "$(go env GOARCH)" = "$RELEASE_ARCH"
+          version="$GITHUB_SHA"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; fi
+          [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$ ]]
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          export WGSLIRP_HELPER_TEST_BINARY="$work/wgslirp-helper"
+          export WGSLIRP_HELPER_TEST_VERSION="$version"
+          go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$WGSLIRP_HELPER_TEST_BINARY" ./cmd/wgslirp-helper
+          mkdir -p helper-evidence
+          go test -v -count=1 -timeout 90s -tags=integration -skip '^TestEncryptedHelperRelease$' ./cmd/wgslirp-helper ./internal/helperwire \
+            2>&1 | tee helper-evidence/pipes.log
+          go test -v -count=1 -timeout 90s -tags=integration -run '^TestEncryptedHelperRelease$' ./cmd/wgslirp-helper \
+            2>&1 | tee helper-evidence/encrypted.log
+          grep -q '^--- PASS: TestEncryptedHelperRelease ' helper-evidence/encrypted.log
+          python3 tools/ci/helper_release.py helper-dist --source "$GITHUB_SHA" --version "$version" \
+            --binary "$WGSLIRP_HELPER_TEST_BINARY" --arch "$RELEASE_ARCH"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: 'helper-evidence-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: helper-evidence/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v6
+        with:
+          name: 'helper-binaries-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: helper-dist/
+          retention-days: 7
+          if-no-files-found: error
+
   release-binaries:
-    needs: [promote-image, release-image-build, release-image-test, windows-binary]
+    needs: [promote-image, release-image-build, release-image-test, windows-binary, helper-linux]
     if: github.repository == 'irctrakz/wgslirp' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -506,11 +566,20 @@ jobs:
     permissions:
       contents: write
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
       VERSION_TAG: ${{ github.ref_name }}
       TESTED_IMAGE: ghcr.io/irctrakz/wgslirp@${{ needs.release-image-build.outputs.digest }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: 'helper-binaries-*-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: helper-dist
+          merge-multiple: true
+      - name: Verify accepted Linux helper archives
+        shell: bash
+        run: python3 tools/ci/helper_release.py helper-dist --source "$GITHUB_SHA" --version "$VERSION_TAG"
       - uses: actions/download-artifact@v6
         with:
           pattern: 'binaries-*-${{ github.run_id }}-${{ github.run_attempt }}'
@@ -551,8 +620,18 @@ jobs:
               assert metadata['binary_sha256'] == hashlib.sha256(package.read('wgslirp.exe')).hexdigest(), 'wrong Windows binary checksum'
           PY
           cat *.sha256 > SHA256SUMS
+      - name: Include verified helper assets
+        shell: bash
+        working-directory: binary-dist
+        run: |
+          set -euo pipefail
+          cat ../helper-dist/*.sha256 >> SHA256SUMS
+          cp ../helper-dist/*.tar.gz .
       - name: Publish a complete versioned release
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           tag="$VERSION_TAG"
@@ -560,6 +639,7 @@ jobs:
           if [[ "$tag" == *-* ]]; then prerelease=true; fi
           printf 'Source: `%s`\n\nTested image: `%s`\n\nLinux amd64/arm64 executables extracted from tested images; Windows amd64 executable validated natively with ICMP_ECHO=false. Verify downloads with SHA256SUMS.\n' \
             "$GITHUB_SHA" "$TESTED_IMAGE" > release-notes.txt
+          printf '\nLinux amd64 and arm64 helper archives passed native pipe and encrypted forwarding acceptance. See SOURCE.json for helper compatibility.\n' >> release-notes.txt
           if gh release view "$tag" --json isDraft > existing-release.json 2>/dev/null; then
             python3 - <<'PY'
           import json

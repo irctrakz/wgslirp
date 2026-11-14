@@ -33,6 +33,7 @@ type helperProcess struct {
 	in       io.WriteCloser
 	out      *bufio.Reader
 	instance string
+	version  string
 }
 
 func helperCommand(ctx context.Context, args ...string) *exec.Cmd {
@@ -77,7 +78,7 @@ func launchHelper(t *testing.T, closeStdout bool) *helperProcess {
 		t.Fatal(err)
 	}
 	_ = writer.Close()
-	return &helperProcess{cmd: cmd, in: input, out: bufio.NewReader(out)}
+	return &helperProcess{cmd: cmd, in: input, out: bufio.NewReader(out), version: expectedHelperVersion()}
 }
 
 func (p *helperProcess) send(t *testing.T, frames ...object) {
@@ -123,11 +124,22 @@ func (p *helperProcess) handshake(t *testing.T) {
 		t.Fatalf("invalid instance ID: %v", msg)
 	}
 	result := p.check(t, msg, 1, "hello", 0, "")
-	if result["version"] != float64(1) || result["binary_version"] != binaryVersion() ||
+	version := p.version
+	if version == "" {
+		version = binaryVersion()
+	}
+	if result["version"] != float64(1) || result["binary_version"] != version ||
 		result["os"] != runtime.GOOS || result["arch"] != runtime.GOARCH ||
 		fmt.Sprint(result["capabilities"]) != "[restricted_tcp live_peers]" {
 		t.Fatalf("unexpected hello: %v", msg)
 	}
+}
+
+func expectedHelperVersion() string {
+	if version := os.Getenv("WGSLIRP_HELPER_TEST_VERSION"); version != "" {
+		return version
+	}
+	return binaryVersion()
 }
 
 func (p *helperProcess) check(t *testing.T, msg object, id int, op string, revision int, code string) object {
@@ -167,7 +179,7 @@ func (p *helperProcess) expectEOF(t *testing.T) {
 func TestHelperProcessLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if out, err := helperCommand(ctx, "--version").Output(); err != nil || strings.TrimSpace(string(out)) != binaryVersion() {
+	if out, err := helperCommand(ctx, "--version").Output(); err != nil || strings.TrimSpace(string(out)) != expectedHelperVersion() {
 		t.Fatalf("version = %q, %v", out, err)
 	}
 	p := launchHelper(t, false)

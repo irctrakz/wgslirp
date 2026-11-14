@@ -815,13 +815,13 @@ review of the host-write shutdown fix in `24d2997`. W7 follows this checkpoint.
 
 ### W7 — Publish versioned binaries and acceptance evidence
 
-- [ ] Add binary releases alongside the existing container workflows.
-- [ ] Publish archives, checksums and metadata recording source revision, protocol
+- [x] Add binary releases alongside the existing container workflows.
+- [x] Add a publication gate for archives, checksums and metadata recording source revision, protocol
   compatibility and supported capabilities.
-- [ ] Begin Windows/macOS cross-compilation checks during Linux development.
-- [ ] Keep platform collectors and OS-specific support in dedicated files/packages.
-- [ ] Distinguish buildable targets from natively validated, supported targets.
-- [ ] Retain existing networking validation gates and add encrypted tests for
+- [x] Begin Windows/macOS cross-compilation checks during Linux development.
+- [x] Keep platform collectors and OS-specific support in dedicated files/packages.
+- [x] Distinguish buildable targets from natively validated, supported targets.
+- [x] Retain existing networking validation gates and add encrypted tests for
   destination mapping, live peer changes and helper lifecycle.
 - [ ] Validate Linux x64 first and Linux ARM64 before completing the Linux release.
 - [ ] Add native acceptance for every OS/architecture advertised in the final release.
@@ -834,6 +834,44 @@ review of the host-write shutdown fix in `24d2997`. W7 follows this checkpoint.
 
 **Complete when:** downstream projects can download pinned artifacts and operate
 the helper without importing Go source or building locally.
+
+**W7 review checkpoint**
+
+The approved W6 checkpoint was pushed before W7 work began. W7 uses the
+existing reviewed-tag release workflow and adds Linux amd64 and arm64 helper
+archives as separate assets. The helper matrix builds each binary once, runs
+pipe and encrypted acceptance against those bytes, verifies the archives and
+merges their checksums into the same release manifest. Windows and macOS
+helper builds remain compile coverage at this stage.
+
+Local checks passed for the Windows integration suite and vet, all 100
+shared protocol cases, ten release packaging and publication-control tests,
+Windows and macOS amd64/arm64 cross-builds, and both Linux archive formats
+using actual linked helper binaries. The Linux amd64 VM passed the versioned
+helper pipe tests, encrypted mapping with live peer addition and removal,
+standalone SIGTERM, and the runtime and socket regression suites. The first
+versioned run exposed a test expectation mismatch for injected subprocesses.
+The corrected suite distinguishes the built helper's version from the test
+binary's version. It passed on rerun.
+
+W7 is ready for implementation review. The native ARM64 GitHub runner and an
+actual tagged publication remain unverified. The Linux release checkbox stays
+open until native evidence exists for both architectures. Final cross-platform
+acceptance remains open.
+
+**Maintainability review**
+
+- The helper and standalone entry points share the application runtime.
+  The platform pipe adapters and the protocol controller have distinct
+  responsibilities. The release tests reuse the helper process harness and the
+  packet encoder.
+- The session, socket and peer lifecycle each own a different shutdown
+  boundary. Keep the existing race regressions when changing lock or
+  cancellation ordering. A future cleanup can reduce test hook surface after
+  equivalent deterministic coverage is available.
+- The v1 schema and Go decoder both express parts of the wire contract.
+  The fixtures and executable handshake assertions check drift, including the
+  capability list used in release metadata.
 
 ## Repository 2: Jellyfin plugin
 

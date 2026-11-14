@@ -14,6 +14,7 @@ import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
+import helper_release
 
 WORKFLOW = Path(__file__).resolve().parents[2] / '.github/workflows/docker.yml'
 
@@ -139,6 +140,36 @@ class BinaryPackageTests(unittest.TestCase):
                                 exec(code, {})
                 finally:
                     os.chdir(original)
+
+
+class HelperPackageTests(unittest.TestCase):
+    def test_helper_matrix_rejects_missing_or_tampered_artifacts(self):
+        source = 'a' * 40
+        version = 'v1.2.3'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dist = root / 'dist'
+            binary = root / 'wgslirp-helper'
+            for arch, machine in helper_release.ARCHES.items():
+                elf = bytearray(120)
+                elf[:6] = b'\x7fELF\x02\x01'
+                struct.pack_into('<H', elf, 18, machine)
+                struct.pack_into('<Q', elf, 32, 64)
+                struct.pack_into('<HH', elf, 54, 56, 1)
+                struct.pack_into('<I', elf, 64, 1)
+                binary.write_bytes(elf)
+                helper_release.package(binary, dist, source, version, arch)
+            helper_release.verify(dist, source, version)
+            with self.assertRaisesRegex(ValueError, 'metadata'):
+                helper_release.verify(dist, 'b' * 40, version)
+            archive = dist / f'wgslirp-helper-{version}-linux-arm64.tar.gz'
+            with archive.open('ab') as file:
+                file.write(b'tampered')
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                helper_release.verify(dist, source, version)
+            archive.unlink()
+            with self.assertRaisesRegex(ValueError, 'artifact set'):
+                helper_release.verify(dist, source, version)
 
 
 class ReleasePublicationTests(unittest.TestCase):

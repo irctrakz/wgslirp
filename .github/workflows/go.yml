@@ -49,6 +49,16 @@ jobs:
       - name: Validate binary release failure controls
         run: python3 tools/ci/test_binary_release.py -v
 
+      - name: Cross-build the helper for Windows and macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          for os in windows darwin; do
+            for arch in amd64 arm64; do
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o "$RUNNER_TEMP/helper-$os-$arch" ./cmd/wgslirp-helper
+            done
+          done
+
       - name: Build and vet
         run: |
           go build ./...
