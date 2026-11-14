@@ -810,7 +810,8 @@ contract and has verified process-lifecycle behavior.
   suite, Windows and Linux integration vet, the shared fixture verifier,
   and Linux, macOS and Windows ARM64 builds also passed.
 
-W6 awaits review before W7.
+W6 is complete. The protocol session and process lifecycle were approved after
+review of the host-write shutdown fix in `24d2997`. W7 follows this checkpoint.
 
 ### W7 — Publish versioned binaries and acceptance evidence
 
