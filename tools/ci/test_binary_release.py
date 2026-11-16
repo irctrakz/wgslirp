@@ -15,9 +15,16 @@ import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
-import helper_release
 
-WORKFLOW = Path(__file__).resolve().parents[2] / '.github/workflows/docker.yml'
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = ROOT / '.github/workflows/docker.yml'
+HELPER_WORKFLOW = WORKFLOW.with_name('helper-release.yml')
+PUBLISHER = ROOT / 'tools/ci/publish-binary-release.sh'
+SOURCE_VALIDATION = ROOT / 'tools/ci/validate-release-source.sh'
+
+
+def checksum_sidecar(path):
+    return f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n'.encode()
 
 
 def run_block(name):
@@ -48,47 +55,56 @@ def workflow_bash(test):
 
 
 class BinaryPackageTests(unittest.TestCase):
-    def test_manifest_covers_exact_archives_and_rejects_misdirected_sidecar(self):
+    def test_standalone_verification_rejects_misdirected_sidecar(self):
         bash = workflow_bash(self)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             dist = root / 'binary-dist'
-            helpers = root / 'helper-dist'
             dist.mkdir()
-            helpers.mkdir()
             standalone = ['wgslirp-abc-linux-amd64.tar.gz', 'wgslirp-abc-linux-arm64.tar.gz',
                           'wgslirp-abc-windows-amd64.zip']
-            helper_names = [f'wgslirp-helper-v1.2.3-linux-{arch}.tar.gz' for arch in helper_release.ARCHES]
             for name in standalone:
                 path = dist / name
                 path.write_bytes(name.encode())
-                path.with_name(name + '.sha256').write_bytes(helper_release.checksum(path))
-            for name in helper_names:
-                (helpers / name).write_bytes(name.encode())
+                path.with_name(name + '.sha256').write_bytes(checksum_sidecar(path))
             env = os.environ | {'GITHUB_SHA': 'abc', 'VERSION_TAG': 'v1.2.3'}
             # Archive content and metadata are exercised by the next tests.
             verify = 'python3() { cat > /dev/null; }\n' + run_block('Verify binary archives before publication')
             good = subprocess.run([bash], input=verify, text=True, capture_output=True, cwd=root, env=env)
             self.assertEqual(good.returncode, 0, good.stderr)
             wrong = dist / (standalone[1] + '.sha256')
-            wrong.write_bytes(helper_release.checksum(dist / standalone[0]))
+            wrong.write_bytes(checksum_sidecar(dist / standalone[0]))
             bad = subprocess.run([bash], input=verify, text=True, capture_output=True, cwd=root, env=env)
             self.assertNotEqual(bad.returncode, 0)
-            merged = subprocess.run([bash], input=run_block('Include verified helper assets'), text=True,
-                                    capture_output=True, cwd=dist, env=env)
-            self.assertEqual(merged.returncode, 0, merged.stderr)
-            expected = b''.join(helper_release.checksum(dist / name) for name in standalone + helper_names)
-            self.assertEqual((dist / 'SHA256SUMS').read_bytes(), expected)
 
-    def test_version_tags(self):
-        code = python_block('Validate the version tag and reviewed source')
-        for tag in ['v1.2.3', 'v0.1.0', 'v1.2.3-rc.1']:
-            with self.subTest(tag=tag), patch.dict(os.environ, VERSION_TAG=tag):
-                exec(code, {})
-        for tag in ['latest', 'v1', 'v1.2', 'v01.2.3', 'v1.2.3/extra', 'v1.2.3-']:
-            with self.subTest(tag=tag), patch.dict(os.environ, VERSION_TAG=tag):
-                with self.assertRaises(AssertionError):
-                    exec(code, {})
+    def test_version_tags_and_reviewed_source(self):
+        bash = workflow_bash(self)
+        stub = """git() {
+          case "$1" in
+            fetch) return 0 ;;
+            rev-parse) echo false ;;
+            merge-base)
+              echo checked-source
+              [[ "$*" == 'merge-base --is-ancestor abc refs/remotes/origin/master' && "$REVIEWED" == yes ]]
+              ;;
+            *) return 99 ;;
+          esac
+        }
+        """
+        script = stub + SOURCE_VALIDATION.read_text(encoding='utf-8')
+        for prefix, other in [('v', 'helper-v'), ('helper-v', 'v')]:
+            valid = [prefix + suffix for suffix in ('1.2.3', '0.1.0', '1.2.3-rc.1')]
+            invalid = [other + '1.2.3', 'latest'] + [
+                prefix + suffix for suffix in ('1', '1.2', '01.2.3', '1.2.3/extra', '1.2.3-')]
+            for tag, reviewed, accepted in ([(tag, 'yes', True) for tag in valid]
+                                            + [(tag, 'yes', False) for tag in invalid]
+                                            + [(valid[0], 'no', False)]):
+                with self.subTest(prefix=prefix, tag=tag, reviewed=reviewed):
+                    env = os.environ | {'GITHUB_REF_NAME': tag, 'GITHUB_SHA': 'abc', 'REVIEWED': reviewed}
+                    result = subprocess.run([bash, '-s', '--', prefix], input=script, env=env,
+                                            text=True, capture_output=True)
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                    self.assertEqual('checked-source' in result.stdout, tag in valid)
 
     def test_elf_architecture_and_static_linking(self):
         code = python_block('Package the tested executable')
@@ -188,6 +204,8 @@ class BinaryPackageTests(unittest.TestCase):
 
 class HelperPackageTests(unittest.TestCase):
     def test_helper_matrix_rejects_missing_or_tampered_artifacts(self):
+        import helper_release
+
         source = 'a' * 40
         version = 'v1.2.3'
         with tempfile.TemporaryDirectory() as directory:
@@ -232,34 +250,33 @@ class HelperPackageTests(unittest.TestCase):
                 helper_release.verify(dist, source, version, evidence)
 
     def test_partial_rerun_reuses_successful_artifacts_from_same_run(self):
-        workflow = WORKFLOW.read_text(encoding='utf-8')
-        release = workflow.split('\n  release-binaries:\n', 1)[1].split('\n  docker:', 1)[0]
-        patterns = re.findall(r"pattern: '([^']+)'", release)
-        expected = {
-            'binaries-amd64', 'binaries-arm64', 'binaries-windows-amd64',
-            'helper-binaries-amd64', 'helper-binaries-arm64',
-            'helper-acceptance-amd64', 'helper-acceptance-arm64',
-        }
-        # Model one matrix cell rerunning while all other producers retain
-        # their prior success. Replacement must keep its name in the same run.
-        templates = re.findall(r"name: '((?:helper-(?:binaries|acceptance)|binaries)-[^']+)'\n\s+overwrite: true", workflow)
-        self.assertEqual(len(templates), 4)
-        available = {}
-        for template in templates:
-            for arch in (('amd64', 'arm64') if 'matrix.arch' in template else ('amd64',)):
-                name = template.replace('${{ matrix.arch }}', arch)
-                available[name.replace('${{ github.run_attempt }}', '1')] = 1
-                if name.startswith('helper-') and name.endswith('-arm64'):
-                    available[name.replace('${{ github.run_attempt }}', '2')] = 2
-        selected = {name: attempt for name, attempt in available.items()
-                    if any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)}
-        self.assertEqual(selected, {name: 2 if name.startswith('helper-') and name.endswith('-arm64') else 1
-                                    for name in expected})
+        for path, job, expected in (
+                (WORKFLOW, 'release-binaries', {'binaries-amd64', 'binaries-arm64', 'binaries-windows-amd64'}),
+                (HELPER_WORKFLOW, 'release-helper', {'helper-binaries-amd64', 'helper-binaries-arm64',
+                                                     'helper-acceptance-amd64', 'helper-acceptance-arm64'})):
+            with self.subTest(job=job):
+                workflow = path.read_text(encoding='utf-8')
+                release = workflow.split(f'\n  {job}:\n', 1)[1].split('\n  docker:', 1)[0]
+                patterns = re.findall(r"pattern: '([^']+)'", release)
+                # Model one matrix cell rerunning while other producers retain
+                # their prior success. A retry must replace the same artifact.
+                templates = re.findall(r"name: '((?:helper-(?:binaries|acceptance)|binaries)-[^']+)'\n\s+overwrite: true", workflow)
+                self.assertEqual(len(templates), 2)
+                available = {}
+                for template in templates:
+                    for arch in (('amd64', 'arm64') if 'matrix.arch' in template else ('amd64',)):
+                        name = template.replace('${{ matrix.arch }}', arch)
+                        available[name.replace('${{ github.run_attempt }}', '1')] = 1
+                        if arch == 'arm64':
+                            available[name.replace('${{ github.run_attempt }}', '2')] = 2
+                selected = {name: attempt for name, attempt in available.items()
+                            if any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)}
+                self.assertEqual(selected, {name: 2 if name.endswith('-arm64') else 1 for name in expected})
 
 
-class ReleasePublicationTests(unittest.TestCase):
+class ReleasePublicationFixture(unittest.TestCase):
     def run_release(self, state='absent', upload_exit=0, tag='v1.2.3', inventory=None,
-                    asset_fault=None, remote_tag='lightweight', replace_draft=''):
+                    asset_fault=None, remote_tag='lightweight', replace_draft='', profile='standalone'):
         bash = workflow_bash(self)
         stub = r'''
 git() {
@@ -350,18 +367,28 @@ python3() { "$TEST_PYTHON" "$@"; }
 '''
         with tempfile.TemporaryDirectory(prefix='wgslirp-release-control-') as directory:
             path = Path(directory)
-            (path / 'binary-dist').mkdir()
-            names = ['wgslirp-abc-linux-amd64.tar.gz', 'wgslirp-abc-linux-arm64.tar.gz',
-                     'wgslirp-abc-windows-amd64.zip', f'wgslirp-helper-{tag}-linux-amd64.tar.gz',
-                     f'wgslirp-helper-{tag}-linux-arm64.tar.gz', 'SHA256SUMS']
-            for filename in names:
-                (path / 'binary-dist' / filename).write_text('test-only')
+            if profile == 'helper':
+                dist = path / 'helper-dist'
+                version = tag.removeprefix('helper-')
+                archives = [f'wgslirp-helper-{version}-linux-{arch}.tar.gz' for arch in ('amd64', 'arm64')]
+            else:
+                dist = path / 'binary-dist'
+                archives = ['wgslirp-abc-linux-amd64.tar.gz', 'wgslirp-abc-linux-arm64.tar.gz',
+                            'wgslirp-abc-windows-amd64.zip']
+            dist.mkdir()
+            manifest = b''
+            for filename in archives:
+                (dist / filename).write_bytes(filename.encode())
+                sidecar = checksum_sidecar(dist / filename)
+                (dist / (filename + '.sha256')).write_bytes(sidecar)
+                manifest += sidecar
+            names = archives + ['SHA256SUMS']
             initial = ['stale-helper.tar.gz'] if state == 'extra' else names[:1] if state == 'draft' else []
             (path / 'initial.json').write_text(json.dumps({'draft': state != 'published', 'id': 123}))
             (path / 'initial-assets.json').write_text(json.dumps([[{'name': name, 'id': 321} for name in initial]]))
             uploaded = []
             for name in (names if inventory is None else inventory):
-                data = (path / 'binary-dist' / name).read_bytes()
+                data = manifest if name == 'SHA256SUMS' else (dist / name).read_bytes()
                 uploaded.append({'name': name, 'state': 'uploaded', 'size': len(data),
                                  'digest': 'sha256:' + hashlib.sha256(data).hexdigest()})
             if asset_fault:
@@ -371,15 +398,20 @@ python3() { "$TEST_PYTHON" "$@"; }
                                 'VERSION_TAG': tag, 'GITHUB_SHA': 'abc',
                                 'REMOTE_TAG': remote_tag, 'GH_REPO': 'example/test-only',
                                 'REPLACE_DRAFT': replace_draft, 'GH_TOKEN': 'test-token',
-                                'TESTED_IMAGE': 'test@sha256:abc',
                                 'GITHUB_REPOSITORY': 'example/test-only',
                                 'GITHUB_STEP_SUMMARY': 'summary.txt',
                                 'TEST_PYTHON': sys.executable.replace('\\', '/')}
-            result = subprocess.run([bash, '--noprofile', '--norc'],
-                                    input=stub + run_block('Publish a complete versioned release'),
+            env.pop('TESTED_IMAGE', None)
+            if profile == 'standalone':
+                env['TESTED_IMAGE'] = 'test@sha256:abc'
+            result = subprocess.run([bash, '--noprofile', '--norc', '-s', '--', profile],
+                                    input=stub + PUBLISHER.read_text(encoding='utf-8'),
                                     text=True, capture_output=True, cwd=directory, env=env, timeout=15)
             log = path / 'calls.txt'
             calls = log.read_text().splitlines() if log.exists() else []
+            if result.returncode == 0:
+                self.assertEqual((dist / 'SHA256SUMS').read_bytes(), manifest)
+                self.assertEqual([call.rsplit('=', 1)[1] for call in calls if call.startswith('upload ')], names)
             return result.returncode, calls
 
     @staticmethod
@@ -387,10 +419,12 @@ python3() { "$TEST_PYTHON" "$@"; }
         return [line.split()[2].lower() if line.startswith('api --method ') else
                 line.split()[1] if line.startswith('release ') else line.split()[0] for line in calls]
 
+
+class ReleasePublicationTests(ReleasePublicationFixture):
     def test_new_release_stays_draft_until_upload_succeeds(self):
         result, calls = self.run_release()
         self.assertEqual(result, 0)
-        self.assertEqual(self.operations(calls), ['view', 'post'] + ['upload'] * 6 + ['patch'])
+        self.assertEqual(self.operations(calls), ['view', 'post'] + ['upload'] * 4 + ['patch'])
         self.assertTrue(calls[1].startswith('api --method POST repos/example/test-only/releases '))
         for field in ('-f tag_name=v1.2.3', '-f target_commitish=abc', '-f name=v1.2.3',
                       '-F draft=true', '-F prerelease=false', '-F body=@release-notes.txt'):
@@ -420,14 +454,14 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_incomplete_draft_can_be_resumed(self):
         result, calls = self.run_release(state='draft')
         self.assertEqual(result, 0)
-        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 6 + ['patch'])
+        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 4 + ['patch'])
         self.assertIn('api --method DELETE repos/example/test-only/releases/assets/321 ', calls[1])
         self.assertTrue(all('releases/123/assets?name=' in call for call in calls[2:-1]))
 
     def test_replaced_draft_is_never_published(self):
         result, calls = self.run_release(state='draft', replace_draft='publish')
         self.assertNotEqual(result, 0)
-        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 6 + ['patch'])
+        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 4 + ['patch'])
         self.assertTrue(calls[-1].startswith('api --method PATCH repos/example/test-only/releases/123 '))
         self.assertFalse(any('456' in call for call in calls))
 
@@ -450,21 +484,21 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_remote_inventory_must_match_after_upload(self):
         result, calls = self.run_release(state='draft', inventory=['SHA256SUMS'])
         self.assertNotEqual(result, 0)
-        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 6)
+        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 4)
 
     def test_same_name_asset_with_wrong_state_size_or_digest_blocks_publication(self):
         for fault in ({'state': 'starter'}, {'size': 0}, {'digest': 'sha256:' + '0' * 64}):
             with self.subTest(fault=fault):
                 result, calls = self.run_release(state='draft', asset_fault=fault)
                 self.assertNotEqual(result, 0)
-                self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 6)
+                self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 4)
 
     def test_moved_or_deleted_tag_cannot_publish(self):
         for state in ('moved', 'deleted', 'moved-after-upload', 'deleted-after-upload'):
             with self.subTest(state=state):
                 result, calls = self.run_release(state='draft', remote_tag=state)
                 self.assertNotEqual(result, 0)
-                expected = ['view', 'delete'] + ['upload'] * 6 if state.endswith('after-upload') else []
+                expected = ['view', 'delete'] + ['upload'] * 4 if state.endswith('after-upload') else []
                 self.assertEqual(self.operations(calls), expected)
 
     def test_annotated_tag_resolves_to_the_tested_commit(self):
@@ -477,6 +511,43 @@ python3() { "$TEST_PYTHON" "$@"; }
         self.assertEqual(result, 0)
         self.assertIn('-F prerelease=true', calls[1])
         self.assertIn('-F prerelease=true', calls[-1])
+
+
+class HelperPublicationTests(ReleasePublicationFixture):
+    def test_helper_release_publishes_only_native_helper_archives(self):
+        for tag, prerelease in [('helper-v1.2.3', 'false'), ('helper-v1.2.3-rc.1', 'true')]:
+            with self.subTest(tag=tag):
+                result, calls = self.run_release(tag=tag, profile='helper')
+                self.assertEqual(result, 0)
+                self.assertEqual(self.operations(calls), ['view', 'post'] + ['upload'] * 3 + ['patch'])
+                self.assertIn(f'-f tag_name={tag} ', calls[1])
+                self.assertIn(f'-f tag_name={tag} ', calls[-1])
+                self.assertIn(f'-F prerelease={prerelease}', calls[1])
+                self.assertIn(f'-F prerelease={prerelease}', calls[-1])
+
+    def test_publication_rejects_crossed_tag_namespaces(self):
+        for profile, tag in [('standalone', 'helper-v1.2.3'), ('helper', 'v1.2.3')]:
+            with self.subTest(profile=profile):
+                result, calls = self.run_release(tag=tag, profile=profile)
+                self.assertNotEqual(result, 0)
+                self.assertEqual(calls, [])
+
+
+class ReleaseRoutingTests(unittest.TestCase):
+    def test_tag_namespaces_and_job_dependencies_are_disjoint(self):
+        standalone = WORKFLOW.read_text(encoding='utf-8')
+        helper = HELPER_WORKFLOW.read_text(encoding='utf-8')
+        for workflow, pattern in [(standalone, 'v*'), (helper, 'helper-v*')]:
+            with self.subTest(pattern=pattern):
+                tags = re.findall(r"""^    tags: \[['"]([^'"]+)['"]\]$""", workflow, re.MULTILINE)
+                self.assertEqual(tags, [pattern])
+        standalone_jobs = standalone.split('\njobs:\n', 1)[1]
+        helper_jobs = helper.split('\njobs:\n', 1)[1]
+        self.assertNotIn('helper-linux', standalone_jobs)
+        self.assertRegex(standalone_jobs, r'(?m)^  release-binaries:\n    needs: \[promote-image, .+, windows-binary\]$')
+        self.assertEqual(re.findall(r'^  ([\w-]+):$', helper_jobs, re.MULTILINE), ['helper-linux', 'release-helper'])
+        self.assertIn('  release-helper:\n    needs: helper-linux\n', helper_jobs)
+        self.assertIn("startsWith(github.ref, 'refs/tags/helper-v')", helper_jobs.split('  release-helper:', 1)[1])
 
 
 if __name__ == '__main__':

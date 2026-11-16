@@ -5,6 +5,10 @@ on:
     branches: [master, codex/architecture-hardening, "codex/integration-*"]
   workflow_dispatch:
   workflow_call:
+    inputs:
+      standalone-release:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,6 +17,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      GO_CHECK_PACKAGES: ${{ inputs.standalone-release && './cmd/wgslirp ./cmd/stress_wg_queue ./internal/application ./internal/envconfig ./internal/packetwire ./pkg/...' || './...' }}
 
     steps:
       - name: Check out code
@@ -28,6 +34,10 @@ jobs:
         run: |
           go mod download
           go mod verify
+
+      - name: Check module tidiness
+        if: '!inputs.standalone-release'
+        run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
@@ -47,9 +57,15 @@ jobs:
           docker compose -f "$validation_dir/compose.yaml" config --quiet
 
       - name: Validate binary release failure controls
+        if: '!inputs.standalone-release'
         run: python3 tools/ci/test_binary_release.py -v
 
+      - name: Validate standalone release failure controls
+        if: inputs.standalone-release
+        run: python3 tools/ci/test_binary_release.py -v BinaryPackageTests ReleasePublicationTests
+
       - name: Cross-build the helper for Windows and macOS
+        if: '!inputs.standalone-release'
         shell: bash
         run: |
           set -euo pipefail
@@ -60,17 +76,24 @@ jobs:
           done
 
       - name: Build and vet
+        shell: bash
         run: |
-          go build ./...
-          go vet ./...
+          read -r -a packages <<< "$GO_CHECK_PACKAGES"
+          go build "${packages[@]}"
+          go vet "${packages[@]}"
 
       - name: Run tests
-        run: go test -race -timeout 120s -count=1 ./...
+        shell: bash
+        run: |
+          read -r -a packages <<< "$GO_CHECK_PACKAGES"
+          go test -race -timeout 120s -count=1 "${packages[@]}"
 
       - name: Run integration tests
+        shell: bash
         run: |
+          read -r -a packages <<< "$GO_CHECK_PACKAGES"
           go build -o "$RUNNER_TEMP/wgslirp-test" ./cmd/wgslirp
-          WGSLIRP_RELEASE_BINARY="$RUNNER_TEMP/wgslirp-test" go test -race -tags=integration -timeout 120s -count=1 ./...
+          WGSLIRP_RELEASE_BINARY="$RUNNER_TEMP/wgslirp-test" go test -race -tags=integration -timeout 120s -count=1 "${packages[@]}"
 
       - name: Fuzz packet boundaries
         run: go test -run '^$' -fuzz '^FuzzTransportBoundaries$' -fuzztime 10s -timeout 120s -parallel 2 ./pkg/socket

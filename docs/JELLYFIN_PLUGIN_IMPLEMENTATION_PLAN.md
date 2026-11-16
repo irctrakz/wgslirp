@@ -974,6 +974,22 @@ binary's version. It passed on rerun.
 
 Tagged publication and final cross-platform acceptance remain open.
 
+**Independent release gates**
+
+- Standalone `v…` tags retain the image, workload, and native Windows and
+  Linux gates. Helper `helper-v…` tags use the native Linux amd64 and ARM64
+  helper jobs and their evidence. Each tag publishes its own manifest and
+  GitHub Release. Both tag paths require source on `master` and use the same
+  checked-draft publisher.
+- Full CI still checks the shared runtime and both executables for review.
+  Standalone tagged CI scopes its Go checks to the standalone executable and
+  shared packages. Helper branch pushes run native acceptance and retain the
+  resulting CI artifacts.
+- Local verification passed all 23 release controls and 100 protocol cases,
+  the standalone-scoped Go build, vet and unit tests, Bash syntax and Actions
+  lint. Temporary shallow Git clones verified that both tag namespaces accept
+  reviewed source on `master` and reject commits outside it.
+
 **W7 security review**
 
 - A pattern scan of the tracked checkout and 1,534 blobs reachable from local

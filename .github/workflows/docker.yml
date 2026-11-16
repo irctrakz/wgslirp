@@ -13,7 +13,7 @@ on:
         options: [basic, sustained]
         default: basic
   push:
-    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite, codex/master-tested-image, codex/binary-releases, codex/jellyfin-integration]
+    branches: [master, codex/architecture-hardening, codex/integration-05-features, codex/integration-06-closewrite, codex/master-tested-image, codex/binary-releases]
     tags: ["v*"]
   pull_request:                 # PRs = build-only
 
@@ -30,6 +30,8 @@ jobs:
   test:
     if: github.event_name != 'workflow_dispatch' || !inputs.pooling-study
     uses: ./.github/workflows/go.yml
+    with:
+      standalone-release: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
   encrypted-capacity:
     needs: test
@@ -98,19 +100,7 @@ jobs:
       - name: Validate the version tag and reviewed source
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
-        env:
-          VERSION_TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os, re
-          assert re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', os.environ['VERSION_TAG']), 'expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-SUFFIX'
-          PY
-          git fetch --no-tags origin master:refs/remotes/origin/master
-          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-            git fetch --unshallow --no-tags origin
-          fi
-          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/master
+        run: bash tools/ci/validate-release-source.sh v
       - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
@@ -497,77 +487,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  helper-linux:
-    needs: test
-    if: github.repository == 'irctrakz/wgslirp' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/codex/jellyfin-integration')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 12
-    env:
-      CGO_ENABLED: '0'
-      RELEASE_ARCH: ${{ matrix.arch }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.23.12'
-          cache-dependency-path: go.sum
-      - name: Build and accept the release helper
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(go env GOOS)" = linux
-          test "$(go env GOARCH)" = "$RELEASE_ARCH"
-          version="$GITHUB_SHA"
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; fi
-          [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$ ]]
-          work=$(mktemp -d)
-          trap 'rm -rf "$work"' EXIT
-          export WGSLIRP_HELPER_TEST_BINARY="$work/wgslirp-helper"
-          export WGSLIRP_HELPER_TEST_VERSION="$version"
-          go build -buildvcs=true -trimpath -ldflags "-s -w -X main.version=$version" -o "$WGSLIRP_HELPER_TEST_BINARY" ./cmd/wgslirp-helper
-          mkdir -p helper-evidence
-          go test -v -count=1 -timeout 90s -tags=integration -skip '^TestEncryptedHelperRelease$' ./cmd/wgslirp-helper ./internal/helperwire \
-            2>&1 | tee helper-evidence/pipes.log
-          WGSLIRP_HELPER_ACCEPTANCE="$PWD/helper-evidence/acceptance-$RELEASE_ARCH.json" \
-            go test -v -count=1 -timeout 90s -tags=integration -run '^TestEncryptedHelperRelease$' ./cmd/wgslirp-helper \
-            2>&1 | tee helper-evidence/encrypted.log
-          grep -q '^--- PASS: TestEncryptedHelperRelease ' helper-evidence/encrypted.log
-          python3 tools/ci/helper_release.py helper-dist --source "$GITHUB_SHA" --version "$version" --evidence helper-evidence \
-            --binary "$WGSLIRP_HELPER_TEST_BINARY" --arch "$RELEASE_ARCH"
-      - uses: actions/upload-artifact@v6
-        if: always()
-        with:
-          name: 'helper-evidence-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}'
-          path: helper-evidence/
-          retention-days: 7
-          if-no-files-found: ignore
-      - uses: actions/upload-artifact@v6
-        with:
-          name: 'helper-binaries-${{ matrix.arch }}'
-          overwrite: true
-          path: helper-dist/
-          retention-days: 7
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v6
-        with:
-          name: 'helper-acceptance-${{ matrix.arch }}'
-          overwrite: true
-          path: helper-evidence/acceptance-${{ matrix.arch }}.json
-          retention-days: 7
-          if-no-files-found: error
-
   release-binaries:
-    needs: [promote-image, release-image-build, release-image-test, windows-binary, helper-linux]
+    needs: [promote-image, release-image-build, release-image-test, windows-binary]
     if: github.repository == 'irctrakz/wgslirp' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -583,19 +504,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v6
-        with:
-          pattern: 'helper-binaries-*'
-          path: helper-dist
-          merge-multiple: true
-      - uses: actions/download-artifact@v6
-        with:
-          pattern: 'helper-acceptance-*'
-          path: helper-acceptance
-          merge-multiple: true
-      - name: Verify accepted Linux helper archives
-        shell: bash
-        run: python3 tools/ci/helper_release.py helper-dist --source "$GITHUB_SHA" --version "$VERSION_TAG" --evidence helper-acceptance
       - uses: actions/download-artifact@v6
         with:
           pattern: 'binaries-*'
@@ -633,128 +541,12 @@ jobs:
               assert metadata['platform'] == 'windows/amd64', 'wrong Windows platform'
               assert metadata['binary_sha256'] == hashlib.sha256(package.read('wgslirp.exe')).hexdigest(), 'wrong Windows binary checksum'
           PY
-      - name: Include verified helper assets
-        shell: bash
-        working-directory: binary-dist
-        run: |
-          set -euo pipefail
-          helpers=(wgslirp-helper-"$VERSION_TAG"-linux-{amd64,arm64}.tar.gz)
-          for archive in "${helpers[@]}"; do
-            cp "../helper-dist/$archive" .
-          done
-          sha256sum --binary wgslirp-"$GITHUB_SHA"-linux-{amd64,arm64}.tar.gz \
-            wgslirp-"$GITHUB_SHA"-windows-amd64.zip "${helpers[@]}" | sed 's/ \*/  /' > SHA256SUMS
       - name: Publish a complete versioned release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          tag="$VERSION_TAG"
-          prerelease=false
-          if [[ "$tag" == *-* ]]; then prerelease=true; fi
-          printf 'Source: `%s`\n\nTested image: `%s`\n\nLinux amd64/arm64 executables extracted from tested images; Windows amd64 executable validated natively with ICMP_ECHO=false. Verify downloads with SHA256SUMS.\n' \
-            "$GITHUB_SHA" "$TESTED_IMAGE" > release-notes.txt
-          printf '\nLinux amd64 and arm64 helper archives passed native pipe and encrypted forwarding acceptance. See SOURCE.json for helper compatibility.\n' >> release-notes.txt
-          assets=(binary-dist/wgslirp-"$GITHUB_SHA"-linux-{amd64,arm64}.tar.gz
-                  binary-dist/wgslirp-"$GITHUB_SHA"-windows-amd64.zip
-                  binary-dist/wgslirp-helper-"$VERSION_TAG"-linux-{amd64,arm64}.tar.gz
-                  binary-dist/SHA256SUMS)
-          verify_remote_tag() {
-            local ref="refs/tags/$tag" refs commit
-            refs=$(GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-              ls-remote --exit-code origin "$ref" "$ref^{}")
-            commit=$(awk -v ref="$ref" '$2 == ref {target=$1} $2 == ref "^{}" {peeled=$1} END {print (peeled ? peeled : target)}' <<< "$refs")
-            if [[ "$commit" != "$GITHUB_SHA" ]]; then
-              echo 'Remote release tag differs from the tested commit' >&2
-              return 1
-            fi
-          }
-          read_draft_id() {
-            python3 - <<'PY'
-          import json
-          import sys
-          with open('draft.json') as file:
-              release = json.load(file)
-          if release['draft'] is not True:
-              sys.exit('version is already published; refusing to replace assets')
-          release_id = release['id']
-          if type(release_id) is not int or release_id <= 0:
-              sys.exit('invalid draft release ID')
-          print(release_id)
-          PY
-          }
-          verify_draft_assets() {
-            local release_id="$1"
-            shift
-            gh api --paginate --slurp "repos/$GH_REPO/releases/$release_id/assets?per_page=100" > draft-assets.json
-            python3 - "$@" <<'PY'
-          import hashlib
-          import itertools
-          import json
-          import sys
-          from pathlib import Path
-          mode, *paths = sys.argv[1:]
-          expected = {Path(path).name: Path(path) for path in paths}
-          assets = list(itertools.chain.from_iterable(json.loads(Path('draft-assets.json').read_bytes())))
-          names = {asset['name'] for asset in assets}
-          if len(names) != len(assets) or names - expected.keys():
-              sys.exit('draft contains unexpected or duplicate assets')
-          if mode == 'partial':
-              for asset in assets:
-                  asset_id = asset['id']
-                  if type(asset_id) is not int or asset_id <= 0:
-                      sys.exit('invalid draft asset ID')
-                  sys.stdout.buffer.write(f'{asset_id}\n'.encode('ascii'))
-          else:
-              if names != expected.keys():
-                  sys.exit('draft is missing expected assets')
-              for asset in assets:
-                  path = expected[asset['name']]
-                  digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                  if (asset['state'] != 'uploaded' or asset['size'] != path.stat().st_size
-                          or asset['digest'] != f'sha256:{digest}'):
-                      sys.exit(f'draft asset does not match verified file: {path.name}')
-          PY
-          }
-          verify_checked_draft() {
-            gh api "repos/$GH_REPO/releases/$draft_id" > checked-draft.json
-            python3 - "$draft_id" "$tag" <<'PY'
-          import json
-          import sys
-          with open('checked-draft.json') as file:
-              release = json.load(file)
-          if release['id'] != int(sys.argv[1]) or release['tag_name'] != sys.argv[2] or release['draft'] is not True:
-              sys.exit('checked draft is no longer available for this tag')
-          PY
-          }
-          verify_remote_tag
-          if ! gh release view "$tag" --json isDraft,databaseId \
-            --jq '{draft: .isDraft, id: .databaseId}' > draft.json 2>/dev/null; then
-            gh api --method POST "repos/$GH_REPO/releases" \
-              -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" -f name="$tag" \
-              -F draft=true -F prerelease="$prerelease" -F body=@release-notes.txt > draft.json
-          fi
-          draft_id=$(read_draft_id)
-          verify_draft_assets "$draft_id" partial "${assets[@]}" > draft-asset-ids.txt
-          verify_checked_draft
-          while IFS= read -r asset_id; do
-            gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id" --silent
-          done < draft-asset-ids.txt
-          for path in "${assets[@]}"; do
-            name="${path##*/}"
-            printf 'Authorization: Bearer %s\n' "$GH_TOKEN" | curl --fail-with-body --silent --show-error \
-              --header @- --header 'Content-Type: application/octet-stream' --data-binary "@$path" \
-              --output /dev/null "https://uploads.github.com/repos/$GH_REPO/releases/$draft_id/assets?name=$name"
-          done
-          verify_checked_draft
-          verify_draft_assets "$draft_id" complete "${assets[@]}"
-          verify_remote_tag
-          gh api --method PATCH "repos/$GH_REPO/releases/$draft_id" --silent \
-            -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" -F draft=false \
-            -F prerelease="$prerelease" -f make_latest=false -F body=@release-notes.txt
-          printf '### Binary release\n\nhttps://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"
+        run: bash tools/ci/publish-binary-release.sh standalone
 
   docker:
     needs: test

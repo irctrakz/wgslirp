@@ -45,8 +45,9 @@ recorded by the successful promotion run rather than the moving `latest` tag.
 
 ## Downloadable binaries
 
-Version-tag pushes (`vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-SUFFIX`) run the
-same full acceptance pipeline. The tagged commit must belong to `master`.
+Standalone version-tag pushes (`vMAJOR.MINOR.PATCH` or
+`vMAJOR.MINOR.PATCH-SUFFIX`) run the standalone acceptance pipeline. The
+tagged commit must belong to `master`.
 Both native image-test jobs extract `/usr/local/bin/wgslirp` from their tested
 immutable image, check ELF architecture and absence of a dynamic interpreter,
 and package it with `LICENSE` and `SOURCE.json`. Linux executables are not rebuilt
@@ -82,9 +83,15 @@ are supplied by the container runtime and are not embedded in the binary.
 
 ### Linux helper for supervised integrations
 
-Use `wgslirp-helper-<version>-linux-amd64.tar.gz` or
-`wgslirp-helper-<version>-linux-arm64.tar.gz` from the same versioned release.
-Verify the archive against `SHA256SUMS`. The archive contains the executable,
+Helper releases use `helper-vMAJOR.MINOR.PATCH` or
+`helper-vMAJOR.MINOR.PATCH-SUFFIX` tags on commits that belong to `master`.
+They have a separate GitHub Release and require native amd64 and ARM64 helper
+acceptance against the exact packaged binaries. Standalone image and binary
+publication uses its own `v…` tag and gates.
+
+For `helper-v1.2.3`, download `wgslirp-helper-v1.2.3-linux-amd64.tar.gz` or
+`wgslirp-helper-v1.2.3-linux-arm64.tar.gz` and verify it against that release's
+`SHA256SUMS`. The archive contains the executable,
 license and `SOURCE.json` with the source commit, binary SHA-256, platform,
 binary version, protocol versions and capabilities.
 
