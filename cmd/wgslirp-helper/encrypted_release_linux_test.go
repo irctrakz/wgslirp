@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	wgdevice "golang.zx2c4.com/wireguard/device"
+
 	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"github.com/irctrakz/wgslirp/pkg/core"
 	"github.com/irctrakz/wgslirp/pkg/socket"
@@ -197,6 +199,10 @@ func TestEncryptedHelperRelease(t *testing.T) {
 	defer relay.Close()
 	probe := func(revoked bool) {
 		t.Helper()
+		// Each probe reuses the active peer's key. Wait past the responder's
+		// flood window and the shorter TAI64N timestamp rounding interval
+		// before generating a new initiation, including after revocation.
+		time.Sleep(2 * wgdevice.HandshakeInitationRate)
 		fresh, err := wg.NewWGTunWithConfig("fresh-guest", 1380, make(releaseReplies, 16), wg.DefaultTunConfig())
 		if err != nil {
 			t.Fatal(err)

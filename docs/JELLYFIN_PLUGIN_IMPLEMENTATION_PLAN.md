@@ -946,8 +946,31 @@ binary's version. It passed on rerun.
 - [x] W7 code approved at `91b785d`, including the draft creation regression.
 - [ ] Run the branch acceptance workflow on the native Linux ARM64 runner
   and record the job and evidence before release review.
+- The first [branch acceptance run](https://github.com/irctrakz/wgslirp/actions/runs/43950321517)
+  passed the shared CI and native pipe tests. The encrypted test timed out on
+  the authorized handshake probe on both Linux runners. The probe reused the
+  forwarding peer's key soon enough to hit WireGuard's flood and replay
+  safeguards. The test now spaces both probes beyond that window. The
+  release helper and its assertions are unchanged.
 
 Tagged publication and final cross-platform acceptance remain open.
+
+**W7 security review**
+
+- A pattern scan of the tracked checkout and 1,534 blobs reachable from local
+  Git refs found no live credential in the integration branch. Current
+  WireGuard-sized literals appear in tests and protocol fixtures. The other
+  base64 matches are Go dependency checksums. The credential-looking URL is
+  part of the standalone log redaction regression.
+- The local `backup/pre-squash` history retains two example WireGuard private
+  key values, a packet capture, and obsolete binaries. These are outside the
+  histories reachable from the integration branch and `origin/master`. The
+  review could not establish whether the example keys were ever used outside
+  the examples.
+- The helper status path reads WireGuard configuration internally, derives
+  the server public key, and emits a typed status response. Configuration
+  failures use protocol error codes. Live CI credentials come from GitHub
+  Actions secrets.
 
 **Maintainability review**
 
@@ -962,6 +985,11 @@ Tagged publication and final cross-platform acceptance remain open.
 - The v1 schema and Go decoder both express parts of the wire contract.
   The fixtures and executable handshake assertions check drift, including the
   capability list used in release metadata.
+- Two follow-ups identified in the W7 review are to move the publication shell
+  step to a script that CI and the stubbed tests can invoke directly, and to
+  share the restricted peer limit across Go parsing, validation, live updates
+  and status. The protocol schema remains covered by the compatibility
+  fixtures. No refactoring was done during this review.
 
 ## Repository 2: Jellyfin plugin
 
