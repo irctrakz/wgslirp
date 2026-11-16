@@ -56,6 +56,10 @@ After all image/workload gates and image promotion pass, the workflow publishes
 Linux amd64/arm64 tar archives, a Windows amd64 ZIP and `SHA256SUMS` on a
 versioned GitHub Release. Suffix tags produce prereleases. Assets are uploaded to a draft before publication; an already
 published version is never overwritten. Reruns may finish an incomplete draft.
+Publication stops if a draft contains unexpected assets or its inventory
+differs from the verified upload set. A partial workflow rerun reuses
+successful artifacts from the same run while replacing artifacts produced
+again by rerun jobs.
 Version tags also publish the tested container index under the version tag;
 they do not change the container's `latest` tag. GitHub Release publication does
 not change the repository's existing latest-release designation.
@@ -91,8 +95,11 @@ compatibility before sending configuration. Follow the
 
 The helper publication gate runs the exact Linux amd64 and arm64 binaries
 natively. It covers pipe lifecycle and encrypted TCP mapping through live
-peer addition, revocation and stop. Windows and macOS helper CI cross-builds
-amd64 and arm64. Linux is the helper release matrix.
+peer addition, revocation and stop, including unmapped traffic and a fresh
+handshake with a revoked key. The publication job checks the binary hash, source
+revision, and negotiated compatibility against the native acceptance record.
+Windows and macOS helper CI cross-builds amd64 and arm64. Linux is the helper
+release matrix.
 
 ### Windows amd64
 

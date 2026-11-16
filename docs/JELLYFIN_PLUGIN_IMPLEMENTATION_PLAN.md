@@ -854,7 +854,33 @@ versioned run exposed a test expectation mismatch for injected subprocesses.
 The corrected suite distinguishes the built helper's version from the test
 binary's version. It passed on rerun.
 
-W7 is ready for implementation review. The native ARM64 GitHub runner and an
+**W7 review fixes**
+
+- Native acceptance records the exact executable SHA-256, clean Go VCS
+  revision, platform, and version, protocol and capabilities observed over
+  `hello`. Packaging and publication compare archive contents against that
+  record. A correctly checksummed substitute is rejected by the regression.
+- Release inputs have stable names scoped to one workflow run. The rerun
+  regression models a replaced ARM64 result alongside successful artifacts
+  retained from a previous attempt. Both helper and standalone release
+  inputs use these names.
+- The draft inventory is checked before resuming and again after upload.
+  Unexpected, duplicate or missing assets prevent publication. Local CLI
+  stubs exercise stale and incomplete inventories as well as upload failures.
+- Encrypted acceptance now observes the built helper deny a direct attempt
+  to the unmapped host endpoint. It also forwards a fresh WireGuard
+  initiation through the same UDP probe before and after revocation and
+  requires a response only while the key is authorized.
+- All 13 local release-control tests and 100 shared protocol cases passed.
+  Windows integration tests and vet passed. The clean, versioned Linux
+  amd64 helper passed encrypted acceptance, lifecycle and pipe checks in
+  the unprivileged VM, alongside standalone SIGTERM and runtime and socket
+  checks. Linux integration vet, release shell syntax, and the Linux ARM64
+  helper and acceptance-test cross-build passed. The AMD64 archive packaged
+  successfully against the VM's evidence, and a separate unversioned build
+  was rejected against the same record.
+
+W7 is ready for another review. The native ARM64 GitHub runner and an
 actual tagged publication remain unverified. The Linux release checkbox stays
 open until native evidence exists for both architectures. Final cross-platform
 acceptance remains open.
