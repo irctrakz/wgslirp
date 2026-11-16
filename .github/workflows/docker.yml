@@ -701,7 +701,13 @@ jobs:
           names = {asset['name'] for asset in assets}
           if len(names) != len(assets) or names - expected.keys():
               sys.exit('draft contains unexpected or duplicate assets')
-          if mode == 'complete':
+          if mode == 'partial':
+              for asset in assets:
+                  asset_id = asset['id']
+                  if type(asset_id) is not int or asset_id <= 0:
+                      sys.exit('invalid draft asset ID')
+                  sys.stdout.buffer.write(f'{asset_id}\n'.encode('ascii'))
+          else:
               if names != expected.keys():
                   sys.exit('draft is missing expected assets')
               for asset in assets:
@@ -712,20 +718,39 @@ jobs:
                       sys.exit(f'draft asset does not match verified file: {path.name}')
           PY
           }
+          verify_checked_draft() {
+            gh api "repos/$GH_REPO/releases/$draft_id" > checked-draft.json
+            python3 - "$draft_id" "$tag" <<'PY'
+          import json
+          import sys
+          with open('checked-draft.json') as file:
+              release = json.load(file)
+          if release['id'] != int(sys.argv[1]) or release['tag_name'] != sys.argv[2] or release['draft'] is not True:
+              sys.exit('checked draft is no longer available for this tag')
+          PY
+          }
           verify_remote_tag
-          if gh release view "$tag" --json isDraft,databaseId > existing-release.json 2>/dev/null; then
-            draft_id=$(read_draft_id)
-            verify_draft_assets "$draft_id" partial "${assets[@]}"
-          else
+          if ! gh release view "$tag" --json isDraft,databaseId > existing-release.json 2>/dev/null; then
             gh release create "$tag" --verify-tag --draft --title "$tag" \
               --notes-file release-notes.txt --prerelease="$prerelease"
+            gh release view "$tag" --json isDraft,databaseId > existing-release.json
           fi
-          gh release upload "$tag" "${assets[@]}" --clobber
-          gh release view "$tag" --json isDraft,databaseId > existing-release.json
-          verified_release_id=$(read_draft_id)
-          verify_draft_assets "$verified_release_id" complete "${assets[@]}"
+          draft_id=$(read_draft_id)
+          verify_draft_assets "$draft_id" partial "${assets[@]}" > draft-asset-ids.txt
+          verify_checked_draft
+          while IFS= read -r asset_id; do
+            gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id" --silent
+          done < draft-asset-ids.txt
+          for path in "${assets[@]}"; do
+            name="${path##*/}"
+            printf 'Authorization: Bearer %s\n' "$GH_TOKEN" | curl --fail-with-body --silent --show-error \
+              --header @- --header 'Content-Type: application/octet-stream' --data-binary "@$path" \
+              --output /dev/null "https://uploads.github.com/repos/$GH_REPO/releases/$draft_id/assets?name=$name"
+          done
+          verify_checked_draft
+          verify_draft_assets "$draft_id" complete "${assets[@]}"
           verify_remote_tag
-          gh api --method PATCH "repos/$GH_REPO/releases/$verified_release_id" --silent \
+          gh api --method PATCH "repos/$GH_REPO/releases/$draft_id" --silent \
             -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" -F draft=false \
             -F prerelease="$prerelease" -f make_latest=false -F body=@release-notes.txt
           printf '### Binary release\n\nhttps://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"

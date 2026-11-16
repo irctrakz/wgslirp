@@ -259,7 +259,7 @@ class HelperPackageTests(unittest.TestCase):
 
 class ReleasePublicationTests(unittest.TestCase):
     def run_release(self, state='absent', upload_exit=0, tag='v1.2.3', inventory=None,
-                    asset_fault=None, remote_tag='lightweight', replace_draft=False):
+                    asset_fault=None, remote_tag='lightweight', replace_draft=''):
         bash = workflow_bash(self)
         stub = r'''
 git() {
@@ -281,15 +281,28 @@ git() {
 gh() {
   [ -f calls.txt ] || touch calls.txt
   if [ "$1" = api ]; then
-    if [ "$2" = --method ] && [ "$3" = PATCH ]; then
+    if [ "$2" = --method ]; then
       printf '%s\n' "$*" >> calls.txt
-      # At publication the tag can point to ID 456 and the verified ID
-      # 123 can have been deleted. A PATCH of 123 must then fail.
-      if [ "$REPLACE_DRAFT" = true ]; then
-        [[ "$4" == "repos/$GH_REPO/releases/456" ]]
-      else
-        [[ "$4" == "repos/$GH_REPO/releases/123" ]]
-      fi
+      case "$3" in
+        DELETE)
+          if [ "$REPLACE_DRAFT" = delete ]; then
+            # ID 321 was on draft 123. Replacement draft 456 has asset 654.
+            [[ "$4" == "repos/$GH_REPO/releases/assets/654" ]]
+          else
+            [[ "$4" == "repos/$GH_REPO/releases/assets/321" ]]
+          fi
+          return ;;
+        PATCH)
+          if [ "$REPLACE_DRAFT" = publish ]; then
+            [[ "$4" == "repos/$GH_REPO/releases/456" ]]
+          else
+            [[ "$4" == "repos/$GH_REPO/releases/123" ]]
+          fi
+          return ;;
+      esac
+    fi
+    if [ "$2" = "repos/$GH_REPO/releases/123" ]; then
+      printf '{"id":123,"tag_name":"%s","draft":true}\n' "$VERSION_TAG"
       return
     fi
     [[ "$*" == *"repos/$GH_REPO/releases/123/assets?per_page=100" ]] || return 99
@@ -300,17 +313,32 @@ gh() {
   case "$2" in
     view)
       if [ -f uploaded ]; then cat uploaded.json;
-      elif [ "$RELEASE_STATE" = absent ]; then return 1;
+      elif [ "$RELEASE_STATE" = absent ] && [ ! -f created ]; then return 1;
       else cat initial.json; fi ;;
-    create) return 0 ;;
+    create) touch created ;;
     upload)
-      if [ "$UPLOAD_EXIT" != 0 ]; then return "$UPLOAD_EXIT"; fi
-      touch uploaded ;;
+      if [[ "$REPLACE_DRAFT" == delete || "$REPLACE_DRAFT" == upload ]]; then
+        printf 'modified replacement 456\n' >> calls.txt
+      fi
+      return 99 ;;
     edit)
-      if [ "$REPLACE_DRAFT" = true ]; then printf 'published replacement 456\n' >> calls.txt; fi
+      if [ "$REPLACE_DRAFT" = publish ]; then printf 'published replacement 456\n' >> calls.txt; fi
       return 0 ;;
     *) return 99 ;;
   esac
+}
+curl() {
+  local url="${!#}" auth
+  IFS= read -r auth
+  [[ "$auth" == 'Authorization: Bearer test-token' ]] || return 99
+  printf 'upload %s\n' "$url" >> calls.txt
+  if [ "$REPLACE_DRAFT" = upload ]; then
+    [[ "$url" == "https://uploads.github.com/repos/$GH_REPO/releases/456/assets?name="* ]]
+    return
+  fi
+  [[ "$url" == "https://uploads.github.com/repos/$GH_REPO/releases/123/assets?name="* ]] || return 99
+  if [ "$UPLOAD_EXIT" != 0 ]; then return "$UPLOAD_EXIT"; fi
+  touch uploaded
 }
 python3() { "$TEST_PYTHON" "$@"; }
 '''
@@ -322,10 +350,10 @@ python3() { "$TEST_PYTHON" "$@"; }
                      f'wgslirp-helper-{tag}-linux-arm64.tar.gz', 'SHA256SUMS']
             for filename in names:
                 (path / 'binary-dist' / filename).write_text('test-only')
-            initial = ['stale-helper.tar.gz'] if state == 'extra' else names[:1]
+            initial = ['stale-helper.tar.gz'] if state == 'extra' else names[:1] if state == 'draft' else []
             (path / 'initial.json').write_text(json.dumps({'isDraft': state != 'published', 'databaseId': 123}))
             (path / 'uploaded.json').write_text(json.dumps({'isDraft': True, 'databaseId': 123}))
-            (path / 'initial-assets.json').write_text(json.dumps([[{'name': name} for name in initial]]))
+            (path / 'initial-assets.json').write_text(json.dumps([[{'name': name, 'id': 321} for name in initial]]))
             uploaded = []
             for name in (names if inventory is None else inventory):
                 data = (path / 'binary-dist' / name).read_bytes()
@@ -337,7 +365,7 @@ python3() { "$TEST_PYTHON" "$@"; }
             env = os.environ | {'RELEASE_STATE': state, 'UPLOAD_EXIT': str(upload_exit),
                                 'VERSION_TAG': tag, 'GITHUB_SHA': 'abc',
                                 'REMOTE_TAG': remote_tag, 'GH_REPO': 'example/test-only',
-                                'REPLACE_DRAFT': 'true' if replace_draft else 'false',
+                                'REPLACE_DRAFT': replace_draft, 'GH_TOKEN': 'test-token',
                                 'TESTED_IMAGE': 'test@sha256:abc',
                                 'GITHUB_REPOSITORY': 'example/test-only',
                                 'GITHUB_STEP_SUMMARY': 'summary.txt',
@@ -349,10 +377,15 @@ python3() { "$TEST_PYTHON" "$@"; }
             calls = log.read_text().splitlines() if log.exists() else []
             return result.returncode, calls
 
+    @staticmethod
+    def operations(calls):
+        return [line.split()[2].lower() if line.startswith('api --method ') else
+                line.split()[1] if line.startswith('release ') else line.split()[0] for line in calls]
+
     def test_new_release_stays_draft_until_upload_succeeds(self):
         result, calls = self.run_release()
         self.assertEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'create', 'upload', 'view', '--method'])
+        self.assertEqual(self.operations(calls), ['view', 'create', 'view'] + ['upload'] * 6 + ['patch'])
         self.assertIn('--draft', calls[1])
         self.assertIn('--verify-tag', calls[1])
         self.assertIn('api --method PATCH repos/example/test-only/releases/123 ', calls[-1])
@@ -363,7 +396,7 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_upload_failure_never_publishes(self):
         result, calls = self.run_release(upload_exit=1)
         self.assertNotEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'create', 'upload'])
+        self.assertEqual(self.operations(calls), ['view', 'create', 'view', 'upload'])
 
     def test_published_version_is_never_overwritten(self):
         result, calls = self.run_release(state='published')
@@ -373,39 +406,52 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_incomplete_draft_can_be_resumed(self):
         result, calls = self.run_release(state='draft')
         self.assertEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view', '--method'])
+        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 6 + ['patch'])
+        self.assertIn('api --method DELETE repos/example/test-only/releases/assets/321 ', calls[1])
+        self.assertTrue(all('releases/123/assets?name=' in call for call in calls[2:-1]))
 
     def test_replaced_draft_is_never_published(self):
-        result, calls = self.run_release(state='draft', replace_draft=True)
+        result, calls = self.run_release(state='draft', replace_draft='publish')
         self.assertNotEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view', '--method'])
+        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 6 + ['patch'])
         self.assertTrue(calls[-1].startswith('api --method PATCH repos/example/test-only/releases/123 '))
         self.assertFalse(any('456' in call for call in calls))
+
+    def test_replacement_before_upload_does_not_redirect_asset_mutations(self):
+        for point, state, expected, target in (
+                ('delete', 'draft', ['view', 'delete'], 'releases/assets/321'),
+                ('upload', 'absent', ['view', 'create', 'view', 'upload'], 'releases/123/assets?name=')):
+            with self.subTest(point=point):
+                result, calls = self.run_release(state=state, replace_draft=point)
+                self.assertNotEqual(result, 0)
+                self.assertEqual(self.operations(calls), expected)
+                self.assertIn(target, calls[-1])
+                self.assertFalse(any('456' in call or '654' in call for call in calls))
 
     def test_stale_draft_asset_blocks_upload_and_publication(self):
         result, calls = self.run_release(state='extra')
         self.assertNotEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view'])
+        self.assertEqual(self.operations(calls), ['view'])
 
     def test_remote_inventory_must_match_after_upload(self):
         result, calls = self.run_release(state='draft', inventory=['SHA256SUMS'])
         self.assertNotEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view'])
+        self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 6)
 
     def test_same_name_asset_with_wrong_state_size_or_digest_blocks_publication(self):
         for fault in ({'state': 'starter'}, {'size': 0}, {'digest': 'sha256:' + '0' * 64}):
             with self.subTest(fault=fault):
                 result, calls = self.run_release(state='draft', asset_fault=fault)
                 self.assertNotEqual(result, 0)
-                self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view'])
+                self.assertEqual(self.operations(calls), ['view', 'delete'] + ['upload'] * 6)
 
     def test_moved_or_deleted_tag_cannot_publish(self):
         for state in ('moved', 'deleted', 'moved-after-upload', 'deleted-after-upload'):
             with self.subTest(state=state):
                 result, calls = self.run_release(state='draft', remote_tag=state)
                 self.assertNotEqual(result, 0)
-                expected = ['view', 'upload', 'view'] if state.endswith('after-upload') else []
-                self.assertEqual([line.split()[1] for line in calls], expected)
+                expected = ['view', 'delete'] + ['upload'] * 6 if state.endswith('after-upload') else []
+                self.assertEqual(self.operations(calls), expected)
 
     def test_annotated_tag_resolves_to_the_tested_commit(self):
         result, calls = self.run_release(remote_tag='annotated')

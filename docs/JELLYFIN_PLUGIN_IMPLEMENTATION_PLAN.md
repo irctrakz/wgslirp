@@ -915,6 +915,19 @@ binary's version. It passed on rerun.
   The publication shell passed Bash syntax validation. The publication
   tests used a stubbed CLI.
 
+**W7 upload and asset replacement**
+
+- Uploads target the checked draft's numeric release ID. Replacement deletes
+  only asset IDs from that draft's checked inventory. Final asset verification
+  and publication use the same release ID.
+- Stubbed regressions replace the draft immediately before asset deletion on
+  resume and immediately before the first upload on a fresh draft. Each run
+  stops after its original target disappears and leaves the replacement draft
+  and its assets untouched.
+- All 19 local release-control tests, 100 shared protocol cases, publication
+  Bash syntax, and `git diff --check` passed. The release endpoints were
+  stubbed.
+
 W7 is ready for another review. The native ARM64 GitHub runner and an
 actual tagged publication remain unverified. The Linux release checkbox stays
 open until native evidence exists for both architectures. Final cross-platform
