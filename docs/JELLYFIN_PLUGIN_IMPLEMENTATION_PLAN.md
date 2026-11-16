@@ -928,6 +928,19 @@ binary's version. It passed on rerun.
   Bash syntax, and `git diff --check` passed. The release endpoints were
   stubbed.
 
+**W7 draft creation**
+
+- A fresh release uses the numeric ID returned by the draft creation API.
+  A resumed release uses the ID from the initial tag lookup. Both paths use
+  that ID for inventory checks, uploads, and publication. Remote tag checks
+  still run before handling the draft and before publication.
+- The stubbed regression swaps the draft immediately after creation. The
+  workflow stops when inventory for the original ID is unavailable, before
+  deleting or uploading any assets or attempting publication. Restoring the
+  second tag lookup in memory sent uploads and publication to the replacement.
+- All 20 local release-control tests, 100 shared protocol cases, publication
+  Bash syntax, and `git diff --check` passed with stubbed release endpoints.
+
 W7 is ready for another review. The native ARM64 GitHub runner and an
 actual tagged publication remain unverified. The Linux release checkbox stays
 open until native evidence exists for both architectures. Final cross-platform

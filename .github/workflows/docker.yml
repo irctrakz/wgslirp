@@ -675,11 +675,11 @@ jobs:
             python3 - <<'PY'
           import json
           import sys
-          with open('existing-release.json') as file:
+          with open('draft.json') as file:
               release = json.load(file)
-          if release['isDraft'] is not True:
+          if release['draft'] is not True:
               sys.exit('version is already published; refusing to replace assets')
-          release_id = release['databaseId']
+          release_id = release['id']
           if type(release_id) is not int or release_id <= 0:
               sys.exit('invalid draft release ID')
           print(release_id)
@@ -730,10 +730,11 @@ jobs:
           PY
           }
           verify_remote_tag
-          if ! gh release view "$tag" --json isDraft,databaseId > existing-release.json 2>/dev/null; then
-            gh release create "$tag" --verify-tag --draft --title "$tag" \
-              --notes-file release-notes.txt --prerelease="$prerelease"
-            gh release view "$tag" --json isDraft,databaseId > existing-release.json
+          if ! gh release view "$tag" --json isDraft,databaseId \
+            --jq '{draft: .isDraft, id: .databaseId}' > draft.json 2>/dev/null; then
+            gh api --method POST "repos/$GH_REPO/releases" \
+              -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" -f name="$tag" \
+              -F draft=true -F prerelease="$prerelease" -F body=@release-notes.txt > draft.json
           fi
           draft_id=$(read_draft_id)
           verify_draft_assets "$draft_id" partial "${assets[@]}" > draft-asset-ids.txt

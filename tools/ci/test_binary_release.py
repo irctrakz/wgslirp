@@ -279,11 +279,18 @@ git() {
   fi
 }
 gh() {
+  local release_id=123
+  if [ "$REPLACE_DRAFT" = create ] && [ -f created ]; then release_id=456; fi
   [ -f calls.txt ] || touch calls.txt
   if [ "$1" = api ]; then
     if [ "$2" = --method ]; then
       printf '%s\n' "$*" >> calls.txt
       case "$3" in
+        POST)
+          [[ "$4" == "repos/$GH_REPO/releases" ]] || return 99
+          touch created
+          printf '{"id":123,"tag_name":"%s","draft":true}\n' "$VERSION_TAG"
+          return ;;
         DELETE)
           if [ "$REPLACE_DRAFT" = delete ]; then
             # ID 321 was on draft 123. Replacement draft 456 has asset 654.
@@ -296,26 +303,26 @@ gh() {
           if [ "$REPLACE_DRAFT" = publish ]; then
             [[ "$4" == "repos/$GH_REPO/releases/456" ]]
           else
-            [[ "$4" == "repos/$GH_REPO/releases/123" ]]
+            [[ "$4" == "repos/$GH_REPO/releases/$release_id" ]]
           fi
           return ;;
       esac
     fi
-    if [ "$2" = "repos/$GH_REPO/releases/123" ]; then
-      printf '{"id":123,"tag_name":"%s","draft":true}\n' "$VERSION_TAG"
+    if [ "$2" = "repos/$GH_REPO/releases/$release_id" ]; then
+      printf '{"id":%s,"tag_name":"%s","draft":true}\n' "$release_id" "$VERSION_TAG"
       return
     fi
-    [[ "$*" == *"repos/$GH_REPO/releases/123/assets?per_page=100" ]] || return 99
+    if [ "$REPLACE_DRAFT" = create ]; then printf 'inventory %s\n' "$*" >> calls.txt; fi
+    [[ "$*" == *"repos/$GH_REPO/releases/$release_id/assets?per_page=100" ]] || return 99
     if [ -f uploaded ]; then cat uploaded-assets.json; else cat initial-assets.json; fi
     return
   fi
   printf '%s\n' "$*" >> calls.txt
   case "$2" in
     view)
-      if [ -f uploaded ]; then cat uploaded.json;
-      elif [ "$RELEASE_STATE" = absent ] && [ ! -f created ]; then return 1;
+      if [ "$RELEASE_STATE" = absent ] && [ ! -f created ]; then return 1;
+      elif [ "$release_id" = 456 ]; then printf '{"draft":true,"id":456}\n';
       else cat initial.json; fi ;;
-    create) touch created ;;
     upload)
       if [[ "$REPLACE_DRAFT" == delete || "$REPLACE_DRAFT" == upload ]]; then
         printf 'modified replacement 456\n' >> calls.txt
@@ -328,15 +335,14 @@ gh() {
   esac
 }
 curl() {
-  local url="${!#}" auth
+  local url="${!#}" auth release_id=123
   IFS= read -r auth
   [[ "$auth" == 'Authorization: Bearer test-token' ]] || return 99
   printf 'upload %s\n' "$url" >> calls.txt
-  if [ "$REPLACE_DRAFT" = upload ]; then
-    [[ "$url" == "https://uploads.github.com/repos/$GH_REPO/releases/456/assets?name="* ]]
-    return
+  if [[ "$REPLACE_DRAFT" == create || "$REPLACE_DRAFT" == upload ]]; then
+    release_id=456
   fi
-  [[ "$url" == "https://uploads.github.com/repos/$GH_REPO/releases/123/assets?name="* ]] || return 99
+  [[ "$url" == "https://uploads.github.com/repos/$GH_REPO/releases/$release_id/assets?name="* ]] || return 99
   if [ "$UPLOAD_EXIT" != 0 ]; then return "$UPLOAD_EXIT"; fi
   touch uploaded
 }
@@ -351,8 +357,7 @@ python3() { "$TEST_PYTHON" "$@"; }
             for filename in names:
                 (path / 'binary-dist' / filename).write_text('test-only')
             initial = ['stale-helper.tar.gz'] if state == 'extra' else names[:1] if state == 'draft' else []
-            (path / 'initial.json').write_text(json.dumps({'isDraft': state != 'published', 'databaseId': 123}))
-            (path / 'uploaded.json').write_text(json.dumps({'isDraft': True, 'databaseId': 123}))
+            (path / 'initial.json').write_text(json.dumps({'draft': state != 'published', 'id': 123}))
             (path / 'initial-assets.json').write_text(json.dumps([[{'name': name, 'id': 321} for name in initial]]))
             uploaded = []
             for name in (names if inventory is None else inventory):
@@ -385,9 +390,11 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_new_release_stays_draft_until_upload_succeeds(self):
         result, calls = self.run_release()
         self.assertEqual(result, 0)
-        self.assertEqual(self.operations(calls), ['view', 'create', 'view'] + ['upload'] * 6 + ['patch'])
-        self.assertIn('--draft', calls[1])
-        self.assertIn('--verify-tag', calls[1])
+        self.assertEqual(self.operations(calls), ['view', 'post'] + ['upload'] * 6 + ['patch'])
+        self.assertTrue(calls[1].startswith('api --method POST repos/example/test-only/releases '))
+        for field in ('-f tag_name=v1.2.3', '-f target_commitish=abc', '-f name=v1.2.3',
+                      '-F draft=true', '-F prerelease=false', '-F body=@release-notes.txt'):
+            self.assertIn(field, calls[1])
         self.assertIn('api --method PATCH repos/example/test-only/releases/123 ', calls[-1])
         for field in ('-f tag_name=v1.2.3', '-f target_commitish=abc', '-F draft=false',
                       '-F prerelease=false', '-f make_latest=false', '-F body=@release-notes.txt'):
@@ -396,7 +403,14 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_upload_failure_never_publishes(self):
         result, calls = self.run_release(upload_exit=1)
         self.assertNotEqual(result, 0)
-        self.assertEqual(self.operations(calls), ['view', 'create', 'view', 'upload'])
+        self.assertEqual(self.operations(calls), ['view', 'post', 'upload'])
+
+    def test_replacement_immediately_after_creation_is_untouched(self):
+        result, calls = self.run_release(replace_draft='create')
+        self.assertNotEqual(result, 0)
+        self.assertEqual(self.operations(calls), ['view', 'post', 'inventory'])
+        self.assertIn('releases/123/assets?per_page=100', calls[-1])
+        self.assertFalse(any('456' in call for call in calls))
 
     def test_published_version_is_never_overwritten(self):
         result, calls = self.run_release(state='published')
@@ -420,7 +434,7 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_replacement_before_upload_does_not_redirect_asset_mutations(self):
         for point, state, expected, target in (
                 ('delete', 'draft', ['view', 'delete'], 'releases/assets/321'),
-                ('upload', 'absent', ['view', 'create', 'view', 'upload'], 'releases/123/assets?name=')):
+                ('upload', 'absent', ['view', 'post', 'upload'], 'releases/123/assets?name=')):
             with self.subTest(point=point):
                 result, calls = self.run_release(state=state, replace_draft=point)
                 self.assertNotEqual(result, 0)
@@ -461,6 +475,7 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_suffix_tag_creates_prerelease(self):
         result, calls = self.run_release(tag='v1.2.3-rc.1')
         self.assertEqual(result, 0)
+        self.assertIn('-F prerelease=true', calls[1])
         self.assertIn('-F prerelease=true', calls[-1])
 
 
