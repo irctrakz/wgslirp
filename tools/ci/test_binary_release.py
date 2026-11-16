@@ -19,6 +19,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / '.github/workflows/docker.yml'
 HELPER_WORKFLOW = WORKFLOW.with_name('helper-release.yml')
+GO_WORKFLOW = WORKFLOW.with_name('go.yml')
+GO_SHARED_PACKAGES = ROOT / 'tools/ci/go-shared-packages.txt'
 PUBLISHER = ROOT / 'tools/ci/publish-binary-release.sh'
 SOURCE_VALIDATION = ROOT / 'tools/ci/validate-release-source.sh'
 
@@ -27,8 +29,8 @@ def checksum_sidecar(path):
     return f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n'.encode()
 
 
-def run_block(name):
-    lines = WORKFLOW.read_text(encoding='utf-8').splitlines()
+def run_block(name, workflow=WORKFLOW):
+    lines = workflow.read_text(encoding='utf-8').splitlines()
     start = lines.index('      - name: ' + name)
     start = lines.index('        run: |', start) + 1
     block = []
@@ -54,7 +56,30 @@ def workflow_bash(test):
     return bash
 
 
+def assert_partial_rerun_artifacts(test, path, job, expected):
+    workflow = path.read_text(encoding='utf-8')
+    release = workflow.split(f'\n  {job}:\n', 1)[1].split('\n  docker:', 1)[0]
+    patterns = re.findall(r"pattern: '([^']+)'", release)
+    # An ARM64 retry must replace its own artifacts and keep prior successes.
+    templates = re.findall(r"name: '((?:helper-(?:binaries|acceptance)|binaries)-[^']+)'\n\s+overwrite: true", workflow)
+    test.assertEqual(len(templates), 2)
+    available = {}
+    for template in templates:
+        for arch in (('amd64', 'arm64') if 'matrix.arch' in template else ('amd64',)):
+            name = template.replace('${{ matrix.arch }}', arch)
+            available[name.replace('${{ github.run_attempt }}', '1')] = 1
+            if arch == 'arm64':
+                available[name.replace('${{ github.run_attempt }}', '2')] = 2
+    selected = {name: attempt for name, attempt in available.items()
+                if any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)}
+    test.assertEqual(selected, {name: 2 if name.endswith('-arm64') else 1 for name in expected})
+
+
 class BinaryPackageTests(unittest.TestCase):
+    def test_partial_rerun_reuses_standalone_artifacts(self):
+        assert_partial_rerun_artifacts(self, WORKFLOW, 'release-binaries',
+                                       {'binaries-amd64', 'binaries-arm64', 'binaries-windows-amd64'})
+
     def test_standalone_verification_rejects_misdirected_sidecar(self):
         bash = workflow_bash(self)
         with tempfile.TemporaryDirectory() as directory:
@@ -249,29 +274,10 @@ class HelperPackageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'artifact set'):
                 helper_release.verify(dist, source, version, evidence)
 
-    def test_partial_rerun_reuses_successful_artifacts_from_same_run(self):
-        for path, job, expected in (
-                (WORKFLOW, 'release-binaries', {'binaries-amd64', 'binaries-arm64', 'binaries-windows-amd64'}),
-                (HELPER_WORKFLOW, 'release-helper', {'helper-binaries-amd64', 'helper-binaries-arm64',
-                                                     'helper-acceptance-amd64', 'helper-acceptance-arm64'})):
-            with self.subTest(job=job):
-                workflow = path.read_text(encoding='utf-8')
-                release = workflow.split(f'\n  {job}:\n', 1)[1].split('\n  docker:', 1)[0]
-                patterns = re.findall(r"pattern: '([^']+)'", release)
-                # Model one matrix cell rerunning while other producers retain
-                # their prior success. A retry must replace the same artifact.
-                templates = re.findall(r"name: '((?:helper-(?:binaries|acceptance)|binaries)-[^']+)'\n\s+overwrite: true", workflow)
-                self.assertEqual(len(templates), 2)
-                available = {}
-                for template in templates:
-                    for arch in (('amd64', 'arm64') if 'matrix.arch' in template else ('amd64',)):
-                        name = template.replace('${{ matrix.arch }}', arch)
-                        available[name.replace('${{ github.run_attempt }}', '1')] = 1
-                        if arch == 'arm64':
-                            available[name.replace('${{ github.run_attempt }}', '2')] = 2
-                selected = {name: attempt for name, attempt in available.items()
-                            if any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)}
-                self.assertEqual(selected, {name: 2 if name.endswith('-arm64') else 1 for name in expected})
+    def test_partial_rerun_reuses_helper_artifacts(self):
+        assert_partial_rerun_artifacts(self, HELPER_WORKFLOW, 'release-helper',
+                                       {'helper-binaries-amd64', 'helper-binaries-arm64',
+                                        'helper-acceptance-amd64', 'helper-acceptance-arm64'})
 
 
 class ReleasePublicationFixture(unittest.TestCase):
@@ -534,6 +540,62 @@ class HelperPublicationTests(ReleasePublicationFixture):
 
 
 class ReleaseRoutingTests(unittest.TestCase):
+    def test_windows_gate_vets_and_tests_only_standalone_packages(self):
+        pwsh = shutil.which('pwsh')
+        if not pwsh:
+            self.skipTest('PowerShell is required to run the Windows workflow step')
+        stub = """function go {
+          ConvertTo-Json -Compress -InputObject $args
+          if ($args[0] -eq 'build') {
+            New-Item -ItemType File binary-package/wgslirp.exe | Out-Null
+          }
+          $global:LASTEXITCODE = 0
+        }
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shared = root / 'tools/ci' / GO_SHARED_PACKAGES.name
+            shared.parent.mkdir(parents=True)
+            shutil.copyfile(GO_SHARED_PACKAGES, shared)
+            script = root / 'windows-gate.ps1'
+            script.write_text("$ErrorActionPreference = 'Stop'\n" + stub
+                              + run_block('Build and test the Windows executable'), encoding='utf-8')
+            result = subprocess.run([pwsh, '-NoProfile', '-NonInteractive', '-File', str(script)], cwd=root,
+                                    text=True, capture_output=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            build, vet, unit, integration = map(json.loads, result.stdout.splitlines())
+            self.assertEqual(build[-1], './cmd/wgslirp')
+            expected = ['./cmd/wgslirp', './cmd/stress_wg_queue', './internal/application',
+                        './internal/envconfig', './internal/packetwire', './pkg/...']
+            self.assertEqual(vet, ['vet'] + expected)
+            self.assertEqual(unit, ['test', '-timeout', '120s', '-count=1'] + expected)
+            self.assertEqual(integration[-1], './pkg/wireguard')
+            self.assertIn('^(TestReleaseBinary|TestEncryptedWireGuardTCPUDP)$', integration)
+
+    def test_helper_gate_runs_the_shared_runtime_suite_without_the_standalone_binary(self):
+        bash = workflow_bash(self)
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / 'env'
+            env = os.environ | {'GITHUB_ENV': env_file.as_posix(), 'RELEASE_SCOPE': 'helper'}
+            script = ('set -euo pipefail\n' + run_block('Select Go packages', GO_WORKFLOW)
+                      + 'export "$(cat "$GITHUB_ENV")"\n'
+                      + """go() { printf '%s\\n' "$*"; }\n"""
+                      + run_block('Build and vet', GO_WORKFLOW)
+                      + run_block('Run tests', GO_WORKFLOW)
+                      + run_block('Run integration tests', GO_WORKFLOW))
+            result = subprocess.run([bash], input=script, cwd=ROOT, env=env,
+                                    text=True, capture_output=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            packages = './internal/application ./internal/envconfig ./internal/packetwire ./pkg/... ./cmd/wgslirp-helper ./internal/helperwire'
+            self.assertEqual(result.stdout.splitlines(), [
+                f'build {packages}', f'vet {packages}', f'test -race -timeout 120s -count=1 {packages}',
+                f'test -race -tags=integration -timeout 120s -count=1 {packages}',
+            ])
+        go_workflow = GO_WORKFLOW.read_text(encoding='utf-8')
+        self.assertIn("if: env.RELEASE_SCOPE == 'helper'\n"
+                      '        run: python3 tools/ci/test_binary_release.py -v HelperPackageTests HelperPublicationTests',
+                      go_workflow)
+
     def test_tag_namespaces_and_job_dependencies_are_disjoint(self):
         standalone = WORKFLOW.read_text(encoding='utf-8')
         helper = HELPER_WORKFLOW.read_text(encoding='utf-8')
@@ -545,8 +607,13 @@ class ReleaseRoutingTests(unittest.TestCase):
         helper_jobs = helper.split('\njobs:\n', 1)[1]
         self.assertNotIn('helper-linux', standalone_jobs)
         self.assertRegex(standalone_jobs, r'(?m)^  release-binaries:\n    needs: \[promote-image, .+, windows-binary\]$')
-        self.assertEqual(re.findall(r'^  ([\w-]+):$', helper_jobs, re.MULTILINE), ['helper-linux', 'release-helper'])
-        self.assertIn('  release-helper:\n    needs: helper-linux\n', helper_jobs)
+        self.assertEqual(re.findall(r'^  ([\w-]+):$', helper_jobs, re.MULTILINE),
+                         ['test', 'helper-linux', 'helper-windows-tests', 'release-helper'])
+        self.assertIn('uses: ./.github/workflows/go.yml\n    with:\n      release-scope: helper\n', helper_jobs)
+        windows_tests = helper_jobs.split('  helper-windows-tests:\n', 1)[1].split('  release-helper:', 1)[0]
+        self.assertIn("github.ref_type == 'branch'", windows_tests)
+        self.assertIn('go test -timeout 120s -count=1 ./cmd/wgslirp-helper ./internal/helperwire', windows_tests)
+        self.assertIn('  release-helper:\n    needs: [test, helper-linux]\n', helper_jobs)
         self.assertIn("startsWith(github.ref, 'refs/tags/helper-v')", helper_jobs.split('  release-helper:', 1)[1])
 
 

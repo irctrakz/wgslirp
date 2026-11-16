@@ -76,7 +76,7 @@ func (c *controller) execute() (end completion) {
 
 func (c *controller) handle(frame object) (*response, bool) {
 	s := c.session
-	id, idOK := integer(frame["id"], 1, maxExactInteger)
+	id, idOK := parseBoundedUint(frame["id"], 1, maxExactInteger)
 	op, opOK := patterned(frame["op"], opPattern)
 	if !idOK || !opOK {
 		s.stop("invalid_frame", true)
@@ -147,7 +147,7 @@ func helloVersions(params object) (supported, valid bool) {
 	}
 	seen := make(map[uint64]bool, len(versions))
 	for _, raw := range versions {
-		version, ok := integer(raw, 1, 65535)
+		version, ok := parseBoundedUint(raw, 1, 65535)
 		if !ok || seen[version] {
 			return false, false
 		}
@@ -215,7 +215,7 @@ func (c *controller) status() (application.Status, error) {
 }
 
 func (c *controller) updatePeer(reply *response, params object) (*response, bool) {
-	expected, revOK := integer(params["expected_revision"], 0, maxExactInteger)
+	expected, revOK := parseBoundedUint(params["expected_revision"], 0, maxExactInteger)
 	var p peer
 	var ok bool
 	if reply.Op == "peer_add" {

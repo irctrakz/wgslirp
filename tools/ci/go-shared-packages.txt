@@ -1,0 +1,4 @@
+./internal/application
+./internal/envconfig
+./internal/packetwire
+./pkg/...

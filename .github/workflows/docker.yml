@@ -31,7 +31,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.pooling-study
     uses: ./.github/workflows/go.yml
     with:
-      standalone-release: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      release-scope: ${{ startsWith(github.ref, 'refs/tags/v') && 'standalone' || 'full' }}
 
   encrypted-capacity:
     needs: test
@@ -356,9 +356,10 @@ jobs:
           New-Item -ItemType Directory binary-package,binary-dist | Out-Null
           go build -trimpath -ldflags "-s -w" -o binary-package/wgslirp.exe ./cmd/wgslirp
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go vet ./...
+          $packages = @('./cmd/wgslirp', './cmd/stress_wg_queue') + (Get-Content tools/ci/go-shared-packages.txt)
+          go vet @packages
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go test -timeout 120s -count=1 ./...
+          go test -timeout '120s' -count=1 @packages
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:WGSLIRP_RELEASE_BINARY = (Resolve-Path binary-package/wgslirp.exe).Path
           go test -tags=integration -run '^(TestReleaseBinary|TestEncryptedWireGuardTCPUDP)$' -timeout 120s -count=1 -v ./pkg/wireguard

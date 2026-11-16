@@ -34,7 +34,7 @@ func exactFields(obj object, keys ...string) bool {
 	return true
 }
 
-func integer(value any, min, max uint64) (uint64, bool) {
+func parseBoundedUint(value any, min, max uint64) (uint64, bool) {
 	number, ok := value.(json.Number)
 	if !ok {
 		return 0, false
@@ -71,8 +71,8 @@ func parsePeer(value any) (peer, bool) {
 
 func parseMapping(value any) (socket.TCPMapping, bool) {
 	m, ok := value.(object)
-	guestPort, guestOK := integer(m["guest_port"], 1, 65535)
-	hostPort, hostOK := integer(m["host_port"], 1, 65535)
+	guestPort, guestOK := parseBoundedUint(m["guest_port"], 1, 65535)
+	hostPort, hostOK := parseBoundedUint(m["host_port"], 1, 65535)
 	guest, host := ipv4(m["guest_ip"]), ipv4(m["host_ip"])
 	return socket.TCPMapping{
 			Guest: netip.AddrPortFrom(guest, uint16(guestPort)),
@@ -103,13 +103,13 @@ func parseConfig(params object) (application.Config, []socket.TCPMapping, bool) 
 		switch key {
 		case "private_key", "peers", "mappings":
 		case "listen_port":
-			n, ok := integer(value, 0, 65535)
+			n, ok := parseBoundedUint(value, 0, 65535)
 			if !ok {
 				return cfg, nil, false
 			}
 			cfg.Device.ListenPort = int(n)
 		case "mtu":
-			n, ok := integer(value, 576, 9000)
+			n, ok := parseBoundedUint(value, 576, 9000)
 			if !ok {
 				return cfg, nil, false
 			}
@@ -164,7 +164,7 @@ func parseLimits(cfg *application.Config, value any) bool {
 		default:
 			return false
 		}
-		n, ok := integer(value, min, max)
+		n, ok := parseBoundedUint(value, min, max)
 		if !ok {
 			return false
 		}

@@ -989,6 +989,15 @@ Tagged publication and final cross-platform acceptance remain open.
   the standalone-scoped Go build, vet and unit tests, Bash syntax and Actions
   lint. Temporary shallow Git clones verified that both tag namespaces accept
   reviewed source on `master` and reject commits outside it.
+- The standalone Windows gate now vets and tests standalone and shared Go
+  packages. The native Windows helper tests run independently on helper
+  workflow branch pushes. Helper publication requires both the helper-scoped
+  shared runtime suite and the native Linux evidence matrix.
+- Regression tests execute the Windows and helper Go test steps with stubbed
+  commands to check their actual package arguments. All 26 release controls,
+  100 protocol cases, Actions lint, native Windows standalone acceptance and
+  native Windows helper tests passed locally. The parser rename to
+  `parseBoundedUint` preserves its behavior.
 
 **W7 security review**
 
