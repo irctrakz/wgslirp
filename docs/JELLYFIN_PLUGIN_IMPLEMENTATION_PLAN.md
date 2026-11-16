@@ -823,7 +823,7 @@ review of the host-write shutdown fix in `24d2997`. W7 follows this checkpoint.
 - [x] Distinguish buildable targets from natively validated, supported targets.
 - [x] Retain existing networking validation gates and add encrypted tests for
   destination mapping, live peer changes and helper lifecycle.
-- [ ] Validate Linux x64 first and Linux ARM64 before completing the Linux release.
+- [x] Validate Linux x64 first and Linux ARM64 before completing the Linux release.
 - [ ] Add native acceptance for every OS/architecture advertised in the final release.
 
 | Stage | Build coverage | Native acceptance |
@@ -944,7 +944,7 @@ binary's version. It passed on rerun.
 **W7 code approval**
 
 - [x] W7 code approved at `91b785d`, including the draft creation regression.
-- [ ] Run the branch acceptance workflow on the native Linux ARM64 runner
+- [x] Run the branch acceptance workflow on the native Linux ARM64 runner
   and record the job and evidence before release review.
 - The first [branch acceptance run](https://github.com/irctrakz/wgslirp/actions/runs/43950321517)
   passed the shared CI and native pipe tests. The encrypted test timed out on
@@ -952,6 +952,25 @@ binary's version. It passed on rerun.
   forwarding peer's key soon enough to hit WireGuard's flood and replay
   safeguards. The test now spaces both probes beyond that window. The
   release helper and its assertions are unchanged.
+- The [native retry](https://github.com/irctrakz/wgslirp/actions/runs/43951601929)
+  passed on commit `3c5537e`. The
+  [ARM64 job](https://github.com/irctrakz/wgslirp/actions/runs/43951601929/job/133596353619)
+  on `ubuntu-24.04-arm` and the
+  [amd64 job](https://github.com/irctrakz/wgslirp/actions/runs/43951601929/job/133596353728)
+  passed helper pipe tests, encrypted mapping and denial, live peer revocation,
+  and packaging against native acceptance evidence. Each uploaded a helper
+  archive, checksum and acceptance record. The binary publication job skipped.
+- Downloaded both archive and acceptance artifacts from that run and verified
+  their ELF architectures, archive checksums, source revision, and binary
+  hashes against the native records.
+
+  | Architecture | Archive artifact ID | Acceptance artifact ID | Helper binary SHA-256 |
+  | --- | --- | --- | --- |
+  | Linux amd64 | `14267333033` | `14267273119` | `5ca274e3d95522866a5933a3ae15e4036188ce866ef1995a48181456f6501bc1` |
+  | Linux ARM64 | `14267118098` | `14267333026` | `8a7f4ba5f202738b6a7ef5d0e0d541a4eb4025e31a105b93f6aa19515b1a0ef4` |
+
+- Local checks passed for both Linux acceptance-test cross-builds, all 20
+  release-control tests, all 100 shared protocol cases, and `git diff --check`.
 
 Tagged publication and final cross-platform acceptance remain open.
 
