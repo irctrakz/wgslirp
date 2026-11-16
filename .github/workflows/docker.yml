@@ -671,18 +671,23 @@ jobs:
               return 1
             fi
           }
-          verify_draft_assets() {
-            local release_id
-            release_id=$(python3 - <<'PY'
+          read_draft_id() {
+            python3 - <<'PY'
           import json
           import sys
           with open('existing-release.json') as file:
               release = json.load(file)
           if release['isDraft'] is not True:
               sys.exit('version is already published; refusing to replace assets')
-          print(release['databaseId'])
+          release_id = release['databaseId']
+          if type(release_id) is not int or release_id <= 0:
+              sys.exit('invalid draft release ID')
+          print(release_id)
           PY
-            )
+          }
+          verify_draft_assets() {
+            local release_id="$1"
+            shift
             gh api --paginate --slurp "repos/$GH_REPO/releases/$release_id/assets?per_page=100" > draft-assets.json
             python3 - "$@" <<'PY'
           import hashlib
@@ -709,16 +714,20 @@ jobs:
           }
           verify_remote_tag
           if gh release view "$tag" --json isDraft,databaseId > existing-release.json 2>/dev/null; then
-            verify_draft_assets partial "${assets[@]}"
+            draft_id=$(read_draft_id)
+            verify_draft_assets "$draft_id" partial "${assets[@]}"
           else
             gh release create "$tag" --verify-tag --draft --title "$tag" \
               --notes-file release-notes.txt --prerelease="$prerelease"
           fi
           gh release upload "$tag" "${assets[@]}" --clobber
           gh release view "$tag" --json isDraft,databaseId > existing-release.json
-          verify_draft_assets complete "${assets[@]}"
+          verified_release_id=$(read_draft_id)
+          verify_draft_assets "$verified_release_id" complete "${assets[@]}"
           verify_remote_tag
-          gh release edit "$tag" --draft=false --prerelease="$prerelease" --latest=false --notes-file release-notes.txt
+          gh api --method PATCH "repos/$GH_REPO/releases/$verified_release_id" --silent \
+            -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" -F draft=false \
+            -F prerelease="$prerelease" -f make_latest=false -F body=@release-notes.txt
           printf '### Binary release\n\nhttps://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"
 
   docker:

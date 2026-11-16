@@ -259,7 +259,7 @@ class HelperPackageTests(unittest.TestCase):
 
 class ReleasePublicationTests(unittest.TestCase):
     def run_release(self, state='absent', upload_exit=0, tag='v1.2.3', inventory=None,
-                    asset_fault=None, remote_tag='lightweight'):
+                    asset_fault=None, remote_tag='lightweight', replace_draft=False):
         bash = workflow_bash(self)
         stub = r'''
 git() {
@@ -281,6 +281,17 @@ git() {
 gh() {
   [ -f calls.txt ] || touch calls.txt
   if [ "$1" = api ]; then
+    if [ "$2" = --method ] && [ "$3" = PATCH ]; then
+      printf '%s\n' "$*" >> calls.txt
+      # At publication the tag can point to ID 456 and the verified ID
+      # 123 can have been deleted. A PATCH of 123 must then fail.
+      if [ "$REPLACE_DRAFT" = true ]; then
+        [[ "$4" == "repos/$GH_REPO/releases/456" ]]
+      else
+        [[ "$4" == "repos/$GH_REPO/releases/123" ]]
+      fi
+      return
+    fi
     [[ "$*" == *"repos/$GH_REPO/releases/123/assets?per_page=100" ]] || return 99
     if [ -f uploaded ]; then cat uploaded-assets.json; else cat initial-assets.json; fi
     return
@@ -295,7 +306,9 @@ gh() {
     upload)
       if [ "$UPLOAD_EXIT" != 0 ]; then return "$UPLOAD_EXIT"; fi
       touch uploaded ;;
-    edit) return 0 ;;
+    edit)
+      if [ "$REPLACE_DRAFT" = true ]; then printf 'published replacement 456\n' >> calls.txt; fi
+      return 0 ;;
     *) return 99 ;;
   esac
 }
@@ -324,6 +337,7 @@ python3() { "$TEST_PYTHON" "$@"; }
             env = os.environ | {'RELEASE_STATE': state, 'UPLOAD_EXIT': str(upload_exit),
                                 'VERSION_TAG': tag, 'GITHUB_SHA': 'abc',
                                 'REMOTE_TAG': remote_tag, 'GH_REPO': 'example/test-only',
+                                'REPLACE_DRAFT': 'true' if replace_draft else 'false',
                                 'TESTED_IMAGE': 'test@sha256:abc',
                                 'GITHUB_REPOSITORY': 'example/test-only',
                                 'GITHUB_STEP_SUMMARY': 'summary.txt',
@@ -338,15 +352,18 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_new_release_stays_draft_until_upload_succeeds(self):
         result, calls = self.run_release()
         self.assertEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'create', 'upload', 'view', 'edit'])
+        self.assertEqual([line.split()[1] for line in calls], ['view', 'create', 'upload', 'view', '--method'])
         self.assertIn('--draft', calls[1])
         self.assertIn('--verify-tag', calls[1])
-        self.assertIn('--prerelease=false', calls[-1])
+        self.assertIn('api --method PATCH repos/example/test-only/releases/123 ', calls[-1])
+        for field in ('-f tag_name=v1.2.3', '-f target_commitish=abc', '-F draft=false',
+                      '-F prerelease=false', '-f make_latest=false', '-F body=@release-notes.txt'):
+            self.assertIn(field, calls[-1])
 
     def test_upload_failure_never_publishes(self):
         result, calls = self.run_release(upload_exit=1)
         self.assertNotEqual(result, 0)
-        self.assertFalse(any(line.startswith('release edit ') for line in calls))
+        self.assertEqual([line.split()[1] for line in calls], ['view', 'create', 'upload'])
 
     def test_published_version_is_never_overwritten(self):
         result, calls = self.run_release(state='published')
@@ -356,7 +373,14 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_incomplete_draft_can_be_resumed(self):
         result, calls = self.run_release(state='draft')
         self.assertEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view', 'edit'])
+        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view', '--method'])
+
+    def test_replaced_draft_is_never_published(self):
+        result, calls = self.run_release(state='draft', replace_draft=True)
+        self.assertNotEqual(result, 0)
+        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view', '--method'])
+        self.assertTrue(calls[-1].startswith('api --method PATCH repos/example/test-only/releases/123 '))
+        self.assertFalse(any('456' in call for call in calls))
 
     def test_stale_draft_asset_blocks_upload_and_publication(self):
         result, calls = self.run_release(state='extra')
@@ -386,12 +410,12 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_annotated_tag_resolves_to_the_tested_commit(self):
         result, calls = self.run_release(remote_tag='annotated')
         self.assertEqual(result, 0)
-        self.assertIn('release edit ', calls[-1])
+        self.assertIn('api --method PATCH repos/example/test-only/releases/123 ', calls[-1])
 
     def test_suffix_tag_creates_prerelease(self):
         result, calls = self.run_release(tag='v1.2.3-rc.1')
         self.assertEqual(result, 0)
-        self.assertIn('--prerelease=true', calls[-1])
+        self.assertIn('-F prerelease=true', calls[-1])
 
 
 if __name__ == '__main__':

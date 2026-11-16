@@ -903,6 +903,18 @@ binary's version. It passed on rerun.
   Linux ARM64 helper and acceptance-test cross-build passed. Draft asset
   verification used stubs, and tag peeling was also checked with local Git.
 
+**W7 draft identity**
+
+- Final publication targets the numeric draft ID whose uploaded assets were
+  verified. The publish request preserves the tag, prerelease flag, release
+  notes and latest-release designation. Both remote tag checks still run.
+- The stubbed CLI replaces the verified draft after its asset check. The
+  previous workflow published the replacement by tag. The fixed workflow
+  tries only the verified ID and stops when that ID is gone.
+- All 18 local release-control tests and 100 shared protocol cases passed.
+  The publication shell passed Bash syntax validation. The publication
+  tests used a stubbed CLI.
+
 W7 is ready for another review. The native ARM64 GitHub runner and an
 actual tagged publication remain unverified. The Linux release checkbox stays
 open until native evidence exists for both architectures. Final cross-platform
