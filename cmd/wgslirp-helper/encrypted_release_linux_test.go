@@ -27,13 +27,26 @@ import (
 
 type releaseReplies chan []byte
 
-type releaseDenials chan struct{}
+type releaseDenials struct {
+	pending string
+	seen    chan struct{}
+}
 
-func (d releaseDenials) Write(record []byte) (int, error) {
-	if strings.Contains(string(record), "Failed to write packets to TUN device: "+socket.ErrDestinationDenied.Error()) {
-		select {
-		case d <- struct{}{}:
-		default:
+func (d *releaseDenials) Write(record []byte) (int, error) {
+	d.pending += string(record)
+	for {
+		line, rest, complete := strings.Cut(d.pending, "\n")
+		if !complete {
+			break
+		}
+		d.pending = rest
+		if (strings.Contains(line, "Failed to write packets to TUN device: ") &&
+			strings.HasSuffix(line, socket.ErrDestinationDenied.Error())) ||
+			strings.HasSuffix(line, "Repeated TUN packet failures: reason=destination_denied suppressed=1") {
+			select {
+			case d.seen <- struct{}{}:
+			default:
+			}
 		}
 	}
 	return len(record), nil
@@ -67,7 +80,7 @@ func TestEncryptedHelperRelease(t *testing.T) {
 	}
 	public := base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
 
-	denials := make(releaseDenials, 1)
+	denials := &releaseDenials{seen: make(chan struct{}, 2)}
 	p := launchHelperWithStderr(t, false, denials)
 	negotiated := p.handshake(t)
 	cfg := fixtureConfig(0)
@@ -123,14 +136,17 @@ func TestEncryptedHelperRelease(t *testing.T) {
 			return nil
 		}
 	}
-	// Attempt a direct connection to the real listener over the encrypted
-	// tunnel. Wait for evidence that the exact release helper denied it.
-	send(guest, [4]byte{127, 0, 0, 1}, uint16(listener.Addr().(*net.TCPAddr).Port), 100, 0, 0x02, nil)
+	// Use the mapped IP with an unmapped port, so an IP-only policy would
+	// wrongly authorize the packet. This must be the first logged denial.
+	send(guest, dst, 8097, 100, 0, 0x02, nil)
 	select {
-	case <-denials:
+	case <-denials.seen:
 	case <-time.After(5 * time.Second):
-		t.Fatal("encrypted traffic did not reach the unmapped destination denial")
+		t.Fatal("encrypted traffic did not reach the unmapped port denial")
 	}
+	// Also attempt direct access to the real listener. A second denial in
+	// the same logging window is coalesced and emitted during shutdown.
+	send(guest, [4]byte{127, 0, 0, 1}, uint16(listener.Addr().(*net.TCPAddr).Port), 100, 0, 0x02, nil)
 
 	send(guest, dst, 8096, 100, 0, 0x02, nil)
 	syn := receive()
@@ -208,6 +224,11 @@ func TestEncryptedHelperRelease(t *testing.T) {
 	p.roundTrip(t, 5, "stop", object{}, 3, "")
 	p.wait(t, 0)
 	p.expectEOF(t)
+	select {
+	case <-denials.seen:
+	default:
+		t.Fatal("missing second destination denial for direct host access")
+	}
 	assertUDPReleased(t, int(port))
 	if evidence := os.Getenv("WGSLIRP_HELPER_ACCEPTANCE"); evidence != "" {
 		if releaseBinaryHash(t, binaryPath) != binaryHash {

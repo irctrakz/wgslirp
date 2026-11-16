@@ -392,7 +392,7 @@ jobs:
           $archive = "wgslirp-$env:GITHUB_SHA-windows-amd64.zip"
           Compress-Archive -Path binary-package/wgslirp.exe,binary-package/LICENSE,binary-package/SOURCE.json -DestinationPath "binary-dist/$archive"
           $hash = (Get-FileHash "binary-dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $archive" | Set-Content -Encoding utf8 "binary-dist/$archive.sha256"
+          [IO.File]::WriteAllText((Join-Path $PWD "binary-dist/$archive.sha256"), "$hash  $archive`n")
       - uses: actions/upload-artifact@v6
         with:
           name: 'binaries-windows-amd64'
@@ -607,11 +607,9 @@ jobs:
           set -euo pipefail
           cd binary-dist
           test "$(find . -maxdepth 1 -type f | wc -l)" -eq 6
-          for arch in amd64 arm64; do
-            archive="wgslirp-$GITHUB_SHA-linux-$arch.tar.gz"
-            sha256sum --check "$archive.sha256"
+          for archive in wgslirp-"$GITHUB_SHA"-linux-{amd64,arm64}.tar.gz wgslirp-"$GITHUB_SHA"-windows-amd64.zip; do
+            sha256sum --binary "$archive" | sed 's/ \*/  /' | cmp - "$archive.sha256"
           done
-          sha256sum --check "wgslirp-$GITHUB_SHA-windows-amd64.zip.sha256"
           python3 - <<'PY'
           import hashlib, json, os, tarfile, zipfile
           for arch in ['amd64', 'arm64']:
@@ -635,14 +633,17 @@ jobs:
               assert metadata['platform'] == 'windows/amd64', 'wrong Windows platform'
               assert metadata['binary_sha256'] == hashlib.sha256(package.read('wgslirp.exe')).hexdigest(), 'wrong Windows binary checksum'
           PY
-          cat *.sha256 > SHA256SUMS
       - name: Include verified helper assets
         shell: bash
         working-directory: binary-dist
         run: |
           set -euo pipefail
-          cat ../helper-dist/*.sha256 >> SHA256SUMS
-          cp ../helper-dist/*.tar.gz .
+          helpers=(wgslirp-helper-"$VERSION_TAG"-linux-{amd64,arm64}.tar.gz)
+          for archive in "${helpers[@]}"; do
+            cp "../helper-dist/$archive" .
+          done
+          sha256sum --binary wgslirp-"$GITHUB_SHA"-linux-{amd64,arm64}.tar.gz \
+            wgslirp-"$GITHUB_SHA"-windows-amd64.zip "${helpers[@]}" | sed 's/ \*/  /' > SHA256SUMS
       - name: Publish a complete versioned release
         shell: bash
         env:
@@ -656,34 +657,68 @@ jobs:
           printf 'Source: `%s`\n\nTested image: `%s`\n\nLinux amd64/arm64 executables extracted from tested images; Windows amd64 executable validated natively with ICMP_ECHO=false. Verify downloads with SHA256SUMS.\n' \
             "$GITHUB_SHA" "$TESTED_IMAGE" > release-notes.txt
           printf '\nLinux amd64 and arm64 helper archives passed native pipe and encrypted forwarding acceptance. See SOURCE.json for helper compatibility.\n' >> release-notes.txt
-          assets=(binary-dist/*.tar.gz binary-dist/*.zip binary-dist/SHA256SUMS)
+          assets=(binary-dist/wgslirp-"$GITHUB_SHA"-linux-{amd64,arm64}.tar.gz
+                  binary-dist/wgslirp-"$GITHUB_SHA"-windows-amd64.zip
+                  binary-dist/wgslirp-helper-"$VERSION_TAG"-linux-{amd64,arm64}.tar.gz
+                  binary-dist/SHA256SUMS)
+          verify_remote_tag() {
+            local ref="refs/tags/$tag" refs commit
+            refs=$(GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+              ls-remote --exit-code origin "$ref" "$ref^{}")
+            commit=$(awk -v ref="$ref" '$2 == ref {target=$1} $2 == ref "^{}" {peeled=$1} END {print (peeled ? peeled : target)}' <<< "$refs")
+            if [[ "$commit" != "$GITHUB_SHA" ]]; then
+              echo 'Remote release tag differs from the tested commit' >&2
+              return 1
+            fi
+          }
           verify_draft_assets() {
+            local release_id
+            release_id=$(python3 - <<'PY'
+          import json
+          import sys
+          with open('existing-release.json') as file:
+              release = json.load(file)
+          if release['isDraft'] is not True:
+              sys.exit('version is already published; refusing to replace assets')
+          print(release['databaseId'])
+          PY
+            )
+            gh api --paginate --slurp "repos/$GH_REPO/releases/$release_id/assets?per_page=100" > draft-assets.json
             python3 - "$@" <<'PY'
+          import hashlib
+          import itertools
           import json
           import sys
           from pathlib import Path
           mode, *paths = sys.argv[1:]
-          release = json.loads(Path('existing-release.json').read_bytes())
-          if release['isDraft'] is not True:
-              sys.exit('version is already published; refusing to replace assets')
-          expected = {Path(path).name for path in paths}
-          names = [asset['name'] for asset in release['assets']]
-          if len(names) != len(set(names)) or set(names) - expected:
+          expected = {Path(path).name: Path(path) for path in paths}
+          assets = list(itertools.chain.from_iterable(json.loads(Path('draft-assets.json').read_bytes())))
+          names = {asset['name'] for asset in assets}
+          if len(names) != len(assets) or names - expected.keys():
               sys.exit('draft contains unexpected or duplicate assets')
-          if mode == 'complete' and set(names) != expected:
-              sys.exit('draft is missing expected assets')
+          if mode == 'complete':
+              if names != expected.keys():
+                  sys.exit('draft is missing expected assets')
+              for asset in assets:
+                  path = expected[asset['name']]
+                  digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                  if (asset['state'] != 'uploaded' or asset['size'] != path.stat().st_size
+                          or asset['digest'] != f'sha256:{digest}'):
+                      sys.exit(f'draft asset does not match verified file: {path.name}')
           PY
           }
-          if gh release view "$tag" --json isDraft,assets > existing-release.json 2>/dev/null; then
+          verify_remote_tag
+          if gh release view "$tag" --json isDraft,databaseId > existing-release.json 2>/dev/null; then
             verify_draft_assets partial "${assets[@]}"
           else
             gh release create "$tag" --verify-tag --draft --title "$tag" \
               --notes-file release-notes.txt --prerelease="$prerelease"
           fi
           gh release upload "$tag" "${assets[@]}" --clobber
-          gh release view "$tag" --json isDraft,assets > existing-release.json
+          gh release view "$tag" --json isDraft,databaseId > existing-release.json
           verify_draft_assets complete "${assets[@]}"
-          gh release edit "$tag" --draft=false --prerelease="$prerelease" --latest=false
+          verify_remote_tag
+          gh release edit "$tag" --draft=false --prerelease="$prerelease" --latest=false --notes-file release-notes.txt
           printf '### Binary release\n\nhttps://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"
 
   docker:
