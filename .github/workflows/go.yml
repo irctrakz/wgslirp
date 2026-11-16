@@ -5,6 +5,10 @@ on:
     branches: [master, codex/architecture-hardening, "codex/integration-*"]
   workflow_dispatch:
   workflow_call:
+    inputs:
+      release-scope:
+        type: string
+        default: full
 
 permissions:
   contents: read
@@ -13,10 +17,29 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RELEASE_SCOPE: ${{ inputs.release-scope || 'full' }}
 
     steps:
       - name: Check out code
         uses: actions/checkout@v6
+
+      - name: Select Go packages
+        shell: bash
+        run: |
+          case "$RELEASE_SCOPE" in
+            full) packages=(./...) ;;
+            standalone|helper)
+              mapfile -t packages < tools/ci/go-shared-packages.txt
+              if [[ "$RELEASE_SCOPE" == standalone ]]; then
+                packages+=(./cmd/wgslirp ./cmd/stress_wg_queue)
+              else
+                packages+=(./cmd/wgslirp-helper ./internal/helperwire)
+              fi
+              ;;
+            *) echo 'Unknown Go test scope' >&2; exit 1 ;;
+          esac
+          printf 'GO_CHECK_PACKAGES=%s\n' "${packages[*]}" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -28,10 +51,15 @@ jobs:
         run: |
           go mod download
           go mod verify
+
+      - name: Check module tidiness
+        if: env.RELEASE_SCOPE == 'full'
+        run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
       - name: Validate deployment configuration
+        if: env.RELEASE_SCOPE != 'helper'
         shell: bash
         run: |
           set -euo pipefail
@@ -47,18 +75,50 @@ jobs:
           docker compose -f "$validation_dir/compose.yaml" config --quiet
 
       - name: Validate binary release failure controls
+        if: env.RELEASE_SCOPE == 'full'
         run: python3 tools/ci/test_binary_release.py -v
 
-      - name: Build and vet
+      - name: Validate standalone release failure controls
+        if: env.RELEASE_SCOPE == 'standalone'
+        run: python3 tools/ci/test_binary_release.py -v BinaryPackageTests ReleasePublicationTests
+
+      - name: Validate helper release failure controls
+        if: env.RELEASE_SCOPE == 'helper'
+        run: python3 tools/ci/test_binary_release.py -v HelperPackageTests HelperPublicationTests
+
+      - name: Cross-build the helper for Windows and macOS
+        if: env.RELEASE_SCOPE == 'full'
+        shell: bash
         run: |
-          go build ./...
-          go vet ./...
+          set -euo pipefail
+          for os in windows darwin; do
+            for arch in amd64 arm64; do
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o "$RUNNER_TEMP/helper-$os-$arch" ./cmd/wgslirp-helper
+            done
+          done
+
+      - name: Build and vet
+        shell: bash
+        run: |
+          read -r -a packages <<< "$GO_CHECK_PACKAGES"
+          go build "${packages[@]}"
+          go vet "${packages[@]}"
 
       - name: Run tests
-        run: go test -race -timeout 120s -count=1 ./...
+        shell: bash
+        run: |
+          read -r -a packages <<< "$GO_CHECK_PACKAGES"
+          go test -race -timeout 120s -count=1 "${packages[@]}"
 
       - name: Run integration tests
-        run: go test -race -tags=integration -timeout 120s -count=1 ./...
+        shell: bash
+        run: |
+          read -r -a packages <<< "$GO_CHECK_PACKAGES"
+          if [[ "$RELEASE_SCOPE" != helper ]]; then
+            export WGSLIRP_RELEASE_BINARY="$RUNNER_TEMP/wgslirp-test"
+            go build -o "$WGSLIRP_RELEASE_BINARY" ./cmd/wgslirp
+          fi
+          go test -race -tags=integration -timeout 120s -count=1 "${packages[@]}"
 
       - name: Fuzz packet boundaries
         run: go test -run '^$' -fuzz '^FuzzTransportBoundaries$' -fuzztime 10s -timeout 120s -parallel 2 ./pkg/socket

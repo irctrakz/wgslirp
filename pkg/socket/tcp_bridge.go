@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -53,8 +54,18 @@ type tcpBridge struct {
 	parent          *SocketInterface
 	mu              sync.RWMutex
 	flows           map[string]*tcpFlow
+	hostSockets     map[*net.TCPConn]struct{} // guarded by mu, independent of flow locks
 	stopCh          chan struct{}
 	lifetime        time.Duration
+
+	// Optional test hook called under stateMu after asynchronous attachment.
+	onDialAttached func(*tcpFlow)
+	// Optional test hook called under stateMu just before a pending host write.
+	beforePendingWrite func()
+	// Optional test hook after the write deadline is armed.
+	beforeHostWrite func()
+	// Optional test hook after admission closes and before the socket sweep.
+	beforeHostSocketsClose func()
 
 	metrics  core.SocketMetrics
 	maxFlows int
@@ -133,6 +144,7 @@ const (
 )
 
 type tcpFlow struct {
+	owner             *peerWork
 	retransmitBlocked bool // stateMu; counts transitions, not polling iterations
 	// stateMu owns connection attachment, sequence/window state, timers and
 	// flow accounting. Never acquire it while holding the bridge registry lock.
@@ -247,13 +259,14 @@ type tcpFlow struct {
 // scheduling/backpressure via the parent's FlowManager when present.
 func newTCPBridge(parent *SocketInterface) *tcpBridge {
 	b := &tcpBridge{
-		parent:   parent,
-		deliver:  parent.packetDelivery(),
-		flows:    make(map[string]*tcpFlow),
-		stopCh:   make(chan struct{}),
-		lifetime: 2 * time.Minute,
-		ackDelay: 10 * time.Millisecond,
-		reasmCap: 128 * 1024,
+		parent:      parent,
+		deliver:     parent.packetDelivery(),
+		flows:       make(map[string]*tcpFlow),
+		hostSockets: make(map[*net.TCPConn]struct{}),
+		stopCh:      make(chan struct{}),
+		lifetime:    2 * time.Minute,
+		ackDelay:    10 * time.Millisecond,
+		reasmCap:    128 * 1024,
 		// Defaults: proactively gate reads after 6s of no ACK progress,
 		// and fail/reset truly stuck flows after 120s.
 		ackIdleGate:    6 * time.Second,
@@ -335,7 +348,9 @@ func (b *tcpBridge) SetPaceUS(us int) {
 
 func (b *tcpBridge) Name() string { return "tcp" }
 
-func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
+func (b *tcpBridge) HandleOutbound(pkt []byte) error { return b.handleOutbound(pkt, nil) }
+
+func (b *tcpBridge) handleOutbound(pkt []byte, owner *peerWork) (err error) {
 	admitted := false
 	// Publish the operation's error before allowing lifecycle waits to complete.
 	defer func() {
@@ -355,6 +370,15 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 	if err != nil {
 		return err
 	}
+	guest := netip.AddrPortFrom(netip.AddrFrom4(segment.dstIP), segment.dstPort)
+	host := guest
+	if policy := b.parent.config.Destinations; policy != nil {
+		var allowed bool
+		host, allowed = policy.tcp[guest]
+		if !allowed {
+			return ErrDestinationDenied
+		}
+	}
 	if segment.flags&fRST != 0 {
 		b.removeFlow(segment.key)
 		return nil
@@ -362,7 +386,7 @@ func (b *tcpBridge) HandleOutbound(pkt []byte) (err error) {
 	flow := b.lookupFlow(segment.key)
 
 	if flow == nil && segment.flags&fSYN != 0 && segment.flags&fACK == 0 {
-		return b.establishTCP(segment)
+		return b.establishTCP(segment, host.String(), owner)
 	}
 	return b.handleTCPFlow(flow, segment)
 }

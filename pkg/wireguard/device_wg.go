@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -14,7 +16,18 @@ import (
 	"github.com/irctrakz/wgslirp/pkg/logging"
 	"golang.zx2c4.com/wireguard/conn"
 	wgdev "golang.zx2c4.com/wireguard/device"
+	wtun "golang.zx2c4.com/wireguard/tun"
 )
+
+// managedTun leaves device transitions to StartDevice and Close. Forwarding
+// the TUN's initial EventUp would race configuration with an asynchronous bind.
+type managedTun struct{ *WGTun }
+
+func (managedTun) Events() <-chan wtun.Event {
+	events := make(chan wtun.Event)
+	close(events)
+	return events
+}
 
 type wgHandle struct {
 	dev          *wgdev.Device
@@ -45,6 +58,17 @@ func (h *wgHandle) IpcGet() (string, error) {
 		return "", fmt.Errorf("nil device")
 	}
 	return h.dev.IpcGet()
+}
+
+func (h *wgHandle) AddPeer(publicKey [32]byte, address netip.Addr) error {
+	if !address.Is4() {
+		return fmt.Errorf("peer requires an IPv4 address")
+	}
+	return h.dev.IpcSet(fmt.Sprintf("public_key=%x\nreplace_allowed_ips=true\nallowed_ip=%s/32\n", publicKey, address))
+}
+
+func (h *wgHandle) RemovePeer(publicKey [32]byte) error {
+	return h.dev.IpcSet(fmt.Sprintf("public_key=%x\nremove=true\n", publicKey))
 }
 
 // RebindListenPort updates the device's UDP listen port (0 = random) via UAPI.
@@ -135,6 +159,18 @@ func logPeerStatus(publicKey string, handshakeTime int64, endpoint string, rx, t
 // StartDevice starts wireguard-go device bound to cfg.ListenPort using the
 // provided WGTun for plaintext exchange. It applies configuration via IpcSet.
 func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
+	return StartDeviceWithLogOutput(cfg, tun, os.Stdout)
+}
+
+// StartDeviceWithLogOutput routes WireGuard dependency diagnostics to output.
+// The caller supplies a writer safe for concurrent use.
+func StartDeviceWithLogOutput(cfg DeviceConfig, tun *WGTun, output io.Writer) (DeviceHandle, error) {
+	return StartDeviceWithFailureHook(cfg, tun, output, nil)
+}
+
+// StartDeviceWithFailureHook notifies the owner before closing a partially
+// started device. The hook must not wait for device operations.
+func StartDeviceWithFailureHook(cfg DeviceConfig, tun *WGTun, output io.Writer, onFailure func()) (_ DeviceHandle, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -162,13 +198,22 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 		wgLevel = wgdev.LogLevelVerbose
 	}
 
-	logger := wgdev.NewLogger(wgLevel, "[wg]")
+	logger := &wgdev.Logger{
+		Verbosef: wgdev.DiscardLogf,
+		Errorf:   log.New(output, "ERROR: [wg]", log.Ldate|log.Ltime).Printf,
+	}
+	if wgLevel == wgdev.LogLevelVerbose {
+		logger.Verbosef = log.New(output, "DEBUG: [wg]", log.Ldate|log.Ltime).Printf
+	}
 	packetErrors := &packetErrorLog{emit: logger.Errorf}
 	logger.Errorf = packetErrors.Errorf
-	dev := wgdev.NewDevice(tun, bind, logger)
-	started := false
+	dev := wgdev.NewDevice(managedTun{tun}, bind, logger)
 	defer func() {
-		if !started {
+		if err != nil {
+			if onFailure != nil {
+				onFailure()
+			}
+			dev.Close()
 			packetErrors.Flush()
 		}
 	}()
@@ -201,7 +246,6 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 	// Decode base64 private key and send hex to UAPI to avoid parser complaints
 	rawPriv, err := base64.StdEncoding.DecodeString(strings.TrimSpace(cfg.PrivateKey))
 	if err != nil || len(rawPriv) != 32 {
-		dev.Close()
 		return nil, fmt.Errorf("invalid WG_PRIVATE_KEY: must be base64 of 32 bytes")
 	}
 	keyHex := hex.EncodeToString(rawPriv)
@@ -212,7 +256,6 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 		logging.Debugf("Applying WireGuard configuration: listen_port=%d peers=%d", cfg.ListenPort, len(cfg.Peers))
 	}
 	if err := dev.IpcSet(confHex); err != nil {
-		dev.Close()
 		return nil, fmt.Errorf("IpcSet: %w", err)
 	}
 	// Provide peer AllowedIPs to the tun for overlay routing decisions if enabled
@@ -254,7 +297,6 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 		}
 	}
 	if err := dev.Up(); err != nil {
-		dev.Close()
 		return nil, fmt.Errorf("device up: %w", err)
 	}
 	log.Printf("wireguard device up on UDP :%d", cfg.ListenPort)
@@ -281,8 +323,6 @@ func StartDevice(cfg DeviceConfig, tun *WGTun) (DeviceHandle, error) {
 		handle.monitor.Add(1)
 		go monitorWireGuardHandshakes(handle)
 	}
-	started = true
-
 	return handle, nil
 }
 

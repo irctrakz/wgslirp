@@ -1,0 +1,138 @@
+name: Linux helper acceptance and release
+
+on:
+  push:
+    branches: [master, codex/jellyfin-integration]
+    tags: ['helper-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.repository == 'irctrakz/wgslirp'
+    uses: ./.github/workflows/go.yml
+    with:
+      release-scope: helper
+
+  helper-linux:
+    if: github.repository == 'irctrakz/wgslirp' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/helper-v') || github.ref_type == 'branch')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    env:
+      CGO_ENABLED: '0'
+      RELEASE_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Validate the helper release source
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: bash tools/ci/validate-release-source.sh helper-v
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.12'
+          cache-dependency-path: go.sum
+      - name: Build and accept the release helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)" = linux
+          test "$(go env GOARCH)" = "$RELEASE_ARCH"
+          version="$GITHUB_SHA"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#helper-}"; fi
+          [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$ ]]
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          export WGSLIRP_HELPER_TEST_BINARY="$work/wgslirp-helper"
+          export WGSLIRP_HELPER_TEST_VERSION="$version"
+          go build -buildvcs=true -trimpath -ldflags "-s -w -X main.version=$version" -o "$WGSLIRP_HELPER_TEST_BINARY" ./cmd/wgslirp-helper
+          mkdir -p helper-evidence
+          go test -v -count=1 -timeout 90s -tags=integration -skip '^TestEncryptedHelperRelease$' ./cmd/wgslirp-helper ./internal/helperwire \
+            2>&1 | tee helper-evidence/pipes.log
+          WGSLIRP_HELPER_ACCEPTANCE="$PWD/helper-evidence/acceptance-$RELEASE_ARCH.json" \
+            go test -v -count=1 -timeout 90s -tags=integration -run '^TestEncryptedHelperRelease$' ./cmd/wgslirp-helper \
+            2>&1 | tee helper-evidence/encrypted.log
+          grep -q '^--- PASS: TestEncryptedHelperRelease ' helper-evidence/encrypted.log
+          python3 tools/ci/helper_release.py helper-dist --source "$GITHUB_SHA" --version "$version" --evidence helper-evidence \
+            --binary "$WGSLIRP_HELPER_TEST_BINARY" --arch "$RELEASE_ARCH"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: 'helper-evidence-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: helper-evidence/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v6
+        with:
+          name: 'helper-binaries-${{ matrix.arch }}'
+          overwrite: true
+          path: helper-dist/
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: 'helper-acceptance-${{ matrix.arch }}'
+          overwrite: true
+          path: helper-evidence/acceptance-${{ matrix.arch }}.json
+          retention-days: 7
+          if-no-files-found: error
+
+  helper-windows-tests:
+    if: github.repository == 'irctrakz/wgslirp' && github.ref_type == 'branch'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.12'
+          cache-dependency-path: go.sum
+      - run: go test -timeout 120s -count=1 ./cmd/wgslirp-helper ./internal/helperwire
+
+  release-helper:
+    needs: [test, helper-linux]
+    if: github.repository == 'irctrakz/wgslirp' && startsWith(github.ref, 'refs/tags/helper-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: helper-release-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      VERSION_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: 'helper-binaries-*'
+          path: helper-dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: 'helper-acceptance-*'
+          path: helper-acceptance
+          merge-multiple: true
+      - name: Verify accepted Linux helper archives
+        shell: bash
+        run: python3 tools/ci/helper_release.py helper-dist --source "$GITHUB_SHA" --version "${VERSION_TAG#helper-}" --evidence helper-acceptance
+      - name: Publish a complete versioned release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: bash tools/ci/publish-binary-release.sh helper

@@ -25,6 +25,13 @@ func (b *tcpBridge) atFlowCapacity() bool {
 // Registry publication rechecks shutdown, tuple identity and the flow cap after
 // dialing; no registry lock is held during any dial or delivery callback.
 func (b *tcpBridge) registerCandidateLocked(candidate *tcpFlow) (*tcpFlow, error) {
+	if owner := candidate.owner; owner != nil {
+		owner.mu.Lock()
+		defer owner.mu.Unlock()
+		if owner.ctx.Err() != nil {
+			return nil, ErrPeerInactive
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	select {
@@ -40,6 +47,12 @@ func (b *tcpBridge) registerCandidateLocked(candidate *tcpFlow) (*tcpFlow, error
 		return nil, fmt.Errorf("tcp: %w", ErrFlowLimit)
 	}
 	b.flows[candidate.key] = candidate
+	if candidate.conn != nil {
+		b.hostSockets[candidate.conn] = struct{}{}
+		if candidate.owner != nil {
+			candidate.owner.conns[candidate.conn] = struct{}{}
+		}
+	}
 	atomic.AddUint64(&b.metrics.ConnectionsCreated, 1)
 	atomic.AddUint64(&b.parent.metrics.ConnectionsCreated, 1)
 	return candidate, nil
@@ -67,6 +80,20 @@ func (b *tcpBridge) launch(work func()) bool {
 	return true
 }
 
+func (b *tcpBridge) launchForPeer(owner *peerWork, work func()) bool {
+	if owner == nil {
+		return b.launch(work)
+	}
+	if !owner.begin() {
+		return false
+	}
+	if b.launch(func() { defer owner.work.Done(); work() }) {
+		return true
+	}
+	owner.work.Done()
+	return false
+}
+
 func (b *tcpBridge) flowSnapshot() []*tcpFlow {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -90,7 +117,27 @@ func (b *tcpBridge) requestStop() {
 		return
 	default:
 	}
+	b.mu.Lock()
+	sockets := b.hostSockets
+	// An admitted writer can be descheduled before it enters Conn.Write.
+	// Expire its deadline before publishing stop, under the same lock
+	// that lets writers set deadlines. No writer can rearm it after stop.
+	for conn := range sockets {
+		if err := conn.SetWriteDeadline(time.Now()); err != nil {
+			_ = conn.Close()
+		}
+	}
 	close(b.stopCh)
+	b.hostSockets = nil
+	b.mu.Unlock()
+	if b.beforeHostSocketsClose != nil {
+		b.beforeHostSocketsClose()
+	}
+	// Interrupt host I/O without waiting for flow state. A writer that
+	// already passed its cancellation check cannot use a closed socket.
+	for conn := range sockets {
+		_ = conn.Close()
+	}
 	b.cancel()
 }
 
@@ -135,11 +182,6 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	if f.closed {
 		return
 	}
-	b.mu.Lock()
-	if b.flows[f.key] == f {
-		delete(b.flows, f.key)
-	}
-	b.mu.Unlock()
 	f.closed = true
 	f.state = tcpClosed
 	if f.cancelDial != nil {
@@ -154,6 +196,11 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	f.txBytes = 0
 	if f.conn != nil {
 		_ = f.conn.Close()
+		if f.owner != nil {
+			f.owner.mu.Lock()
+			delete(f.owner.conns, f.conn)
+			f.owner.mu.Unlock()
+		}
 	}
 	if f.rtoStop != nil {
 		close(f.rtoStop)
@@ -165,6 +212,14 @@ func (b *tcpBridge) removeFlowLocked(f *tcpFlow) {
 	b.rtoMu.Unlock()
 	atomic.AddUint64(&b.metrics.ConnectionsClosed, 1)
 	atomic.AddUint64(&b.parent.metrics.ConnectionsClosed, 1)
+	// Keep the identity visible to revocation until its reservations and
+	// socket have been released.
+	b.mu.Lock()
+	delete(b.hostSockets, f.conn)
+	if b.flows[f.key] == f {
+		delete(b.flows, f.key)
+	}
+	b.mu.Unlock()
 }
 
 func (b *tcpBridge) reaper() {

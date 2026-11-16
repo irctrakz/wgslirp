@@ -3,14 +3,16 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/irctrakz/wgslirp/internal/envconfig"
-	"github.com/irctrakz/wgslirp/pkg/socket"
-	wg "github.com/irctrakz/wgslirp/pkg/wireguard"
-	"golang.org/x/net/dns/dnsmessage"
 	"net"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/irctrakz/wgslirp/internal/application"
+	"github.com/irctrakz/wgslirp/internal/envconfig"
+	"github.com/irctrakz/wgslirp/pkg/socket"
+	wg "github.com/irctrakz/wgslirp/pkg/wireguard"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 type healthConfig struct {
@@ -18,11 +20,7 @@ type healthConfig struct {
 	HTTPURL, DNSName, DNSIP string
 }
 type applicationConfig struct {
-	Device          wg.DeviceConfig
-	Socket          socket.Config
-	Tun             wg.TunConfig
-	Capture         wg.CaptureConfig
-	Pool            socket.PoolConfig
+	application.Config
 	Health          healthConfig
 	Metrics         bool
 	MetricsInterval time.Duration

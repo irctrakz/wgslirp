@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/irctrakz/wgslirp/internal/packetwire"
 	"net"
+	"net/netip"
 	"runtime"
 	"strings"
 	"sync"
@@ -48,6 +49,8 @@ type SocketInterface struct {
 	stopDone chan struct{}
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
+	peerMu   sync.RWMutex
+	peers    map[[4]byte]*peerWork
 
 	// Slirp bridges
 	udp       *udpBridge
@@ -103,12 +106,7 @@ func (s *SocketInterface) Start() error {
 
 	// Create a raw socket based on the protocol specified in the config
 	var err error
-	protocol := "ip4:icmp" // Default to ICMP
-
-	// If a specific protocol is specified in the config, use it
-	if s.config.Protocol != "" {
-		protocol = s.config.Protocol
-	}
+	protocol := s.config.socketProtocol()
 
 	logging.Debugf("Creating raw socket with protocol: %s", protocol)
 
@@ -191,6 +189,7 @@ func (s *SocketInterface) Start() error {
 	s.icmp = newICMPBridge(s)
 	if s.config.IPv4Reassembly {
 		s.fragments = newIPv4Fragments(s.buffers(), s.config.IPv4FragmentBufferCapBytes)
+		s.fragments.destinations = s.config.Destinations
 		s.wg.Add(1)
 		go s.maintainIPv4Fragments()
 	}
@@ -240,6 +239,12 @@ func (s *SocketInterface) RequestStop() <-chan struct{} {
 		close(s.stopCh)
 	}
 	conn, dgram, udp, tcp := s.conn, s.dgram, s.udp, s.tcp
+	// Restricted TCP closes bridge admission in the same transition,
+	// including work spawned by an already-admitted packet.
+	restricted := s.config.Destinations != nil
+	if restricted && tcp != nil {
+		tcp.requestStop()
+	}
 	go func() {
 		if conn != nil {
 			_ = conn.Close()
@@ -248,7 +253,7 @@ func (s *SocketInterface) RequestStop() <-chan struct{} {
 			_ = dgram.conn.Close()
 		}
 		// Signal both bridges before joining either callback domain.
-		if tcp != nil {
+		if !restricted && tcp != nil {
 			tcp.requestStop()
 		}
 		if udp != nil {
@@ -303,6 +308,25 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 	}
 
 	data := core.BorrowPacketData(packet)
+	var peer *peerWork
+	// Check the destination IP on every fragment before it can reserve
+	// storage. Reassembly checks the port as soon as fragment zero arrives,
+	// and the TCP bridge authorizes the complete segment.
+	if policy := s.config.Destinations; policy != nil && len(data) >= 20 && data[0]>>4 == 4 {
+		if data[9] != 6 || !policy.Reserves(netip.AddrFrom4([4]byte(data[16:20]))) {
+			return ErrDestinationDenied
+		}
+		s.peerMu.RLock()
+		if s.peers != nil {
+			peer = s.peers[[4]byte(data[12:16])]
+			if peer == nil || !peer.begin() {
+				s.peerMu.RUnlock()
+				return ErrPeerInactive
+			}
+			defer peer.work.Done()
+		}
+		s.peerMu.RUnlock()
+	}
 	original := data
 	var err error
 	if s.fragments != nil {
@@ -365,7 +389,7 @@ func (s *SocketInterface) WritePacket(packet core.Packet) error {
 			atomic.AddUint64(&s.metrics.Errors, 1)
 			return fmt.Errorf("TCP bridge not initialized")
 		}
-		if err := s.tcp.HandleOutbound(data); err != nil {
+		if err := s.tcp.handleOutbound(data, peer); err != nil {
 			return s.outboundPacketError("TCP", wireSize, err)
 		}
 		break

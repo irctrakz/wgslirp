@@ -20,6 +20,7 @@ var packetErrorReasons = [...]struct {
 	{socket.ErrFlowLimit, "flow_limit"},
 	{socket.ErrDialLimit, "pending_dial_limit"},
 	{socket.ErrBufferLimit, "aggregate_buffer_limit"},
+	{socket.ErrDestinationDenied, "destination_denied"},
 	{ErrQueueFull, "tun_queue_full"},
 }
 
@@ -37,6 +38,9 @@ func (l *packetErrorLog) Errorf(format string, args ...any) {
 			// TCP owns the teardown counter/debug record. Preserve its error result
 			// for callers without turning an expected terminal socket into an alarm.
 			if errors.Is(err, socket.ErrTCPTeardown) {
+				return
+			}
+			if errors.Is(err, socket.ErrPeerInactive) {
 				return
 			}
 			for i, reason := range packetErrorReasons {

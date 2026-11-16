@@ -254,6 +254,203 @@ func TestDialHandoffHonorsLongConfiguredFastWait(t *testing.T) {
 	assertBudget(t, b.dialSlots, 0)
 }
 
+func TestShutdownRejectsCompletedDialBeforeAttachment(t *testing.T) {
+	parent := NewSocketInterface(DefaultConfig())
+	parent.processor = &captureProcessor{}
+	b := newTCPBridge(parent)
+	t.Cleanup(b.stop)
+	client, host := tcpBudgetPair(t)
+	finishDial := make(chan struct{})
+	b.dial = func(ctx context.Context, _ string, _ time.Duration) (*net.TCPConn, error) {
+		select {
+		case <-finishDial:
+			return client, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	b.tuning.FastDialMs = 1
+	src, dst := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 42, 0, fSYN, nil)); err != nil {
+		t.Fatal(err)
+	}
+	flows := b.flowSnapshot()
+	if len(flows) != 1 {
+		t.Fatal("missing connecting flow")
+	}
+	f := flows[0]
+	f.stateMu.Lock()
+	ack := f.serverNxt
+	f.stateMu.Unlock()
+	payload := []byte("buffered before shutdown")
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 43, ack, fACK, payload)); err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		f.stateMu.Lock()
+		defer f.stateMu.Unlock()
+		if !f.connecting || f.pendingBytes == 0 {
+			t.Fatal("expected an unattached flow with buffered data")
+		}
+		close(finishDial)
+		// The async worker releases the dial slot only after receiving
+		// the connection. The flow lock holds it just before attachment.
+		deadline := time.Now().Add(2 * time.Second)
+		for used, _, _, _ := b.dialSlots.snapshot(); used != 0; used, _, _, _ = b.dialSlots.snapshot() {
+			if time.Now().After(deadline) {
+				t.Fatal("completion worker did not receive the dial result")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		b.requestStop()
+	}()
+	if err := host.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var buf [32]byte
+	if n, err := host.Read(buf[:]); n != 0 || err != io.EOF {
+		t.Fatalf("host received %q after shutdown: %v", buf[:n], err)
+	}
+	if atomic.LoadUint64(&b.dialOk) != 0 {
+		t.Fatal("dial attached after shutdown")
+	}
+	b.stop()
+	assertBudget(t, b.dialSlots, 0)
+	assertBudget(t, b.buffers, 0)
+}
+
+func TestShutdownAfterAsyncDialAttachmentDiscardsPendingData(t *testing.T) {
+	t.Run("before-reader-admission", func(t *testing.T) {
+		testShutdownAfterAsyncDialAttachment(t, "attachment", false)
+	})
+	t.Run("after-final-write-check", func(t *testing.T) {
+		testShutdownAfterAsyncDialAttachment(t, "pending", false)
+	})
+	t.Run("before-socket-sweep", func(t *testing.T) {
+		testShutdownAfterAsyncDialAttachment(t, "pending", true)
+	})
+	t.Run("admitted-write-before-socket-sweep", func(t *testing.T) {
+		testShutdownAfterAsyncDialAttachment(t, "admitted", true)
+	})
+}
+
+func testShutdownAfterAsyncDialAttachment(t *testing.T, pauseAt string, holdSweep bool) {
+	t.Helper()
+	parent := NewSocketInterface(DefaultConfig())
+	parent.processor = &captureProcessor{}
+	b := newTCPBridge(parent)
+	client, host := tcpBudgetPair(t)
+	finishDial := make(chan struct{})
+	attached := make(chan bool, 1)
+	resume := make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	sweepReady, resumeSweep := make(chan struct{}), make(chan struct{})
+	releaseSweep := sync.OnceFunc(func() { close(resumeSweep) })
+	t.Cleanup(func() { release(); releaseSweep(); b.stop() })
+	if holdSweep {
+		b.beforeHostSocketsClose = func() {
+			close(sweepReady)
+			<-resumeSweep
+		}
+	}
+	b.tuning.FastDialMs = 1
+	b.dial = func(ctx context.Context, _ string, _ time.Duration) (*net.TCPConn, error) {
+		select {
+		case <-finishDial:
+			return client, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	b.onDialAttached = func(f *tcpFlow) {
+		attached <- f.conn == client && !f.connecting && f.pendingBytes > 0
+		if pauseAt == "attachment" {
+			<-resume
+		}
+	}
+	beforeWrite := make(chan struct{})
+	pause := func() {
+		close(beforeWrite)
+		<-resume
+	}
+	switch pauseAt {
+	case "pending":
+		b.beforePendingWrite = pause
+	case "admitted":
+		b.beforeHostWrite = pause
+	}
+
+	src, dst := [4]byte{10, 0, 0, 2}, [4]byte{127, 0, 0, 1}
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 42, 0, fSYN, nil)); err != nil {
+		t.Fatal(err)
+	}
+	flows := b.flowSnapshot()
+	if len(flows) != 1 {
+		t.Fatal("missing connecting flow")
+	}
+	f := flows[0]
+	f.stateMu.Lock()
+	ack := f.serverNxt
+	f.stateMu.Unlock()
+	payload := []byte("buffered before attachment")
+	if err := b.HandleOutbound(buildIPv4TCP(src, dst, 40000, 80, 43, ack, fACK, payload)); err != nil {
+		t.Fatal(err)
+	}
+	close(finishDial)
+	select {
+	case ready := <-attached:
+		if !ready {
+			t.Fatal("expected attached host socket and buffered data")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("asynchronous dial did not attach")
+	}
+	if pauseAt != "attachment" {
+		awaitBudgetWorker(t, beforeWrite)
+	}
+	if holdSweep {
+		stopped := make(chan struct{})
+		go func() {
+			b.requestStop()
+			close(stopped)
+		}()
+		awaitBudgetWorker(t, sweepReady)
+		select {
+		case <-b.stopCh:
+		default:
+			t.Fatal("bridge admission still open")
+		}
+		if err := client.SetNoDelay(true); err != nil {
+			t.Fatalf("host socket closed before writer resumed: %v", err)
+		}
+		defer func() {
+			releaseSweep()
+			awaitBudgetWorker(t, stopped)
+		}()
+	} else {
+		b.requestStop()
+	}
+	release()
+
+	if err := host.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(host)
+	if err != nil || len(data) != 0 {
+		t.Fatalf("host received %q before EOF: %v", data, err)
+	}
+	releaseSweep()
+	b.stop()
+	if len(b.flowSnapshot()) != 0 || atomic.LoadInt64(&b.dialInflight) != 0 {
+		t.Fatal("retained flow or dial accounting")
+	}
+	if b.pendFlush != 0 || len(b.hostSockets) != 0 {
+		t.Fatal("pending flush or retained host socket after shutdown")
+	}
+	assertBudget(t, b.dialSlots, 0)
+	assertBudget(t, b.buffers, 0)
+}
+
 func TestTCPEstablishmentEmitsOneSYNACK(t *testing.T) {
 	for _, async := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fast", true: "async"}[async], func(t *testing.T) {

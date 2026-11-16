@@ -40,10 +40,11 @@ type WGTun struct {
 	writer  core.PacketWriter
 	buffers core.PacketBufferReserver
 
-	outCh   chan queuedFrame
-	events  chan Event
-	closed  chan struct{}
-	closeMu sync.Mutex
+	outCh    chan queuedFrame
+	events   chan Event
+	closed   chan struct{}
+	closeMu  sync.Mutex
+	outReady *sync.Cond // guarded by closeMu, as are all queue operations
 
 	metrics TUNMetrics
 
@@ -58,6 +59,41 @@ type WGTun struct {
 type queuedFrame struct {
 	data    []byte
 	release func()
+}
+
+// DiscardPeerPackets drops queued IPv4 replies to a retired source. The
+// device owns frames already dequeued, and WireGuard removes its peer queues.
+func (t *WGTun) DiscardPeerPackets(address [4]byte) {
+	t.closeMu.Lock()
+	defer t.closeMu.Unlock()
+	// Rotate exactly the original queue length under the dequeue lock.
+	for remaining := len(t.outCh); remaining > 0; remaining-- {
+		frame := <-t.outCh
+		if len(frame.data) >= 20 && frame.data[0]>>4 == 4 && [4]byte(frame.data[16:20]) == address {
+			frame.release()
+		} else {
+			t.outCh <- frame
+		}
+	}
+}
+
+func (t *WGTun) dequeueFrame(wait bool) (queuedFrame, error) {
+	t.closeMu.Lock()
+	defer t.closeMu.Unlock()
+	for {
+		select {
+		case <-t.closed:
+			return queuedFrame{}, fmt.Errorf("wg tun closed")
+		default:
+		}
+		if len(t.outCh) != 0 {
+			return <-t.outCh, nil
+		}
+		if !wait {
+			return queuedFrame{}, nil
+		}
+		t.outReady.Wait()
+	}
 }
 
 // NewWGTun reads legacy queue environment settings once.
@@ -95,6 +131,7 @@ func newWGTun(name string, mtu int, writer core.PacketWriter, cfg TunConfig) *WG
 		events:  make(chan Event, 2),
 		closed:  make(chan struct{}),
 	}
+	t.outReady = sync.NewCond(&t.closeMu)
 	// Buffer the event before consumers start. No sender can race with Close.
 	t.events <- EventUp
 	return t
@@ -116,6 +153,7 @@ func (t *WGTun) Close() error {
 	default:
 	}
 	close(t.closed)
+	t.outReady.Broadcast()
 	select {
 	case t.events <- EventDown:
 	default:
@@ -155,6 +193,7 @@ func (t *WGTun) InjectToPeer(b []byte) error {
 	cp := make([]byte, len(b))
 	copy(cp, b)
 	t.outCh <- queuedFrame{data: cp, release: release}
+	t.outReady.Signal()
 	atomic.AddUint64(&t.metrics.PlaintextToWG, uint64(len(cp)))
 	return nil
 }

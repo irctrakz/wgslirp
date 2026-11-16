@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -398,6 +399,259 @@ func TestIPv4FragmentConfigurationAndShutdown(t *testing.T) {
 	assertBudget(t, s.buffers(), 0)
 	if s.DetailedMetrics().IPv4Fragments["live"] != 0 {
 		t.Fatal("shutdown retained fragment ownership")
+	}
+}
+
+func TestRestrictedFragmentsReserveOnlyMappedAddresses(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Protocol = "ip4:tcp"
+	cfg.SocketBufferCapBytes = ipv4FragmentCharge
+	policy, err := NewDestinationPolicy([]TCPMapping{{
+		Guest: netip.MustParseAddrPort("10.77.0.1:8096"),
+		Host:  netip.MustParseAddrPort("127.0.0.1:8096"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Destinations = policy
+	s := NewSocketInterface(cfg)
+	s.SetPacketProcessor(&captureProcessor{})
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Stop() })
+
+	for _, offset := range []int{0, 8} {
+		packet := fragmentFixture(6, uint16(offset+1), offset, true, make([]byte, 8))
+		if err := s.WritePacket(core.NewBorrowedPacket(packet)); !errors.Is(err, ErrDestinationDenied) {
+			t.Fatalf("unmapped fragment at offset %d: %v", offset, err)
+		}
+	}
+	used, peak, _, _ := s.buffers().snapshot()
+	if used != 0 || peak != 0 || s.DetailedMetrics().IPv4Fragments["live"] != 0 {
+		t.Fatalf("unmapped fragments touched the budget: used=%d peak=%d", used, peak)
+	}
+
+	mapped := fragmentFixture(6, 20, 8, true, make([]byte, 8))
+	copy(mapped[16:20], netip.MustParseAddr("10.77.0.1").AsSlice())
+	fragmentChecksum(mapped)
+	if err := s.WritePacket(core.NewBorrowedPacket(mapped)); err != nil {
+		t.Fatalf("mapped fragment could not use the budget: %v", err)
+	}
+	assertBudget(t, s.buffers(), ipv4FragmentCharge)
+	if got := s.DetailedMetrics().IPv4Fragments["live"]; got != 1 {
+		t.Fatalf("mapped fragment cache entries: %d", got)
+	}
+	s.Stop()
+	assertBudget(t, s.buffers(), 0)
+}
+
+func TestRestrictedFragmentsRejectUnmappedPort(t *testing.T) {
+	guest := netip.MustParseAddrPort("10.77.0.1:8096")
+	policy, err := NewDestinationPolicy([]TCPMapping{{
+		Guest: guest, Host: netip.MustParseAddrPort("127.0.0.1:8096"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, laterFirst := range []bool{false, true} {
+		name := "initial-first"
+		if laterFirst {
+			name = "later-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Protocol = "ip4:tcp"
+			cfg.SocketBufferCapBytes = ipv4FragmentCharge
+			cfg.Destinations = policy
+			s := NewSocketInterface(cfg)
+			s.SetPacketProcessor(&captureProcessor{})
+			if err := s.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Stop() })
+			write := func(id uint16, offset int, port uint16) error {
+				body := make([]byte, 8)
+				binary.BigEndian.PutUint16(body[2:4], port)
+				packet := fragmentFixture(6, id, offset, true, body)
+				copy(packet[16:20], guest.Addr().AsSlice())
+				fragmentChecksum(packet)
+				return s.WritePacket(core.NewBorrowedPacket(packet))
+			}
+			if laterFirst {
+				if err := write(1, 8, 0); err != nil {
+					t.Fatal(err)
+				}
+				assertBudget(t, s.buffers(), ipv4FragmentCharge)
+			}
+			if err := write(1, 0, guest.Port()+1); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("unmapped TCP port: %v", err)
+			}
+			if err := write(1, 8, 0); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("later fragment recreated the denied assembly: %v", err)
+			}
+			assertBudget(t, s.buffers(), 0)
+			_, peak, _, _ := s.buffers().snapshot()
+			if !laterFirst && peak != 0 {
+				t.Fatalf("denied initial fragment reserved %d bytes", peak)
+			}
+			if got := s.DetailedMetrics().IPv4Fragments["live"]; got != 0 {
+				t.Fatalf("denied assembly left %d live reservations", got)
+			}
+			src, dst := [4]byte{10, 0, 0, 2}, guest.Addr().As4()
+			var segment [20]byte
+			if !packetwire.TCP(segment[:], src, dst, 42000, guest.Port(), 1, 0, fRST, 0, nil, nil) {
+				t.Fatal("could not encode mapped TCP segment")
+			}
+			send := func(start, end int) error {
+				packet := fragmentFixture(6, 1, start, end != len(segment), segment[start:end])
+				copy(packet[16:20], dst[:])
+				fragmentChecksum(packet)
+				return s.WritePacket(core.NewBorrowedPacket(packet))
+			}
+			if err := send(0, 8); err != nil {
+				t.Fatalf("mapped first fragment could not reuse the IP ID: %v", err)
+			}
+			if err := send(8, len(segment)); err != nil {
+				t.Fatalf("later fragment for reused IP ID: %v", err)
+			}
+			assertBudget(t, s.buffers(), 0)
+			if got := s.DetailedMetrics().IPv4Fragments["completed"]; got != 1 {
+				t.Fatalf("completed assemblies = %d, want one mapped datagram", got)
+			}
+			if err := write(1, 8, 0); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("delayed fragment after mapped completion: %v", err)
+			}
+			assertBudget(t, s.buffers(), 0)
+		})
+	}
+}
+
+func TestRestrictedFragmentsDenialCapacityAndExpiry(t *testing.T) {
+	guest := netip.MustParseAddrPort("10.77.0.1:8096")
+	policy, err := NewDestinationPolicy([]TCPMapping{{
+		Guest: guest, Host: netip.MustParseAddrPort("127.0.0.1:8096"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := &resourceBudget{limit: 2 * ipv4FragmentCharge}
+	r := newIPv4Fragments(budget, budget.limit)
+	r.destinations = policy
+	defer r.close()
+	now := time.Now()
+	noisy, other := [4]byte{10, 0, 0, 2}, [4]byte{10, 0, 0, 3}
+	add := func(src [4]byte, id uint16, offset int, port uint16, at time.Time) error {
+		body := make([]byte, 8)
+		binary.BigEndian.PutUint16(body[2:4], port)
+		packet := fragmentFixture(6, id, offset, true, body)
+		copy(packet[12:16], src[:])
+		copy(packet[16:20], guest.Addr().AsSlice())
+		fragmentChecksum(packet)
+		_, _, err := r.add(packet, at)
+		return err
+	}
+
+	const overflowID = ipv4FragmentDenialsPerSource + 1
+	for id := uint16(1); id <= overflowID; id++ {
+		if err := add(noisy, id, 0, guest.Port()+1, now); !errors.Is(err, ErrDestinationDenied) {
+			t.Fatalf("deny IP ID %d: %v", id, err)
+		}
+	}
+	if got := len(r.denials[noisy].keys); got != ipv4FragmentDenialsPerSource {
+		t.Fatalf("tracked denials = %d, want %d", got, ipv4FragmentDenialsPerSource)
+	}
+	for _, id := range []uint16{1, overflowID} {
+		if err := add(noisy, id, 8, 0, now); !errors.Is(err, ErrDestinationDenied) {
+			t.Fatalf("later fragment for denied IP ID %d: %v", id, err)
+		}
+	}
+	assertBudget(t, budget, 0)
+
+	if err := add(other, overflowID, 8, 0, now); err != nil {
+		t.Fatalf("saturation blocked another source's out-of-order fragment: %v", err)
+	}
+	if err := add(other, overflowID, 0, guest.Port(), now); err != nil {
+		t.Fatalf("another source's mapped first fragment: %v", err)
+	}
+	assertBudget(t, budget, ipv4FragmentCharge)
+
+	if err := add(noisy, overflowID, 0, guest.Port(), now); err != nil {
+		t.Fatalf("mapped first fragment during saturation: %v", err)
+	}
+	if err := add(noisy, overflowID, 8, 0, now); err != nil {
+		t.Fatalf("later fragment for admitted datagram during saturation: %v", err)
+	}
+	assertBudget(t, budget, 2*ipv4FragmentCharge)
+
+	expiry := now.Add(ipv4FragmentLifetime)
+	for _, d := range r.expire(expiry) {
+		r.release(d)
+	}
+	if len(r.denials) != 0 {
+		t.Fatal("expired denial entries were retained")
+	}
+	if err := add(noisy, 1, 8, 0, expiry); err != nil {
+		t.Fatalf("out-of-order reuse after denial expiry: %v", err)
+	}
+	assertBudget(t, budget, ipv4FragmentCharge)
+}
+
+func TestRestrictedFragmentsReclaimExpiredDenialsBeforeSweep(t *testing.T) {
+	guest := netip.MustParseAddrPort("10.77.0.1:8096")
+	policy, err := NewDestinationPolicy([]TCPMapping{{
+		Guest: guest, Host: netip.MustParseAddrPort("127.0.0.1:8096"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := &resourceBudget{limit: ipv4FragmentCharge}
+	now := time.Now()
+	expiry := now.Add(ipv4FragmentLifetime)
+	for _, scope := range []string{"keys", "sources"} {
+		t.Run(scope, func(t *testing.T) {
+			r := newIPv4Fragments(budget, budget.limit)
+			r.destinations = policy
+			defer r.close()
+			add := func(src byte, id uint16, offset int, at time.Time) error {
+				body := make([]byte, 8)
+				binary.BigEndian.PutUint16(body[2:4], guest.Port()+1)
+				packet := fragmentFixture(6, id, offset, true, body)
+				packet[15] = src
+				copy(packet[16:20], guest.Addr().AsSlice())
+				fragmentChecksum(packet)
+				_, _, err := r.add(packet, at)
+				return err
+			}
+			limit := ipv4FragmentDenialsPerSource
+			newSource := byte(2)
+			if scope == "sources" {
+				limit = ipv4FragmentDenialSources
+				newSource = byte(limit + 2)
+			}
+			for i := 0; i < limit; i++ {
+				src := byte(2)
+				if scope == "sources" {
+					src += byte(i)
+				}
+				if err := add(src, uint16(i+1), 0, now); !errors.Is(err, ErrDestinationDenied) {
+					t.Fatalf("fill denial table: %v", err)
+				}
+			}
+			const newID = 1000
+			// Advance the clock without running the maintenance sweep.
+			if err := add(newSource, newID, 0, expiry); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("new denial: %v", err)
+			}
+			if err := add(newSource, newID, 8, expiry); !errors.Is(err, ErrDestinationDenied) {
+				t.Fatalf("later fragment for the new denial: %v", err)
+			}
+			assertBudget(t, budget, 0)
+			if err := add(newSource, 1, 8, expiry); err != nil {
+				t.Fatalf("expired denials blocked an unrelated out-of-order fragment: %v", err)
+			}
+			assertBudget(t, budget, ipv4FragmentCharge)
+		})
 	}
 }
 

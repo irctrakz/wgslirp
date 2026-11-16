@@ -30,6 +30,8 @@ jobs:
   test:
     if: github.event_name != 'workflow_dispatch' || !inputs.pooling-study
     uses: ./.github/workflows/go.yml
+    with:
+      release-scope: ${{ startsWith(github.ref, 'refs/tags/v') && 'standalone' || 'full' }}
 
   encrypted-capacity:
     needs: test
@@ -98,19 +100,7 @@ jobs:
       - name: Validate the version tag and reviewed source
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
-        env:
-          VERSION_TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os, re
-          assert re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', os.environ['VERSION_TAG']), 'expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-SUFFIX'
-          PY
-          git fetch --no-tags origin master:refs/remotes/origin/master
-          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-            git fetch --unshallow --no-tags origin
-          fi
-          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/master
+        run: bash tools/ci/validate-release-source.sh v
       - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
@@ -331,7 +321,8 @@ jobs:
           if-no-files-found: error
       - uses: actions/upload-artifact@v6
         with:
-          name: 'binaries-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}'
+          name: 'binaries-${{ matrix.arch }}'
+          overwrite: true
           path: binary-dist/
           retention-days: 7
           if-no-files-found: error
@@ -365,9 +356,10 @@ jobs:
           New-Item -ItemType Directory binary-package,binary-dist | Out-Null
           go build -trimpath -ldflags "-s -w" -o binary-package/wgslirp.exe ./cmd/wgslirp
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go vet ./...
+          $packages = @('./cmd/wgslirp', './cmd/stress_wg_queue') + (Get-Content tools/ci/go-shared-packages.txt)
+          go vet @packages
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go test -timeout 120s -count=1 ./...
+          go test -timeout '120s' -count=1 @packages
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:WGSLIRP_RELEASE_BINARY = (Resolve-Path binary-package/wgslirp.exe).Path
           go test -tags=integration -run '^(TestReleaseBinary|TestEncryptedWireGuardTCPUDP)$' -timeout 120s -count=1 -v ./pkg/wireguard
@@ -391,10 +383,11 @@ jobs:
           $archive = "wgslirp-$env:GITHUB_SHA-windows-amd64.zip"
           Compress-Archive -Path binary-package/wgslirp.exe,binary-package/LICENSE,binary-package/SOURCE.json -DestinationPath "binary-dist/$archive"
           $hash = (Get-FileHash "binary-dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $archive" | Set-Content -Encoding utf8 "binary-dist/$archive.sha256"
+          [IO.File]::WriteAllText((Join-Path $PWD "binary-dist/$archive.sha256"), "$hash  $archive`n")
       - uses: actions/upload-artifact@v6
         with:
-          name: 'binaries-windows-amd64-${{ github.run_id }}-${{ github.run_attempt }}'
+          name: 'binaries-windows-amd64'
+          overwrite: true
           path: binary-dist/
           retention-days: 7
           if-no-files-found: error
@@ -506,14 +499,15 @@ jobs:
     permissions:
       contents: write
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
       VERSION_TAG: ${{ github.ref_name }}
       TESTED_IMAGE: ghcr.io/irctrakz/wgslirp@${{ needs.release-image-build.outputs.digest }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v6
         with:
-          pattern: 'binaries-*-${{ github.run_id }}-${{ github.run_attempt }}'
+          pattern: 'binaries-*'
           path: binary-dist
           merge-multiple: true
       - name: Verify binary archives before publication
@@ -522,11 +516,9 @@ jobs:
           set -euo pipefail
           cd binary-dist
           test "$(find . -maxdepth 1 -type f | wc -l)" -eq 6
-          for arch in amd64 arm64; do
-            archive="wgslirp-$GITHUB_SHA-linux-$arch.tar.gz"
-            sha256sum --check "$archive.sha256"
+          for archive in wgslirp-"$GITHUB_SHA"-linux-{amd64,arm64}.tar.gz wgslirp-"$GITHUB_SHA"-windows-amd64.zip; do
+            sha256sum --binary "$archive" | sed 's/ \*/  /' | cmp - "$archive.sha256"
           done
-          sha256sum --check "wgslirp-$GITHUB_SHA-windows-amd64.zip.sha256"
           python3 - <<'PY'
           import hashlib, json, os, tarfile, zipfile
           for arch in ['amd64', 'arm64']:
@@ -550,28 +542,12 @@ jobs:
               assert metadata['platform'] == 'windows/amd64', 'wrong Windows platform'
               assert metadata['binary_sha256'] == hashlib.sha256(package.read('wgslirp.exe')).hexdigest(), 'wrong Windows binary checksum'
           PY
-          cat *.sha256 > SHA256SUMS
       - name: Publish a complete versioned release
         shell: bash
-        run: |
-          set -euo pipefail
-          tag="$VERSION_TAG"
-          prerelease=false
-          if [[ "$tag" == *-* ]]; then prerelease=true; fi
-          printf 'Source: `%s`\n\nTested image: `%s`\n\nLinux amd64/arm64 executables extracted from tested images; Windows amd64 executable validated natively with ICMP_ECHO=false. Verify downloads with SHA256SUMS.\n' \
-            "$GITHUB_SHA" "$TESTED_IMAGE" > release-notes.txt
-          if gh release view "$tag" --json isDraft > existing-release.json 2>/dev/null; then
-            python3 - <<'PY'
-          import json
-          assert json.load(open('existing-release.json'))['isDraft'], 'version is already published; refusing to replace assets'
-          PY
-          else
-            gh release create "$tag" --verify-tag --draft --title "$tag" \
-              --notes-file release-notes.txt --prerelease="$prerelease"
-          fi
-          gh release upload "$tag" binary-dist/*.tar.gz binary-dist/*.zip binary-dist/SHA256SUMS --clobber
-          gh release edit "$tag" --draft=false --prerelease="$prerelease" --latest=false
-          printf '### Binary release\n\nhttps://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: bash tools/ci/publish-binary-release.sh standalone
 
   docker:
     needs: test

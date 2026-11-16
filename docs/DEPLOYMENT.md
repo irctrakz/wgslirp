@@ -45,8 +45,9 @@ recorded by the successful promotion run rather than the moving `latest` tag.
 
 ## Downloadable binaries
 
-Version-tag pushes (`vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-SUFFIX`) run the
-same full acceptance pipeline. The tagged commit must belong to `master`.
+Standalone version-tag pushes (`vMAJOR.MINOR.PATCH` or
+`vMAJOR.MINOR.PATCH-SUFFIX`) run the standalone acceptance pipeline. The
+tagged commit must belong to `master`.
 Both native image-test jobs extract `/usr/local/bin/wgslirp` from their tested
 immutable image, check ELF architecture and absence of a dynamic interpreter,
 and package it with `LICENSE` and `SOURCE.json`. Linux executables are not rebuilt
@@ -56,6 +57,10 @@ After all image/workload gates and image promotion pass, the workflow publishes
 Linux amd64/arm64 tar archives, a Windows amd64 ZIP and `SHA256SUMS` on a
 versioned GitHub Release. Suffix tags produce prereleases. Assets are uploaded to a draft before publication; an already
 published version is never overwritten. Reruns may finish an incomplete draft.
+Publication stops if a draft contains unexpected assets or its inventory
+differs from the verified upload set. A partial workflow rerun reuses
+successful artifacts from the same run while replacing artifacts produced
+again by rerun jobs.
 Version tags also publish the tested container index under the version tag;
 they do not change the container's `latest` tag. GitHub Release publication does
 not change the repository's existing latest-release designation.
@@ -75,6 +80,33 @@ environment configuration and userspace forwarding as the container. Run it as
 an ordinary user with finite process/memory limits and working CA certificates;
 Linux ping-socket permission still applies. Container security/resource limits
 are supplied by the container runtime and are not embedded in the binary.
+
+### Linux helper for supervised integrations
+
+Helper releases use `helper-vMAJOR.MINOR.PATCH` or
+`helper-vMAJOR.MINOR.PATCH-SUFFIX` tags on commits that belong to `master`.
+They have a separate GitHub Release and require native amd64 and ARM64 helper
+acceptance against the exact packaged binaries. Standalone image and binary
+publication uses its own `v…` tag and gates.
+
+For `helper-v1.2.3`, download `wgslirp-helper-v1.2.3-linux-amd64.tar.gz` or
+`wgslirp-helper-v1.2.3-linux-arm64.tar.gz` and verify it against that release's
+`SHA256SUMS`. The archive contains the executable,
+license and `SOURCE.json` with the source commit, binary SHA-256, platform,
+binary version, protocol versions and capabilities.
+
+Run `wgslirp-helper --version` to inspect the artifact version. For a session,
+launch the executable with all three standard streams redirected and negotiate
+compatibility before sending configuration. Follow the
+[helper protocol](HELPER_PROTOCOL.md) for lifecycle and key handling.
+
+The helper publication gate runs the exact Linux amd64 and arm64 binaries
+natively. It covers pipe lifecycle and encrypted TCP mapping through live
+peer addition, revocation and stop, including unmapped traffic and a fresh
+handshake with a revoked key. The publication job checks the binary hash, source
+revision, and negotiated compatibility against the native acceptance record.
+Windows and macOS helper CI cross-builds amd64 and arm64. Linux is the helper
+release matrix.
 
 ### Windows amd64
 

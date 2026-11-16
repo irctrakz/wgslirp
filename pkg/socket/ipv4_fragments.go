@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -15,6 +16,8 @@ const (
 	ipv4FragmentDatagrams        = 32
 	ipv4FragmentSources          = 8 // live datagrams per source, including dispatch
 	ipv4FragmentRanges           = 128
+	ipv4FragmentDenialsPerSource = 128
+	ipv4FragmentDenialSources    = 128 // maximum simultaneous restricted WireGuard peers
 	ipv4FragmentLifetime         = 60 * time.Second
 	ipv4FragmentInline           = 2048
 	// Full wire allocation plus inline storage, compact ranges and map allowance.
@@ -36,6 +39,12 @@ type fragmentRange struct {
 	more       bool
 }
 
+type fragmentDenials struct {
+	keys map[fragmentKey]time.Time
+	// When this source fills its table, block its new out-of-order assemblies.
+	overflowUntil time.Time
+}
+
 type fragmentDatagram struct {
 	key                 fragmentKey
 	data                []byte
@@ -47,14 +56,19 @@ type fragmentDatagram struct {
 	deadline            time.Time
 }
 
-// The mutex protects cache membership, live dispatch reservations and counters.
+// The mutex protects cache membership, denial tracking, reservations and counters.
 // It may acquire the aggregate budget lock, never a flow lock or callback.
 type ipv4Fragments struct {
 	mu                sync.Mutex
 	budget            *resourceBudget
+	destinations      *DestinationPolicy // set before the cache is published
 	limit, used, live int
 	entries           map[fragmentKey]*fragmentDatagram
 	sources           map[[4]byte]int
+	denials           map[[4]byte]*fragmentDenials
+	// Only relevant when the socket is used with more distinct sources than
+	// the restricted runtime admits. Preserve existing sources' state.
+	untrackedSourcesUntil time.Time
 	// Reuse only released inline assemblies, never promoted payload storage.
 	// Cached plus live objects cannot exceed the 32-datagram admission cap.
 	free                                                   [ipv4FragmentDatagrams]*fragmentDatagram
@@ -108,6 +122,27 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.entries[k]
+	// Even the shortest valid initial fragment carries both TCP ports.
+	// Discard any provisional assembly for this tuple under the cache lock.
+	if r.destinations != nil {
+		if start == 0 {
+			guest := netip.AddrPortFrom(netip.AddrFrom4(k.dst), binary.BigEndian.Uint16(p[22:24]))
+			if _, allowed := r.destinations.tcp[guest]; !allowed {
+				r.rejected++
+				if d != nil {
+					delete(r.entries, k)
+					r.releaseLocked(d)
+				}
+				r.rememberDenialLocked(k, now)
+				return nil, nil, ErrDestinationDenied
+			}
+			// A mapped first fragment may reuse an ID. Keep the old denial so
+			// delayed fragments cannot reopen it after the new assembly leaves.
+		} else if d == nil && r.deniesOrphanLocked(k, now) {
+			r.rejected++
+			return nil, nil, ErrDestinationDenied
+		}
+	}
 	if d != nil && !now.Before(d.deadline) {
 		r.rejected++
 		// Maintenance owns timeout feedback and disposal, including fragment zero.
@@ -225,6 +260,69 @@ func (r *ipv4Fragments) add(packet []byte, now time.Time) ([]byte, func(), error
 	return out, func() { once.Do(func() { r.mu.Lock(); defer r.mu.Unlock(); r.releaseLocked(d) }) }, nil
 }
 
+func (r *ipv4Fragments) deniesOrphanLocked(key fragmentKey, now time.Time) bool {
+	if source := r.denials[key.src]; source != nil {
+		return now.Before(source.keys[key]) || now.Before(source.overflowUntil)
+	}
+	return now.Before(r.untrackedSourcesUntil)
+}
+
+func (r *ipv4Fragments) rememberDenialLocked(key fragmentKey, now time.Time) {
+	deadline := now.Add(ipv4FragmentLifetime)
+	source := r.denials[key.src]
+	if source == nil {
+		if len(r.denials) == ipv4FragmentDenialSources {
+			r.expireDenialsLocked(now)
+		}
+		if len(r.denials) == ipv4FragmentDenialSources {
+			if deadline.After(r.untrackedSourcesUntil) {
+				r.untrackedSourcesUntil = deadline
+			}
+			return
+		}
+		if r.denials == nil {
+			r.denials = make(map[[4]byte]*fragmentDenials)
+		}
+		source = &fragmentDenials{keys: make(map[fragmentKey]time.Time)}
+		// This source may have had an untracked denial before a slot opened.
+		source.overflowUntil = r.untrackedSourcesUntil
+		r.denials[key.src] = source
+	}
+	if previous, tracked := source.keys[key]; tracked {
+		if deadline.After(previous) {
+			source.keys[key] = deadline
+		}
+		return
+	}
+	if len(source.keys) == ipv4FragmentDenialsPerSource {
+		source.expireKeys(now)
+	}
+	if len(source.keys) == ipv4FragmentDenialsPerSource {
+		if deadline.After(source.overflowUntil) {
+			source.overflowUntil = deadline
+		}
+		return
+	}
+	source.keys[key] = deadline
+}
+
+func (source *fragmentDenials) expireKeys(now time.Time) {
+	for key, deadline := range source.keys {
+		if !now.Before(deadline) {
+			delete(source.keys, key)
+		}
+	}
+}
+
+func (r *ipv4Fragments) expireDenialsLocked(now time.Time) {
+	for address, source := range r.denials {
+		source.expireKeys(now)
+		if len(source.keys) == 0 && !now.Before(source.overflowUntil) {
+			delete(r.denials, address)
+		}
+	}
+}
+
 func (r *ipv4Fragments) releaseLocked(d *fragmentDatagram) {
 	r.used -= ipv4FragmentCharge
 	r.live--
@@ -246,12 +344,17 @@ func (r *ipv4Fragments) releaseLocked(d *fragmentDatagram) {
 func (r *ipv4Fragments) expire(now time.Time) []*fragmentDatagram {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.expireDenialsLocked(now)
 	var expired []*fragmentDatagram
 	for k, d := range r.entries {
 		if !now.Before(d.deadline) {
 			delete(r.entries, k)
 			r.expired++
-			expired = append(expired, d)
+			if r.destinations != nil {
+				r.releaseLocked(d)
+			} else {
+				expired = append(expired, d)
+			}
 		}
 	}
 	return expired
@@ -271,6 +374,8 @@ func (r *ipv4Fragments) close() {
 		r.releaseLocked(d)
 	}
 	clear(r.free[:])
+	clear(r.denials)
+	r.untrackedSourcesUntil = time.Time{}
 	r.freeCount = 0
 }
 
