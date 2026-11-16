@@ -15,6 +15,7 @@ ARCHES = {"amd64": 62, "arm64": 183}
 CAPABILITIES = ["restricted_tcp", "live_peers"]
 MAX_BINARY_BYTES = 32 * 1024 * 1024
 MEMBERS = {"wgslirp-helper": 0o755, "LICENSE": 0o644, "SOURCE.json": 0o644}
+LICENSE = Path(__file__).resolve().parents[2] / "LICENSE"
 
 
 def metadata(binary, source, version, arch):
@@ -42,12 +43,20 @@ def metadata(binary, source, version, arch):
     }
 
 
-def package(binary_path, output, source, version, arch):
+def accepted_metadata(binary, source, version, arch, evidence_dir):
+    expected = metadata(binary, source, version, arch)
+    observed = json.loads((evidence_dir / f"acceptance-{arch}.json").read_bytes())
+    if observed != expected:
+        raise ValueError(f"binary and native acceptance evidence differ: linux/{arch}")
+    return observed
+
+
+def package(binary_path, output, source, version, arch, evidence_dir):
     binary = binary_path.read_bytes()
     contents = {
         "wgslirp-helper": binary,
-        "LICENSE": (Path(__file__).resolve().parents[2] / "LICENSE").read_bytes(),
-        "SOURCE.json": (json.dumps(metadata(binary, source, version, arch), indent=2) + "\n").encode(),
+        "LICENSE": LICENSE.read_bytes(),
+        "SOURCE.json": (json.dumps(accepted_metadata(binary, source, version, arch, evidence_dir), indent=2) + "\n").encode(),
     }
     output.mkdir(parents=True, exist_ok=True)
     path = output / f"wgslirp-helper-{version}-linux-{arch}.tar.gz"
@@ -65,7 +74,7 @@ def checksum(path):
     return f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n".encode()
 
 
-def verify(directory, source, version):
+def verify(directory, source, version, evidence_dir):
     expected = {f"wgslirp-helper-{version}-linux-{arch}.tar.gz": arch for arch in ARCHES}
     names = {path.name for path in directory.iterdir() if path.is_file()}
     if names != set(expected) | {f"{name}.sha256" for name in expected}:
@@ -82,7 +91,9 @@ def verify(directory, source, version):
                 raise ValueError(f"invalid archive members: {name}")
             binary = archive.extractfile("wgslirp-helper").read()
             actual = json.load(archive.extractfile("SOURCE.json"))
-            if actual != metadata(binary, source, version, arch):
+            if archive.extractfile("LICENSE").read() != LICENSE.read_bytes():
+                raise ValueError(f"invalid license: {name}")
+            if actual != accepted_metadata(binary, source, version, arch, evidence_dir):
                 raise ValueError(f"invalid helper metadata: {name}")
 
 
@@ -91,6 +102,7 @@ def main():
     parser.add_argument("directory", type=Path)
     parser.add_argument("--source", required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--arch", choices=ARCHES)
     args = parser.parse_args()
@@ -98,9 +110,9 @@ def main():
         parser.error("--binary and --arch are required together")
     try:
         if args.binary:
-            package(args.binary, args.directory, args.source, args.version, args.arch)
+            package(args.binary, args.directory, args.source, args.version, args.arch, args.evidence)
         else:
-            verify(args.directory, args.source, args.version)
+            verify(args.directory, args.source, args.version, args.evidence)
     except (OSError, ValueError, tarfile.TarError) as err:
         parser.exit(1, f"{err}\n")
 

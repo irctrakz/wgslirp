@@ -53,8 +53,14 @@ func TestHelperProcessEntry(t *testing.T) {
 
 func launchHelper(t *testing.T, closeStdout bool) *helperProcess {
 	t.Helper()
+	return launchHelperWithStderr(t, closeStdout, nil)
+}
+
+func launchHelperWithStderr(t *testing.T, closeStdout bool, stderr io.Writer) *helperProcess {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	cmd := helperCommand(ctx)
+	cmd.Stderr = stderr
 	t.Cleanup(func() {
 		cancel()
 		if cmd.Process != nil && cmd.ProcessState == nil {
@@ -115,7 +121,7 @@ func hello(versions ...int) object {
 	return object{"id": 1, "op": "hello", "params": object{"versions": versions}}
 }
 
-func (p *helperProcess) handshake(t *testing.T) {
+func (p *helperProcess) handshake(t *testing.T) object {
 	t.Helper()
 	p.send(t, hello(2, 1))
 	msg := p.receive(t)
@@ -133,6 +139,7 @@ func (p *helperProcess) handshake(t *testing.T) {
 		fmt.Sprint(result["capabilities"]) != "[restricted_tcp live_peers]" {
 		t.Fatalf("unexpected hello: %v", msg)
 	}
+	return result
 }
 
 func expectedHelperVersion() string {

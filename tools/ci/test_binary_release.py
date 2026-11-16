@@ -1,4 +1,5 @@
 # Exercise actual workflow release commands without network publication.
+import fnmatch
 import hashlib
 import io
 import json
@@ -149,6 +150,8 @@ class HelperPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             dist = root / 'dist'
+            evidence = root / 'evidence'
+            evidence.mkdir()
             binary = root / 'wgslirp-helper'
             for arch, machine in helper_release.ARCHES.items():
                 elf = bytearray(120)
@@ -158,22 +161,61 @@ class HelperPackageTests(unittest.TestCase):
                 struct.pack_into('<HH', elf, 54, 56, 1)
                 struct.pack_into('<I', elf, 64, 1)
                 binary.write_bytes(elf)
-                helper_release.package(binary, dist, source, version, arch)
-            helper_release.verify(dist, source, version)
-            with self.assertRaisesRegex(ValueError, 'metadata'):
-                helper_release.verify(dist, 'b' * 40, version)
+                accepted = helper_release.metadata(elf, source, version, arch)
+                (evidence / f'acceptance-{arch}.json').write_text(json.dumps(accepted))
+                helper_release.package(binary, dist, source, version, arch, evidence)
+            helper_release.verify(dist, source, version, evidence)
+            with self.assertRaisesRegex(ValueError, 'acceptance evidence'):
+                helper_release.verify(dist, 'b' * 40, version, evidence)
             archive = dist / f'wgslirp-helper-{version}-linux-arm64.tar.gz'
+            # Replace the binary and rebuild both checksum layers. The native
+            # job's independent record must still reject the substitution.
+            binary.write_bytes(binary.read_bytes() + b'different build')
+            fake_evidence = root / 'fake'
+            fake_evidence.mkdir()
+            substitute = helper_release.metadata(binary.read_bytes(), source, version, 'arm64')
+            (fake_evidence / 'acceptance-arm64.json').write_text(json.dumps(substitute))
+            with self.assertRaisesRegex(ValueError, 'acceptance evidence'):
+                helper_release.package(binary, dist, source, version, 'arm64', evidence)
+            helper_release.package(binary, dist, source, version, 'arm64', fake_evidence)
+            with self.assertRaisesRegex(ValueError, 'acceptance evidence'):
+                helper_release.verify(dist, source, version, evidence)
             with archive.open('ab') as file:
                 file.write(b'tampered')
             with self.assertRaisesRegex(ValueError, 'checksum'):
-                helper_release.verify(dist, source, version)
+                helper_release.verify(dist, source, version, evidence)
             archive.unlink()
             with self.assertRaisesRegex(ValueError, 'artifact set'):
-                helper_release.verify(dist, source, version)
+                helper_release.verify(dist, source, version, evidence)
+
+    def test_partial_rerun_reuses_successful_artifacts_from_same_run(self):
+        workflow = WORKFLOW.read_text(encoding='utf-8')
+        release = workflow.split('\n  release-binaries:\n', 1)[1].split('\n  docker:', 1)[0]
+        patterns = re.findall(r"pattern: '([^']+)'", release)
+        expected = {
+            'binaries-amd64', 'binaries-arm64', 'binaries-windows-amd64',
+            'helper-binaries-amd64', 'helper-binaries-arm64',
+            'helper-acceptance-amd64', 'helper-acceptance-arm64',
+        }
+        # Model one matrix cell rerunning while all other producers retain
+        # their prior success. Replacement must keep its name in the same run.
+        templates = re.findall(r"name: '((?:helper-(?:binaries|acceptance)|binaries)-[^']+)'\n\s+overwrite: true", workflow)
+        self.assertEqual(len(templates), 4)
+        available = {}
+        for template in templates:
+            for arch in (('amd64', 'arm64') if 'matrix.arch' in template else ('amd64',)):
+                name = template.replace('${{ matrix.arch }}', arch)
+                available[name.replace('${{ github.run_attempt }}', '1')] = 1
+                if name.startswith('helper-') and name.endswith('-arm64'):
+                    available[name.replace('${{ github.run_attempt }}', '2')] = 2
+        selected = {name: attempt for name, attempt in available.items()
+                    if any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)}
+        self.assertEqual(selected, {name: 2 if name.startswith('helper-') and name.endswith('-arm64') else 1
+                                    for name in expected})
 
 
 class ReleasePublicationTests(unittest.TestCase):
-    def run_release(self, state='absent', upload_exit=0, tag='v1.2.3'):
+    def run_release(self, state='absent', upload_exit=0, tag='v1.2.3', inventory=None):
         bash = shutil.which('bash')
         if not bash and os.name == 'nt':
             candidate = Path('C:/Program Files/Git/bin/bash.exe')
@@ -186,11 +228,13 @@ gh() {
   printf '%s\n' "$*" >> calls.txt
   case "$2" in
     view)
-      if [ "$RELEASE_STATE" = absent ]; then return 1; fi
-      if [ "$RELEASE_STATE" = published ]; then printf '{"isDraft":false}';
-      else printf '{"isDraft":true}'; fi ;;
+      if [ -f uploaded ]; then cat uploaded.json;
+      elif [ "$RELEASE_STATE" = absent ]; then return 1;
+      else cat initial.json; fi ;;
     create) return 0 ;;
-    upload) return "$UPLOAD_EXIT" ;;
+    upload)
+      if [ "$UPLOAD_EXIT" != 0 ]; then return "$UPLOAD_EXIT"; fi
+      touch uploaded ;;
     edit) return 0 ;;
     *) return 99 ;;
   esac
@@ -200,8 +244,17 @@ python3() { "$TEST_PYTHON" "$@"; }
         with tempfile.TemporaryDirectory(prefix='wgslirp-release-control-') as directory:
             path = Path(directory)
             (path / 'binary-dist').mkdir()
-            for filename in ['amd64.tar.gz', 'arm64.tar.gz', 'windows.zip', 'SHA256SUMS']:
+            names = ['amd64.tar.gz', 'arm64.tar.gz', 'windows.zip',
+                     'helper-amd64.tar.gz', 'helper-arm64.tar.gz', 'SHA256SUMS']
+            for filename in names:
                 (path / 'binary-dist' / filename).write_text('test-only')
+            initial = ['stale-helper.tar.gz'] if state == 'extra' else names[:1]
+            (path / 'initial.json').write_text(json.dumps({
+                'isDraft': state != 'published', 'assets': [{'name': name} for name in initial],
+            }))
+            (path / 'uploaded.json').write_text(json.dumps({
+                'isDraft': True, 'assets': [{'name': name} for name in (names if inventory is None else inventory)],
+            }))
             env = os.environ | {'RELEASE_STATE': state, 'UPLOAD_EXIT': str(upload_exit),
                                 'VERSION_TAG': tag, 'GITHUB_SHA': 'abc',
                                 'TESTED_IMAGE': 'test@sha256:abc',
@@ -217,7 +270,7 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_new_release_stays_draft_until_upload_succeeds(self):
         result, calls = self.run_release()
         self.assertEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'create', 'upload', 'edit'])
+        self.assertEqual([line.split()[1] for line in calls], ['view', 'create', 'upload', 'view', 'edit'])
         self.assertIn('--draft', calls[1])
         self.assertIn('--verify-tag', calls[1])
         self.assertIn('--prerelease=false', calls[-1])
@@ -235,7 +288,17 @@ python3() { "$TEST_PYTHON" "$@"; }
     def test_incomplete_draft_can_be_resumed(self):
         result, calls = self.run_release(state='draft')
         self.assertEqual(result, 0)
-        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'edit'])
+        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view', 'edit'])
+
+    def test_stale_draft_asset_blocks_upload_and_publication(self):
+        result, calls = self.run_release(state='extra')
+        self.assertNotEqual(result, 0)
+        self.assertEqual([line.split()[1] for line in calls], ['view'])
+
+    def test_remote_inventory_must_match_after_upload(self):
+        result, calls = self.run_release(state='draft', inventory=['SHA256SUMS'])
+        self.assertNotEqual(result, 0)
+        self.assertEqual([line.split()[1] for line in calls], ['view', 'upload', 'view'])
 
     def test_suffix_tag_creates_prerelease(self):
         result, calls = self.run_release(tag='v1.2.3-rc.1')
