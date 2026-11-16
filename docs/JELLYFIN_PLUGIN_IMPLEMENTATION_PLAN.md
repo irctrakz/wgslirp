@@ -880,6 +880,29 @@ binary's version. It passed on rerun.
   successfully against the VM's evidence, and a separate unversioned build
   was rejected against the same record.
 
+**W7 release verification follow-up**
+
+- Each standalone checksum sidecar must match the bytes and exact filename
+  of its archive. The final manifest hashes the five release archives by
+  explicit name. The regression rejects a sidecar that names another archive
+  and verifies the five manifest entries.
+- Publication checks the paginated draft inventory against the files to be
+  uploaded. After upload it also requires matching GitHub asset state, size
+  and SHA-256 for each file, including `SHA256SUMS`. It resolves the remote
+  tag before touching the draft and again before publishing. The tests cover
+  same-name invalid assets, lightweight and annotated tags, and tags moved
+  or deleted both before and after upload.
+- Native encrypted acceptance sends a SYN to an unmapped port on the mapped
+  guest IP and observes the denial before probing direct host access. It
+  checks both denials, authorized forwarding, and the fresh revoked-key
+  handshake against the versioned helper. The Linux amd64 VM passed and the
+  resulting binary packaged against its native acceptance record.
+- All 17 release-control tests and 100 protocol fixture cases passed.
+  Windows integration and vet, the Linux amd64 helper, runtime, socket and
+  standalone SIGTERM checks, Linux integration vet, Bash syntax, and the
+  Linux ARM64 helper and acceptance-test cross-build passed. Draft asset
+  verification used stubs, and tag peeling was also checked with local Git.
+
 W7 is ready for another review. The native ARM64 GitHub runner and an
 actual tagged publication remain unverified. The Linux release checkbox stays
 open until native evidence exists for both architectures. Final cross-platform
