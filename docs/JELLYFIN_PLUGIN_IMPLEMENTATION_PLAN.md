@@ -941,10 +941,13 @@ binary's version. It passed on rerun.
 - All 20 local release-control tests, 100 shared protocol cases, publication
   Bash syntax, and `git diff --check` passed with stubbed release endpoints.
 
-W7 is ready for another review. The native ARM64 GitHub runner and an
-actual tagged publication remain unverified. The Linux release checkbox stays
-open until native evidence exists for both architectures. Final cross-platform
-acceptance remains open.
+**W7 code approval**
+
+- [x] W7 code approved at `91b785d`, including the draft creation regression.
+- [ ] Run the branch acceptance workflow on the native Linux ARM64 runner
+  and record the job and evidence before release review.
+
+Tagged publication and final cross-platform acceptance remain open.
 
 **Maintainability review**
 
