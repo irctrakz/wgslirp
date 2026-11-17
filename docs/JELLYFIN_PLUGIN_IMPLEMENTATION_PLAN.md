@@ -1050,7 +1050,8 @@ Final cross-platform helper acceptance remains open.
   | Linux ARM64 | `aebcdfa52c179ec9bcc942b677e8f6c61430013af536048e4967fa8680a89166` |
   | Windows amd64 | `a4b7f495b568dcde4d08cb6a204b02dd9932a0a6edef95d82425724413bcf5ff` |
 
-- [ ] Review the published release evidence before starting Jellyfin plugin work.
+- [x] Review and approve the published release evidence. W7 is complete for
+  the published standalone and Linux helper targets.
 
 **W7 security review**
 
