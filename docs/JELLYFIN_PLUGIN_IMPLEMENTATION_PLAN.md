@@ -1095,15 +1095,32 @@ Final cross-platform helper acceptance remains open.
 
 Dependency: W1. This work can proceed while the Go runtime work is underway.
 
-- [ ] Select one initial Jellyfin server version and pin compatible framework and
+- [x] Select one initial Jellyfin server version and pin compatible framework and
   package versions.
-- [ ] Separate the protocol client and supervisor from dashboard/controller code.
-- [ ] Implement the shared protocol fixtures in C#, including request correlation,
+- [x] Separate the protocol client from the Jellyfin entry point and keep the
+  boundary ready for the J2 supervisor.
+- [x] Implement the shared protocol fixtures in C#, including request correlation,
   bounded reads, cancellation and compatibility failures.
-- [ ] Reject incompatible helpers before sending secrets or starting forwarding.
+- [x] Reject incompatible helpers before sending secrets or starting forwarding.
 
 **Complete when:** the C# client passes shared fixtures independently of a running
 Jellyfin instance and enforces the agreed compatibility boundary.
+
+**J1 review checkpoint**
+
+- The separate local `jellyfin-plugin-wgslirp` repo contains the skeleton and
+  stream-based client at `ed9a9d3`. It targets Jellyfin 12.4 and .NET 10 with
+  locked package versions. The v1 schema and fixtures match upstream
+  `969a3c8` byte for byte.
+- Locked restore, Release build, and Actions lint passed. The C# checks
+  passed 24 frame fixtures, 22 schema cases, 54 transcript checks and 11
+  client replays. Failure checks covered compatibility, correlation, partial
+  EOF, cancellation, stalled writes, and reconciliation deadlines.
+- An unprivileged Linux amd64 VM ran the same suite against the
+  checksum-verified `helper-v0.1.0` executable. The client negotiated,
+  validated configuration, started on an ephemeral port, retrieved running
+  status, and stopped the helper with exit code zero.
+- [ ] Review J1 before starting J2.
 
 ### J2 — Implement helper discovery and supervision
 
