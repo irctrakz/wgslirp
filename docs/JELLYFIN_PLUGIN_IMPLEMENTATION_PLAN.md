@@ -1120,6 +1120,22 @@ Jellyfin instance and enforces the agreed compatibility boundary.
   checksum-verified `helper-v0.1.0` executable. The client negotiated,
   validated configuration, started on an ephemeral port, retrieved running
   status, and stopped the helper with exit code zero.
+
+**J1 review fixes**
+
+- Plugin commit `dcc9918` on local branch `codex/j1-review-fixes` completes
+  peer reconciliation before admitting another request and seals the session
+  when a successful mutation disagrees with the peer snapshot. It also
+  verifies fixed and default startup ports and preserves the startup port
+  and server public key across running status replies.
+- Requests use bounded UTF-8 JSON input so oversized parameters are rejected
+  before parsing or encoding. Read and write deadlines also cover streams
+  that block synchronously before returning their task.
+- Locked restore, Release build and five repeated C# runs passed. The suite
+  covered all four regressions, 24 frame fixtures, 22 schema cases, 54
+  transcript checks and 11 client replays. The same suite passed in an
+  unprivileged Linux amd64 VM. The checksum-verified `helper-v0.1.0` binary
+  passed negotiation, validation, startup, status and clean shutdown.
 - [ ] Review J1 before starting J2.
 
 ### J2 — Implement helper discovery and supervision
