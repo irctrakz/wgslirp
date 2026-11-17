@@ -999,6 +999,27 @@ Tagged publication and final cross-platform acceptance remain open.
   native Windows helper tests passed locally. The parser rename to
   `parseBoundedUint` preserves its behavior.
 
+**PR #14 post-merge verification**
+
+- [x] [PR #14](https://github.com/irctrakz/wgslirp/pull/14) merged into
+  `master` as `969a3c8621725e8a639f4236b873b0dd15859269`. The merge tree
+  matches the approved integration commit `ba2b385`.
+- [x] [Go Tests](https://github.com/irctrakz/wgslirp/actions/runs/43977451263)
+  passed on the merge commit.
+- [x] The [helper workflow](https://github.com/irctrakz/wgslirp/actions/runs/43977451221)
+  passed the scoped runtime suite, native Linux amd64 and ARM64 acceptance,
+  and Windows helper tests. Both Linux archives verified against their
+  checksums, native evidence, and the merge commit.
+- [x] The [standalone workflow](https://github.com/irctrakz/wgslirp/actions/runs/43977451375)
+  passed Windows binary acceptance, native Linux amd64 and ARM64 image
+  tests, and all ordinary and race-enabled encrypted workloads. This
+  includes all six unpaced-fragment repetitions.
+- The regular master workflow promoted the tested dual-architecture image.
+  The merge commit's image tag and the moving `latest` tag both resolve to
+  `sha256:ceeb4bbc8968403b3a18cce1da7a10075d62354b5591eded0d8bfae2d0a4bcd7`.
+- [ ] Review version tagging and publication. Both GitHub Release jobs were
+  skipped on the master push. Jellyfin plugin work remains pending review.
+
 **W7 security review**
 
 - A pattern scan of the tracked checkout and 1,534 blobs reachable from local
