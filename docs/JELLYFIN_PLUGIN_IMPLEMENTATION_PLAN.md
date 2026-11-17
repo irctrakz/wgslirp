@@ -972,7 +972,7 @@ binary's version. It passed on rerun.
 - Local checks passed for both Linux acceptance-test cross-builds, all 20
   release-control tests, all 100 shared protocol cases, and `git diff --check`.
 
-Tagged publication and final cross-platform acceptance remain open.
+Final cross-platform helper acceptance remains open.
 
 **Independent release gates**
 
@@ -1017,8 +1017,40 @@ Tagged publication and final cross-platform acceptance remain open.
 - The regular master workflow promoted the tested dual-architecture image.
   The merge commit's image tag and the moving `latest` tag both resolve to
   `sha256:ceeb4bbc8968403b3a18cce1da7a10075d62354b5591eded0d8bfae2d0a4bcd7`.
-- [ ] Review version tagging and publication. Both GitHub Release jobs were
+- [x] Approve version tagging and publication. Both GitHub Release jobs were
   skipped on the master push. Jellyfin plugin work remains pending review.
+
+**Versioned releases**
+
+- [x] Approved `v1.1.0` and `helper-v0.1.0` resolve to
+  `969a3c8621725e8a639f4236b873b0dd15859269`.
+- [x] [Helper v0.1.0](https://github.com/irctrakz/wgslirp/releases/tag/helper-v0.1.0)
+  published after the [tagged helper workflow](https://github.com/irctrakz/wgslirp/actions/runs/43984886582)
+  passed the shared runtime suite and native Linux amd64 and ARM64 acceptance.
+  Both public archives and `SHA256SUMS` verified against GitHub's asset
+  digests and the workflow artifacts. Both executables record the clean Go
+  revision `969a3c8` and match their native acceptance records.
+
+  | Helper archive | SHA-256 |
+  | --- | --- |
+  | Linux amd64 | `8f095ce7a7e5f10b5999f9b4e9bdc3e7a3d3ce83ecda6542d056721e539c76e2` |
+  | Linux ARM64 | `55a311cbd98637ab50afbe12bf1b22475702f211e9d0bcc70a8485f661576031` |
+
+- [x] [Standalone v1.1.0](https://github.com/irctrakz/wgslirp/releases/tag/v1.1.0)
+  published after the [tagged standalone workflow](https://github.com/irctrakz/wgslirp/actions/runs/43984886567)
+  passed Windows amd64 binary acceptance, both native Linux image tests, and
+  all encrypted workloads. All three public archives and `SHA256SUMS`
+  verified against GitHub's asset digests and the tested workflow artifacts.
+  The Linux archives record the released dual-architecture container
+  digest `sha256:7691131e09dcfa1fec6646c37dac6b88ead7674a635db11e58f2149183b57c60`.
+
+  | Standalone archive | SHA-256 |
+  | --- | --- |
+  | Linux amd64 | `a83a8bc2ec47d84b52bdba2388978025998eae4db266da95c6110340a31d4fcb` |
+  | Linux ARM64 | `aebcdfa52c179ec9bcc942b677e8f6c61430013af536048e4967fa8680a89166` |
+  | Windows amd64 | `a4b7f495b568dcde4d08cb6a204b02dd9932a0a6edef95d82425724413bcf5ff` |
+
+- [ ] Review the published release evidence before starting Jellyfin plugin work.
 
 **W7 security review**
 
