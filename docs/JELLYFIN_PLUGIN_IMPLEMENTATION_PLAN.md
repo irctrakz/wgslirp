@@ -1136,7 +1136,34 @@ Jellyfin instance and enforces the agreed compatibility boundary.
   transcript checks and 11 client replays. The same suite passed in an
   unprivileged Linux amd64 VM. The checksum-verified `helper-v0.1.0` binary
   passed negotiation, validation, startup, status and clean shutdown.
-- [ ] Review J1 before starting J2.
+
+**J1 follow-up fixes**
+
+- On `codex/j1-review-fixes`, a stdout read timeout fault seals the session
+  with `pipe_failure` without writing a reconciliation request. A genuine peer
+  response deadline still queues status behind the original mutation.
+- A successful peer mutation must report exactly `expected_revision + 1` on
+  both the direct reply and reconciliation paths. A stale success seals the
+  session, including when the queued status agrees with the stale revision
+  and shows the intended peer state.
+- Locked restore and Release build passed with zero warnings and errors. Five
+  C# suite runs passed, including the stdout fault regression, both stale
+  success regressions, 24 frame fixtures, 22 schema cases, 54 transcript
+  checks and 11 client replays. The updated suite also passed in an
+  unprivileged Linux amd64 VM. The checksum-verified published helper
+  `helper-v0.1.0` passed `hello`, `validate`, `start`, `status` and `stop`.
+  The smoke runner reported `WGSLIRP_J1_EXIT=0`.
+- Reconciliation rejects duplicate public keys and duplicate IPv4 addresses
+  across the full applied-peer snapshot. Separate regressions exercise each
+  conflict among peers unrelated to the mutation and verify that queued
+  requests cannot write after reconciliation fails. The duplicate-key case
+  reproduced the bug before the fix.
+- After the snapshot fix, locked restore, Release build, five C# suite runs
+  and `git diff --check` passed. The updated suite and published helper smoke
+  also passed in the unprivileged Linux amd64 VM. The checksum-verified
+  helper v0.1.0 completed `hello`, `validate`, `start`, `status` and `stop`
+  with `WGSLIRP_J1_EXIT=0`.
+- [x] Review J1 before starting J2. Approved after the snapshot uniqueness fix.
 
 ### J2 — Implement helper discovery and supervision
 
