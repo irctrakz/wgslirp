@@ -1164,25 +1164,112 @@ Jellyfin instance and enforces the agreed compatibility boundary.
   helper v0.1.0 completed `hello`, `validate`, `start`, `status` and `stop`
   with `WGSLIRP_J1_EXIT=0`.
 - [x] Review J1 before starting J2. Approved after the snapshot uniqueness fix.
+  Plugin commit `7d106c0` was pushed to `codex/j1-review-fixes`; plan commit
+  `541e080` was pushed to `codex/jellyfin-integration`. Both remote branch
+  heads were verified against the local commits.
 
 ### J2 — Implement helper discovery and supervision
 
 Dependency: W6 for real integration.
 
-- [ ] Select the binary by operating system and process architecture.
-- [ ] Launch directly, without a shell, using redirected stdin/stdout/stderr.
-- [ ] Handle readiness, clean shutdown, process reaping, bounded restart backoff
+- [x] Select the binary by operating system and process architecture.
+- [x] Launch directly, without a shell, using redirected stdin/stdout/stderr.
+- [x] Handle readiness, clean shutdown, process reaping, bounded restart backoff
   and duplicate-start prevention.
-- [ ] Keep Jellyfin operational when the helper fails and expose a useful plugin error.
-- [ ] Put executable permissions, forced termination and process ownership behind
+- [x] Keep Jellyfin operational when the helper fails and expose a useful plugin error.
+- [x] Put executable permissions, forced termination and process ownership behind
   small platform adapters; avoid Unix-signal dependencies in shared lifecycle code.
-- [ ] Manage owned processes by retained handles, never executable-name searches.
-- [ ] Provide an internal helper-path override for development; use pinned bundled
+- [x] Manage owned processes by retained handles, never executable-name searches.
+- [x] Provide an internal helper-path override for development; use pinned bundled
   binaries in packaged installations.
-- [ ] Verify start/stop/crash/restart, Jellyfin shutdown and failed-launch behavior.
+- [x] Verify start/stop/crash/restart, Jellyfin shutdown and failed-launch behavior.
 
 **Complete when:** the wrapper reliably owns one helper without duplicate or
 orphaned processes in the tested lifecycle scenarios.
+
+**J2 review checkpoint**
+
+- The new `Wgslirp.Runtime` library on the plugin review branch owns the
+  process lifecycle independently of the protocol client and Jellyfin entry
+  point. Discovery uses the process architecture and pins the published
+  v0.1.0 Linux amd64 and ARM64 executable digests. Both pins were checked
+  against the checksum-verified published archives. Unsupported packaged
+  platforms and missing or altered executables produce safe error codes.
+- The supervisor negotiates compatibility before sending configuration,
+  validates the transient configuration, and waits for startup acknowledgement.
+  Concurrent starts share one worker. Automatic restarts are limited to three,
+  with exponential delays from one second capped at thirty seconds. Cleanup
+  precedes replacement. Graceful shutdown has a twenty-second deadline,
+  followed by forced termination and a five-second reap deadline. A failed
+  termination retains the owned process handle and prevents another launch
+  until cleanup succeeds. Stderr is consumed with a fixed-size buffer and
+  its raw contents are discarded.
+- Jellyfin registration provides one supervisor and a hosted shutdown hook.
+  The development helper-path override is available to trusted callers and is
+  absent from plugin configuration. J3 will supply persisted desired state
+  and enable startup from that configuration. Bundled binary distribution
+  remains part of plugin packaging.
+- Locked restore, Release build and `git diff --check` passed. Native Windows
+  subprocess checks passed concurrent starts, clean stop/restart, disposal,
+  canceled startup, stderr saturation, forced shutdown, crash recovery,
+  finite restart attempts, incompatible helpers, failed launch, failed
+  termination, duplicate-launch rejection during failed cleanup, and cleanup
+  retry. All shared J1 fixtures and regressions also passed.
+- The same subprocess suite passed under an unprivileged Linux amd64 VM.
+  The checksum-verified published Go helper v0.1.0 passed pinned bundled
+  discovery, readiness, clean stop, process reaping and restart through the
+  supervisor. The existing `hello`/`validate`/`start`/`status`/`stop` smoke
+  also passed. The combined runner reported `WGSLIRP_J1_EXIT=0`.
+- Full Jellyfin server boot and native Linux ARM64 execution were not run in
+  this checkpoint. The shutdown callback delegates to the tested supervisor
+  lifecycle; plugin registration was compiled against pinned Jellyfin 12.4.
+
+**J2 review fixes**
+
+- Startup publishes its shared readiness task while holding the lifecycle
+  gate, then releases the gate before waiting. Stop and disposal can cancel
+  an in-progress resolver or handshake. A canceled starter checks its worker
+  generation before cleaning up, so it cannot stop a replacement worker.
+  Regressions stop and dispose during a resolver blocked on cancellation,
+  and stop a child after an explicit marker confirms receipt of `hello`.
+- Disposal closes admission while preserving retryable cleanup. A failed
+  termination retains the process handle and cancellation source. Successful
+  cleanup disposes the source and clears the completed worker. Regressions
+  recover from failed disposal through both `DisposeAsync` and `StopAsync`,
+  verify that the child is reaped, and keep subsequent startup rejected.
+- Native launch first executes the existing binary. Unix permission repair
+  is attempted only after an execution-permission failure and a missing
+  owner execute bit. Linux acceptance launches the original root-owned
+  executable as the unprivileged service user and verifies its mode is
+  preserved. A separate owned copy starts without execute bits and exercises
+  permission repair before pinned startup.
+- Stderr draining has its own lifetime through the stop exchange and process
+  cleanup. A child writes one MiB of stderr before acknowledging `stop`;
+  the regression verifies graceful exit, reaping and zero forced kills.
+- Locked restore, Release build with zero warnings/errors, native Windows
+  subprocess and shared protocol checks, and `git diff --check` passed.
+  The updated suite also passed in the unprivileged Linux amd64 VM. The
+  checksum-verified helper v0.1.0 passed direct execution, pinned bundled
+  discovery, readiness, stop, reaping and restart. The existing protocol
+  smoke passed `hello`, `validate`, `start`, `status` and `stop`. The combined
+  runner reported `WGSLIRP_J1_EXIT=0` in `j2-four-fixes-linux.log`.
+- Repeated starts share initial readiness while the first attempt is pending.
+  After that attempt finishes, they report the worker's current runtime
+  state. Calls during automatic recovery return false until the helper is
+  running, and a successful retry supersedes an initial launch failure.
+  The crash regression holds the replacement resolver after cleanup and
+  before launch, verifies false readiness and zero duplicate launches, then
+  releases the retry and verifies true readiness. A second regression fails
+  exactly one launch and verifies true readiness after automatic recovery.
+  The new crash regression reproduced the stale-success bug before the fix.
+- After the readiness fix, locked restore, Release build with zero warnings
+  or errors, native Windows subprocess and shared protocol checks, and
+  `git diff --check` passed. Both recovery regressions and the rest of the
+  suite also passed in the unprivileged Linux amd64 VM. The checksum-verified
+  helper v0.1.0 passed direct and pinned bundled startup, permission handling,
+  clean stop, reaping and restart, plus the existing protocol smoke. The
+  combined runner reported `WGSLIRP_J1_EXIT=0` in `j2-readiness-fix-linux.log`.
+- [x] Review J2 before starting J3. Approved after the recovery readiness fix.
 
 ### J3 — Implement persistent desired state and reconciliation
 
