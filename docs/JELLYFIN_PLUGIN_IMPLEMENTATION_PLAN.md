@@ -1270,24 +1270,136 @@ orphaned processes in the tested lifecycle scenarios.
   clean stop, reaping and restart, plus the existing protocol smoke. The
   combined runner reported `WGSLIRP_J1_EXIT=0` in `j2-readiness-fix-linux.log`.
 - [x] Review J2 before starting J3. Approved after the recovery readiness fix.
+  Plugin commit `b9121a4` and plan commit `10fdab5` were pushed to their
+  respective review/integration branches and verified against the remote heads.
 
 ### J3 — Implement persistent desired state and reconciliation
 
-- [ ] Persist server settings, peer records and assigned addresses in the plugin.
+- [x] Persist server settings, peer records and assigned addresses in the plugin.
   Keep active networking state in Go.
-- [ ] Separate ordinary settings, secrets and transient status.
-- [ ] Use private Linux directories/files and equivalent permission handling in
+- [x] Separate ordinary settings, secrets and transient status.
+- [x] Use private Linux directories/files and equivalent permission handling in
   later platform adapters.
-- [ ] Send complete desired configuration to a fresh helper on startup.
-- [ ] Persist peer-mutation intent and track completion explicitly. Report
+- [x] Send complete desired configuration to a fresh helper on startup.
+- [x] Persist peer-mutation intent and track completion explicitly. Report
   revocation success only after helper acknowledgement.
-- [ ] Reconcile interrupted operations using durable desired state and reported
+- [x] Reconcile interrupted operations using durable desired state and reported
   runtime state; do not assume a transaction spans both processes.
-- [ ] Verify interruption before and after mutation boundaries cannot silently
+- [x] Verify interruption before and after mutation boundaries cannot silently
   resurrect revoked peers or mark unapplied settings active.
 
 **Complete when:** restart and crash recovery preserve desired access policy and
 accurately distinguish pending, applied and failed changes.
+
+**J3 review checkpoint**
+
+- `DesiredStateStore` persists versioned server settings, peer assignments,
+  permanent address reservations and idempotent operation IDs in `desired.json`.
+  Immutable private-key files are separate and referenced by opaque IDs. A
+  process-owned exclusive lock prevents competing writers. Generation checks
+  reject stale saves. Writes flush a private temporary file before atomic
+  replacement, with directory fsync on Linux. Required JSON fields include
+  revocation markers; incomplete or corrupt state fails closed. Uncommitted
+  temporary files are excluded from recovery, which reads the committed state
+  file and its referenced secret.
+- Linux state directories use 0700 and files use 0600. The Windows adapter
+  applies a protected ACL for the current user. Storage opens lazily inside
+  reconciliation so storage failures become plugin status errors. The local
+  Windows test runtime's missing ACL assembly was restored from Microsoft's
+  SHA512-verified runtime archive before native acceptance.
+- `DesiredStateController` serializes changes and commits peer intent before
+  sending live helper mutations. Outcomes distinguish pending, applied,
+  failed, uncertain and superseded operations. Revoked addresses remain
+  reserved across process replacement. A successful response and matching
+  authoritative status precede persisted completion. An interrupted mutation
+  preserves the desired target and its unresolved outcome.
+- Supervisor session leases exclude policy changes from concurrent startup
+  snapshots. Every automatic restart fetches full configuration from current
+  durable state. Reconciliation verifies the exact applied peer set and
+  acknowledges interrupted intent after recovery. Transient applied status
+  carries the verified helper session and generation; process replacement or
+  shutdown invalidates that status. Superseded additions are not reported as
+  applied when a later revocation removed them before startup.
+- Jellyfin's hosted lifetime now reconciles saved policy once per second and
+  stops the owned helper on shutdown. Settings, enablement and peer changes
+  have internal controller entry points. Endpoint settings, provisioning and
+  administrator HTTP/dashboard integration remain in their later stages.
+- Locked restore, Release build with zero warnings/errors, native Windows
+  checks and `git diff --check` passed. Tests cover secret separation, Windows
+  ACLs, Linux file modes, exclusive ownership, stale-generation rejection,
+  idempotent live changes, permanent reservations, interruption after intent
+  commit, failed completion persistence, an actual child crash after removal
+  before its response, recovery in a new store/controller/helper, superseded
+  intents, corrupt state and missing revocation markers. Existing J1/J2
+  protocol and lifecycle regressions also passed.
+- The same suite passed under the unprivileged Linux amd64 VM user. The
+  checksum-verified published Go helper v0.1.0 passed durable startup, live
+  revocation acknowledgement and restart with the revoked peer absent. The
+  existing pinned discovery, permission, lifecycle and protocol smoke tests
+  also passed. `j3-persistence-linux.log` reports `WGSLIRP_J1_EXIT=0`.
+- Full Jellyfin server boot and native Linux ARM64 execution were not run at
+  this checkpoint. The service registration and hosted lifecycle compile
+  against the pinned Jellyfin 12.4 packages.
+
+**J3 directory durability fix**
+
+- Initialization now synchronizes the private state directory and each
+  ancestor, proceeding outward to the filesystem root, before opening the
+  writer or publishing a secret or state file. Reopening an existing path
+  repeats this synchronization so directories left by a failed initialization
+  are not assumed durable. Input directory paths are normalized to avoid
+  duplicate leaf entries from trailing separators.
+- The internal directory-sync boundary is shared by initialization and atomic
+  writes. Production uses the native Linux implementation. Tests trace the
+  calls and inject failures without exposing a new public storage API.
+- Regressions verify initialization syncs before ownership and publication,
+  secret-directory sync before state publication, and state-directory sync
+  before commit acknowledgement. Failures at the leaf, parent, outer ancestor,
+  secret and state boundaries prevent successful acknowledgement. Every
+  failure is retried both with the same store and after reopening it. Tests
+  also exercise the real Linux error path using a non-directory descriptor
+  target and retain the visible generation after a post-rename sync failure.
+- Locked restore, Release build with zero warnings/errors, native Windows
+  checks and `git diff --check` passed. The same regressions and all existing
+  protocol, lifecycle and persistence checks passed as the unprivileged Linux
+  amd64 VM user. The checksum-verified published Go helper v0.1.0 passed
+  durable startup, live revocation, restart without restoring the peer and
+  the existing helper smoke. `j3-directory-durability-linux.log` reports
+  `WGSLIRP_J1_EXIT=0`.
+- Synchronization ordering and failures are covered by regressions. A physical
+  power-loss test was not performed.
+
+**J3 anchor and fixture cleanup fixes**
+
+- Directory initialization now stops at a declared existing durable anchor.
+  Jellyfin supplies its established data directory; generic store callers
+  default to the existing parent or supply an explicit anchor when creating
+  nested directories. Anchor containment is validated and a missing anchor
+  fails initialization. The complete owned chain is synchronized again on
+  reopen, preserving recovery from partially completed initialization while
+  avoiding read-open requirements above the anchor.
+- A native Linux regression uses a writable private data directory beneath a
+  traversal-only ancestor. Saving and reopening succeed, and an observed sync
+  trace confirms that the ancestor is never opened. Additional cases reject
+  out-of-anchor paths and missing anchors. Existing sync ordering and all
+  same-store/reopen failure regressions now use an explicit durable anchor.
+- The flood fixture now guarantees supervisor disposal on assertion failure.
+  Child launch, inspection and disposal share a lock; disposed fixtures reject
+  late launches. Regressions inject an assertion during startup and after
+  readiness, verify that the original exception survives cleanup, await the
+  supervisor's stopped state, check child reaping, and reject late admission.
+- Existing protocol, shutdown, recovery and test timeout values were retained.
+  The temporary pinned SDK was restored from Microsoft's SHA512-verified
+  archive after missing CLI/compiler files prevented validation.
+- Locked restore, Release build with zero warnings/errors, the complete native
+  Windows suite and `git diff --check` passed. A rebuilt Linux image included
+  the current assemblies and a clean acceptance entry point. The full suite
+  passed under the unprivileged Linux amd64 user with unchanged timeout values,
+  followed by the published Go helper v0.1.0 smoke tests for durable startup,
+  live revocation, restart without restoring the peer, permissions and process
+  lifecycle. `j3-anchor-cleanup-linux.log` reports `WGSLIRP_J3_EXIT=0`.
+- [x] Review J3 before starting J4. Approved after anchored synchronization
+  and guaranteed fixture cleanup passed review.
 
 ### J4 — Implement endpoint settings and client provisioning
 
